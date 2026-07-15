@@ -78,6 +78,14 @@ class ProductPriceSerializer(serializers.ModelSerializer):
         source="product.name",
         read_only=True
     )
+    product_code = serializers.CharField(
+        source="product.code",
+        read_only=True
+    )
+    product_sku = serializers.CharField(
+        source="product.sku",
+        read_only=True
+    )
     provider_name = serializers.CharField(
         source="product.provider.name",
         read_only=True
@@ -89,6 +97,8 @@ class ProductPriceSerializer(serializers.ModelSerializer):
             "id",
             "product",
             "product_name",
+            "product_code",
+            "product_sku",
             "provider_name",
             "year",
             "campaign",
@@ -105,11 +115,12 @@ class ProductPriceSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id",
             "product_name",
+            "product_code",
+            "product_sku",
             "provider_name",
             "created_at",
             "updated_at",
         ]
-
 
 class ProductPublicListSerializer(serializers.ModelSerializer):
     provider_name = serializers.CharField(source="provider.name", read_only=True)

@@ -1,8 +1,11 @@
+from django.db.models import Q
+
 from rest_framework import viewsets, status, filters
 from rest_framework.permissions import AllowAny
-from accounts.permissions import EsAdministradorOCatalogo, EsAdministrador
 from rest_framework.views import APIView
 from rest_framework.response import Response
+
+from accounts.permissions import EsAdministradorOCatalogo, EsAdministrador
 
 from .models import (
     Provider,
@@ -13,7 +16,9 @@ from .models import (
     ProductType,
     Product,
     ProductPrice,
+    CargaExcel,
 )
+
 from .serializers import (
     ProviderSerializer,
     LevelSerializer,
@@ -27,18 +32,18 @@ from .serializers import (
     ProductAdminSerializer,
     CargaExcelSerializer,
     CargaExcelListSerializer,
+    CargaExcelPreviewSerializer,
 )
 
-from catalog.models import CargaExcel
-from catalog.serializers import (
-    CargaExcelPreviewSerializer,
-    CargaExcelSerializer,
-)
 from catalog.services.importar_productos_excel import (
     crear_vista_previa_productos,
     confirmar_importacion_productos,
 )
 
+
+# ============================================================
+# API PÚBLICA - WEB BOOK EXPRESS
+# ============================================================
 
 class PublicProviderViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = ProviderSerializer
@@ -124,6 +129,7 @@ class PublicProductViewSet(viewsets.ReadOnlyModelViewSet):
         grade = self.request.query_params.get("grade")
         area = self.request.query_params.get("area")
         product_type = self.request.query_params.get("product_type")
+        series = self.request.query_params.get("series")
         year = self.request.query_params.get("year")
         search = self.request.query_params.get("search")
         featured = self.request.query_params.get("featured")
@@ -143,14 +149,35 @@ class PublicProductViewSet(viewsets.ReadOnlyModelViewSet):
         if product_type:
             queryset = queryset.filter(product_type__slug=product_type)
 
+        if series:
+            queryset = queryset.filter(series__slug=series)
+
         if year:
             queryset = queryset.filter(
                 prices__year=year,
-                prices__is_active=True
+                prices__is_active=True,
             ).distinct()
 
         if search:
-            queryset = queryset.filter(name__icontains=search)
+            queryset = queryset.filter(
+                Q(name__icontains=search) |
+                Q(slug__icontains=search) |
+                Q(sku__icontains=search) |
+                Q(code__icontains=search) |
+                Q(description__icontains=search) |
+                Q(provider__name__icontains=search) |
+                Q(provider__slug__icontains=search) |
+                Q(series__name__icontains=search) |
+                Q(series__slug__icontains=search) |
+                Q(level__name__icontains=search) |
+                Q(level__slug__icontains=search) |
+                Q(grade__name__icontains=search) |
+                Q(grade__slug__icontains=search) |
+                Q(area__name__icontains=search) |
+                Q(area__slug__icontains=search) |
+                Q(product_type__name__icontains=search) |
+                Q(product_type__slug__icontains=search)
+            ).distinct()
 
         if featured == "true":
             queryset = queryset.filter(is_featured=True)
@@ -160,8 +187,13 @@ class PublicProductViewSet(viewsets.ReadOnlyModelViewSet):
     def get_serializer_class(self):
         if self.action == "retrieve":
             return ProductPublicDetailSerializer
+
         return ProductPublicListSerializer
 
+
+# ============================================================
+# API ADMINISTRATIVA - PANEL REACT
+# ============================================================
 
 class AdminProviderViewSet(viewsets.ModelViewSet):
     queryset = Provider.objects.all().order_by("order", "name")
@@ -241,6 +273,7 @@ class AdminProductViewSet(viewsets.ModelViewSet):
         grade = self.request.query_params.get("grade")
         area = self.request.query_params.get("area")
         product_type = self.request.query_params.get("product_type")
+        series = self.request.query_params.get("series")
         is_active = self.request.query_params.get("is_active")
 
         if provider:
@@ -258,6 +291,9 @@ class AdminProductViewSet(viewsets.ModelViewSet):
         if product_type:
             queryset = queryset.filter(product_type_id=product_type)
 
+        if series:
+            queryset = queryset.filter(series_id=series)
+
         if is_active in ["true", "false"]:
             queryset = queryset.filter(is_active=(is_active == "true"))
 
@@ -265,26 +301,63 @@ class AdminProductViewSet(viewsets.ModelViewSet):
 
 
 class AdminProductPriceViewSet(viewsets.ModelViewSet):
-    queryset = (
-        ProductPrice.objects
-        .select_related("product", "product__provider")
-        .all()
-        .order_by("-year", "product__name")
-    )
     serializer_class = ProductPriceSerializer
     permission_classes = [EsAdministradorOCatalogo]
 
+    def get_queryset(self):
+        queryset = (
+            ProductPrice.objects
+            .select_related(
+                "product",
+                "product__provider",
+            )
+            .all()
+        )
 
+        search = self.request.query_params.get("search")
+        year = self.request.query_params.get("year")
+        is_active = self.request.query_params.get("is_active")
+        product = self.request.query_params.get("product")
+        provider = self.request.query_params.get("provider")
+
+        if search:
+            queryset = queryset.filter(
+                Q(product__name__icontains=search) |
+                Q(product__code__icontains=search) |
+                Q(product__sku__icontains=search) |
+                Q(product__provider__name__icontains=search) |
+                Q(campaign__icontains=search)
+            )
+
+        if year:
+            queryset = queryset.filter(year=year)
+
+        if is_active in ["true", "false"]:
+            queryset = queryset.filter(is_active=(is_active == "true"))
+
+        if product:
+            queryset = queryset.filter(product_id=product)
+
+        if provider:
+            queryset = queryset.filter(product__provider_id=provider)
+
+        return queryset.order_by("product__name", "-year", "-created_at")
+
+
+# ============================================================
+# CARGA MASIVA DESDE EXCEL
+# ============================================================
 
 class VistaPreviaCargaProductosAPIView(APIView):
     permission_classes = [EsAdministrador]
+
     def post(self, request):
         serializer = CargaExcelPreviewSerializer(data=request.data)
 
         if not serializer.is_valid():
             return Response(
                 serializer.errors,
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         archivo = serializer.validated_data["archivo"]
@@ -299,7 +372,7 @@ class VistaPreviaCargaProductosAPIView(APIView):
 
         return Response(
             response_serializer.data,
-            status=status.HTTP_201_CREATED
+            status=status.HTTP_201_CREATED,
         )
 
 
@@ -324,8 +397,10 @@ class ConfirmarCargaProductosAPIView(APIView):
 
         return Response(
             serializer.data,
-            status=status.HTTP_200_OK
+            status=status.HTTP_200_OK,
         )
+
+
 class AdminCargaExcelViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = (
         CargaExcel.objects
