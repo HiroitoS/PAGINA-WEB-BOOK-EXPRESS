@@ -26,6 +26,7 @@ from catalog.views import (
     VistaPreviaCargaProductosAPIView,
     ConfirmarCargaProductosAPIView,
     AdminCargaExcelViewSet,
+    DashboardResumenAPIView,
 )
 from inquiries.views import (
     PublicContactRequestViewSet,
@@ -70,6 +71,12 @@ urlpatterns = [
     path("api/admin/", include(admin_router.urls)),
 
     path("api-auth/", include("rest_framework.urls")),
+
+    path(
+        "api/admin/dashboard/resumen/",
+        DashboardResumenAPIView.as_view(),
+        name="admin-dashboard-resumen",
+    ),
 
     path(
         "api/admin/importaciones/productos/preview/",

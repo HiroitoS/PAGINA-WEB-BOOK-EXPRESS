@@ -5,10 +5,12 @@ from core.models import TimeStampedModel
 
 class ContactRequest(TimeStampedModel):
     STATUS_CHOICES = [
-        ("new", "Nueva"),
-        ("contacted", "Contactado"),
-        ("closed", "Cerrado"),
-    ]
+    ("new", "Nueva"),
+    ("contacted", "Contactado"),
+    ("in_follow_up", "En seguimiento"),
+    ("closed", "Cerrado"),
+    ("discarded", "Descartado"),
+]
 
     SOURCE_CHOICES = [
         ("web", "Web"),

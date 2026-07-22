@@ -1,6 +1,6 @@
 from rest_framework import mixins, viewsets
 from rest_framework.permissions import AllowAny
-from accounts.permissions import EsAdministradorOCatalogo
+from accounts.permissions import EsAdministradorOAtencion
 
 from .models import ContactRequest
 from .serializers import (
@@ -26,4 +26,4 @@ class AdminContactRequestViewSet(viewsets.ModelViewSet):
         .order_by("-created_at")
     )
     serializer_class = ContactRequestAdminSerializer
-    permission_classes = [EsAdministradorOCatalogo]
+    permission_classes = [EsAdministradorOAtencion]
