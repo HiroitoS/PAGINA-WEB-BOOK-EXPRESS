@@ -3,29 +3,33 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
-*.sqlite3
 
-# Virtual environment
+# Entornos virtuales
+.venv/
 venv/
 env/
+ENV/
 
-# Django
-db.sqlite3
-media/
-staticfiles/
-
-# Environment variables
+# Variables de entorno
 .env
 
-# VS Code
-.vscode/
+# Base local
+db.sqlite3
 
-# OS
+# Archivos temporales
+*.log
+*.tmp
+
+# Sistema
 .DS_Store
 Thumbs.db
-venv/
-__pycache__/
-*.pyc
-db.sqlite3
-.env
+
+# IDE
 .vscode/
+.idea/
+
+# Zips temporales
+*.zip
+
+# Static generados
+staticfiles/

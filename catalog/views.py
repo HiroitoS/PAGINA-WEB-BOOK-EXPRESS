@@ -277,6 +277,12 @@ class AdminProductViewSet(viewsets.ModelViewSet):
         product_type = self.request.query_params.get("product_type")
         series = self.request.query_params.get("series")
         is_active = self.request.query_params.get("is_active")
+        sin_portada = self.request.query_params.get("sin_portada")
+        sin_precio = self.request.query_params.get("sin_precio")
+        anio = (
+            self.request.query_params.get("anio")
+            or self.request.query_params.get("year")
+        )
 
         if provider:
             queryset = queryset.filter(provider_id=provider)
@@ -298,6 +304,25 @@ class AdminProductViewSet(viewsets.ModelViewSet):
 
         if is_active in ["true", "false"]:
             queryset = queryset.filter(is_active=(is_active == "true"))
+
+        if sin_portada in ["1", "true"]:
+            queryset = queryset.filter(
+                is_active=True
+            ).filter(
+                Q(cover_image__isnull=True) | Q(cover_image="")
+            )
+
+        if sin_precio in ["1", "true"] and anio:
+            try:
+                anio = int(anio)
+                queryset = queryset.filter(
+                    is_active=True
+                ).exclude(
+                    prices__year=anio,
+                    prices__is_active=True,
+                ).distinct()
+            except (TypeError, ValueError):
+                pass
 
         return queryset
 
@@ -493,7 +518,7 @@ class DashboardResumenAPIView(APIView):
 # ============================================================
 
 class VistaPreviaCargaProductosAPIView(APIView):
-    permission_classes = [EsAdministrador]
+    permission_classes = [EsAdministradorOCatalogo]
 
     def post(self, request):
         serializer = CargaExcelPreviewSerializer(data=request.data)
@@ -521,7 +546,7 @@ class VistaPreviaCargaProductosAPIView(APIView):
 
 
 class ConfirmarCargaProductosAPIView(APIView):
-    permission_classes = [EsAdministrador]
+    permission_classes = [EsAdministradorOCatalogo]
 
     def post(self, request, carga_id):
         try:
