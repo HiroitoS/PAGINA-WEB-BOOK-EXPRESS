@@ -33,6 +33,15 @@ from inquiries.views import (
     AdminContactRequestViewSet,
 )
 
+from workspaces.views import (
+    CalendarEventViewSet,
+    ReminderViewSet,
+    TaskViewSet,
+    WorkspaceCalendarAPIView,
+    WorkspaceGroupViewSet,
+    WorkspaceMembershipViewSet,
+    WorkspaceSummaryAPIView,
+)
 
 public_router = DefaultRouter()
 admin_router = DefaultRouter()
@@ -60,7 +69,11 @@ admin_router.register(r"contact-requests", AdminContactRequestViewSet, basename=
 admin_router.register(r"importaciones", AdminCargaExcelViewSet, basename="admin-importacion")
 admin_router.register(r"users", AdminUserViewSet, basename="admin-user")
 admin_router.register(r"roles", AdminGroupViewSet, basename="admin-role")
-
+admin_router.register(r"workspace-groups", WorkspaceGroupViewSet, basename="admin-workspace-group")
+admin_router.register(r"workspace-memberships", WorkspaceMembershipViewSet, basename="admin-workspace-membership")
+admin_router.register(r"tasks", TaskViewSet, basename="admin-task")
+admin_router.register(r"calendar-events", CalendarEventViewSet, basename="admin-calendar-event")
+admin_router.register(r"reminders", ReminderViewSet, basename="admin-reminder")
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -78,6 +91,16 @@ urlpatterns = [
         name="admin-dashboard-resumen",
     ),
 
+        path(
+        "api/admin/workspace/summary/",
+        WorkspaceSummaryAPIView.as_view(),
+        name="admin-workspace-summary",
+    ),
+    path(
+        "api/admin/workspace/calendar/",
+        WorkspaceCalendarAPIView.as_view(),
+        name="admin-workspace-calendar",
+    ),
     path(
         "api/admin/importaciones/productos/preview/",
         VistaPreviaCargaProductosAPIView.as_view(),

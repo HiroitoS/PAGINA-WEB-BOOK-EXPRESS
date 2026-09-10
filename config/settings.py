@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     "catalog",
     "inquiries",
     "accounts",
+    "workspaces",
 ]
 
 
