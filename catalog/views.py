@@ -396,141 +396,207 @@ class AdminProductPriceViewSet(viewsets.ModelViewSet):
 # ============================================================
 
 class DashboardResumenAPIView(APIView):
+    """
+    Resumen administrativo condicionado por permisos efectivos.
+
+    El frontend decide qué mostrar, pero el backend decide qué datos puede
+    recibir cada usuario.
+    """
     permission_classes = [EsUsuarioPanel]
 
     def get(self, request):
         anio_actual = timezone.now().year
-        anio = request.query_params.get("anio") or request.query_params.get("year") or anio_actual
+        anio = (
+            request.query_params.get("anio")
+            or request.query_params.get("year")
+            or anio_actual
+        )
 
         try:
             anio = int(anio)
         except (TypeError, ValueError):
             anio = anio_actual
 
-        total_productos = Product.objects.count()
-        productos_activos = Product.objects.filter(is_active=True).count()
-        productos_inactivos = Product.objects.filter(is_active=False).count()
+        user = request.user
 
-        productos_sin_portada = Product.objects.filter(
-            is_active=True
-        ).filter(
-            Q(cover_image__isnull=True) | Q(cover_image="")
-        ).count()
-
-        productos_con_precio_anio = Product.objects.filter(
-            prices__year=anio,
-            prices__is_active=True,
-        ).distinct().count()
-
-        productos_sin_precio_anio = Product.objects.filter(
-            is_active=True
-        ).exclude(
-            prices__year=anio,
-            prices__is_active=True,
-        ).distinct().count()
-
-        total_proveedores = Provider.objects.count()
-        proveedores_activos = Provider.objects.filter(is_active=True).count()
-        proveedores_inactivos = Provider.objects.filter(is_active=False).count()
-
-        total_solicitudes = ContactRequest.objects.count()
-        solicitudes_nuevas = ContactRequest.objects.filter(status="new").count()
-        solicitudes_contactadas = ContactRequest.objects.filter(status="contacted").count()
-        solicitudes_en_seguimiento = ContactRequest.objects.filter(status="in_follow_up").count()
-        solicitudes_cerradas = ContactRequest.objects.filter(status="closed").count()
-        solicitudes_descartadas = ContactRequest.objects.filter(status="discarded").count()
-
-        importaciones_queryset = CargaExcel.objects.filter(anio_catalogo=anio)
-
-        total_importaciones = importaciones_queryset.count()
-        importaciones_validadas = importaciones_queryset.filter(estado="VALIDADO").count()
-        importaciones_importadas = importaciones_queryset.filter(estado="IMPORTADO").count()
-        importaciones_con_error = importaciones_queryset.filter(estado="ERROR").count()
-
-        ultimas_solicitudes = (
-            ContactRequest.objects
-            .select_related("product", "provider")
-            .all()
-            .order_by("-created_at")[:5]
+        can_view_catalog = usuario_tiene_permiso(
+            user,
+            "catalog.view_catalog",
         )
-
-        ultimas_importaciones = (
-            CargaExcel.objects
-            .filter(anio_catalogo=anio)
-            .order_by("-creado_en")[:5]
+        can_view_prices = usuario_tiene_permiso(
+            user,
+            "catalog.view_prices",
         )
-
-        ultimas_solicitudes_data = []
-        for solicitud in ultimas_solicitudes:
-            ultimas_solicitudes_data.append({
-                "id": solicitud.id,
-                "full_name": solicitud.full_name,
-                "phone": solicitud.phone,
-                "email": solicitud.email,
-                "message": solicitud.message,
-                "source": solicitud.source,
-                "status": solicitud.status,
-                "created_at": solicitud.created_at,
-                "product_name": solicitud.product.name if solicitud.product else "",
-                "provider_name": solicitud.provider.name if solicitud.provider else "",
-            })
-
-        ultimas_importaciones_data = []
-        for carga in ultimas_importaciones:
-            archivo_nombre = ""
-
-            if carga.archivo:
-                archivo_nombre = carga.archivo.name.split("/")[-1]
-
-            ultimas_importaciones_data.append({
-                "id": carga.id,
-                "archivo": archivo_nombre,
-                "anio_catalogo": carga.anio_catalogo,
-                "estado": carga.estado,
-                "total_filas": carga.total_filas,
-                "total_nuevos": carga.total_nuevos,
-                "total_actualizados": carga.total_actualizados,
-                "total_errores": carga.total_errores,
-                "creado_en": carga.creado_en,
-            })
+        can_manage_imports = usuario_tiene_permiso(
+            user,
+            "catalog.manage_imports",
+        )
+        can_view_inquiries = usuario_tiene_permiso(
+            user,
+            "inquiries.view_inquiries",
+        )
 
         data = {
             "anio": anio,
-            "productos": {
+            "actividad_reciente": {},
+        }
+
+        if can_view_catalog or can_view_prices:
+            total_productos = Product.objects.count()
+            productos_activos = Product.objects.filter(
+                is_active=True,
+            ).count()
+            productos_inactivos = Product.objects.filter(
+                is_active=False,
+            ).count()
+
+            productos_data = {
                 "total": total_productos,
                 "activos": productos_activos,
                 "inactivos": productos_inactivos,
-                "sin_portada": productos_sin_portada,
-                "con_precio_anio": productos_con_precio_anio,
-                "sin_precio_anio": productos_sin_precio_anio,
-            },
-            "proveedores": {
-                "total": total_proveedores,
-                "activos": proveedores_activos,
-                "inactivos": proveedores_inactivos,
-            },
-            "solicitudes": {
-                "total": total_solicitudes,
-                "nuevas": solicitudes_nuevas,
-                "contactadas": solicitudes_contactadas,
-                "en_seguimiento": solicitudes_en_seguimiento,
-                "cerradas": solicitudes_cerradas,
-                "descartadas": solicitudes_descartadas,
-            },
-            "importaciones": {
-                "total": total_importaciones,
-                "validadas": importaciones_validadas,
-                "importadas": importaciones_importadas,
-                "con_error": importaciones_con_error,
-            },
-            "actividad_reciente": {
-                "ultimas_solicitudes": ultimas_solicitudes_data,
-                "ultimas_importaciones": ultimas_importaciones_data,
-            },
-        }
+            }
 
-        return Response(data, status=status.HTTP_200_OK)
+            if can_view_catalog:
+                productos_data["sin_portada"] = (
+                    Product.objects
+                    .filter(is_active=True)
+                    .filter(
+                        Q(cover_image__isnull=True)
+                        | Q(cover_image="")
+                    )
+                    .count()
+                )
 
+                data["proveedores"] = {
+                    "total": Provider.objects.count(),
+                    "activos": Provider.objects.filter(
+                        is_active=True,
+                    ).count(),
+                    "inactivos": Provider.objects.filter(
+                        is_active=False,
+                    ).count(),
+                }
+
+            if can_view_prices:
+                productos_data["con_precio_anio"] = (
+                    Product.objects
+                    .filter(
+                        prices__year=anio,
+                        prices__is_active=True,
+                    )
+                    .distinct()
+                    .count()
+                )
+                productos_data["sin_precio_anio"] = (
+                    Product.objects
+                    .filter(is_active=True)
+                    .exclude(
+                        prices__year=anio,
+                        prices__is_active=True,
+                    )
+                    .distinct()
+                    .count()
+                )
+
+            data["productos"] = productos_data
+
+        if can_view_inquiries:
+            data["solicitudes"] = {
+                "total": ContactRequest.objects.count(),
+                "nuevas": ContactRequest.objects.filter(
+                    status="new",
+                ).count(),
+                "contactadas": ContactRequest.objects.filter(
+                    status="contacted",
+                ).count(),
+                "en_seguimiento": ContactRequest.objects.filter(
+                    status="in_follow_up",
+                ).count(),
+                "cerradas": ContactRequest.objects.filter(
+                    status="closed",
+                ).count(),
+                "descartadas": ContactRequest.objects.filter(
+                    status="discarded",
+                ).count(),
+            }
+
+            ultimas_solicitudes = (
+                ContactRequest.objects
+                .select_related("product", "provider")
+                .all()
+                .order_by("-created_at")[:5]
+            )
+
+            data["actividad_reciente"]["ultimas_solicitudes"] = [
+                {
+                    "id": solicitud.id,
+                    "full_name": solicitud.full_name,
+                    "phone": solicitud.phone,
+                    "email": solicitud.email,
+                    "message": solicitud.message,
+                    "source": solicitud.source,
+                    "status": solicitud.status,
+                    "created_at": solicitud.created_at,
+                    "product_name": (
+                        solicitud.product.name
+                        if solicitud.product
+                        else ""
+                    ),
+                    "provider_name": (
+                        solicitud.provider.name
+                        if solicitud.provider
+                        else ""
+                    ),
+                }
+                for solicitud in ultimas_solicitudes
+            ]
+
+        if can_manage_imports:
+            importaciones_queryset = CargaExcel.objects.filter(
+                anio_catalogo=anio,
+            )
+
+            data["importaciones"] = {
+                "total": importaciones_queryset.count(),
+                "validadas": importaciones_queryset.filter(
+                    estado="VALIDADO",
+                ).count(),
+                "importadas": importaciones_queryset.filter(
+                    estado="IMPORTADO",
+                ).count(),
+                "con_error": importaciones_queryset.filter(
+                    estado="ERROR",
+                ).count(),
+            }
+
+            ultimas_importaciones = (
+                importaciones_queryset
+                .order_by("-creado_en")[:5]
+            )
+
+            data["actividad_reciente"]["ultimas_importaciones"] = [
+                {
+                    "id": carga.id,
+                    "archivo": (
+                        carga.archivo.name.split("/")[-1]
+                        if carga.archivo
+                        else ""
+                    ),
+                    "anio_catalogo": carga.anio_catalogo,
+                    "estado": carga.estado,
+                    "total_filas": carga.total_filas,
+                    "total_nuevos": carga.total_nuevos,
+                    "total_actualizados": carga.total_actualizados,
+                    "total_errores": carga.total_errores,
+                    "creado_en": carga.creado_en,
+                }
+                for carga in ultimas_importaciones
+            ]
+
+        return Response(
+            data,
+            status=status.HTTP_200_OK,
+        )
 
 
 # ============================================================

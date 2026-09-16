@@ -1,6 +1,7 @@
 from datetime import datetime, time
 
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
@@ -28,6 +29,7 @@ from .notification_events import (
     notify_reminder_assigned,
     notify_task_assigned,
     notify_task_comment_created,
+    notify_task_reopened,
     resolve_task_notifications,
 )
 from .permissions import (
@@ -42,6 +44,7 @@ from .permissions import (
     usuario_puede_editar_datos_recordatorio,
     usuario_puede_editar_datos_tarea,
     usuario_puede_gestionar_grupo,
+    usuario_puede_reabrir_tarea,
     usuario_puede_ver_evento,
     usuario_puede_ver_recordatorio,
     usuario_puede_ver_tarea,
@@ -51,6 +54,8 @@ from .serializers import (
     ReminderSerializer,
     TaskAddCommentSerializer,
     TaskCommentSerializer,
+    TaskManagementSerializer,
+    TaskReopenSerializer,
     TaskSerializer,
     TaskStatusHistorySerializer,
     TaskStatusUpdateSerializer,
@@ -335,6 +340,12 @@ class WorkspaceMembershipViewSet(viewsets.ModelViewSet):
 class TaskViewSet(viewsets.ModelViewSet):
     serializer_class = TaskSerializer
     permission_classes = [EsUsuarioWorkspace]
+    # ToDo necesita mostrar y contar todas las tareas visibles en la misma
+    # pantalla. La paginación global de 20 elementos ocultaba tareas recién
+    # asignadas y hacía que los indicadores del frontend fueran parciales.
+    # Si el volumen crece con CRM, esta vista debe evolucionar a filtros y
+    # métricas server-side en lugar de volver a depender de conteos por página.
+    pagination_class = None
 
     def get_queryset(self):
         queryset = visible_tasks_queryset(self.request.user)
@@ -451,7 +462,6 @@ class TaskViewSet(viewsets.ModelViewSet):
                 "No tienes permiso para asignar tareas a otro usuario."
             )
 
-        old_status = task.status
         old_assigned_to = task.assigned_to
         updated_task = serializer.save()
 
@@ -460,19 +470,6 @@ class TaskViewSet(viewsets.ModelViewSet):
             actor=self.request.user,
             previous_assignee=old_assigned_to,
         )
-
-        if old_status != updated_task.status:
-            self._register_status_history(
-                task=updated_task,
-                old_status=old_status,
-                new_status=updated_task.status,
-                note="",
-            )
-
-            self._update_completed_at(updated_task)
-
-            if updated_task.status in ["completed", "cancelled"]:
-                resolve_task_notifications(updated_task)
 
     def perform_destroy(self, instance):
         if not usuario_puede_editar_datos_tarea(
@@ -516,6 +513,141 @@ class TaskViewSet(viewsets.ModelViewSet):
     @action(
         detail=True,
         methods=["post"],
+        url_path="register-management",
+    )
+    @transaction.atomic
+    def register_management(self, request, pk=None):
+        """
+        Registra una gestión y, opcionalmente, cambia el estado en una sola
+        operación atómica.
+        """
+        visible_task = self.get_object()
+
+        task = (
+            Task.objects
+            .select_for_update()
+            .get(pk=visible_task.pk)
+        )
+
+        if not usuario_puede_dar_seguimiento_tarea(request.user, task):
+            raise PermissionDenied(
+                "No tienes permiso para registrar gestión en esta tarea."
+            )
+
+        serializer = TaskManagementSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        action_type = serializer.validated_data["action_type"]
+        comment_text = serializer.validated_data["comment"]
+        requested_status = serializer.validated_data.get("status")
+
+        old_status = task.status
+        new_status = requested_status or old_status
+
+        comment = TaskComment.objects.create(
+            task=task,
+            user=request.user,
+            action_type=action_type,
+            comment=comment_text,
+        )
+
+        notify_task_comment_created(
+            comment,
+            actor=request.user,
+        )
+
+        status_changed = new_status != old_status
+
+        if status_changed:
+            task.status = new_status
+
+            if new_status == "completed":
+                task.completed_at = timezone.now()
+            else:
+                task.completed_at = None
+
+            task.save(
+                update_fields=[
+                    "status",
+                    "completed_at",
+                    "updated_at",
+                ]
+            )
+
+            self._register_status_history(
+                task=task,
+                old_status=old_status,
+                new_status=new_status,
+                note="",
+            )
+
+            if new_status in ["completed", "cancelled"]:
+                resolve_task_notifications(task)
+
+        response_serializer = self.get_serializer(task)
+
+        return Response(
+            {
+                "task": response_serializer.data,
+                "comment": TaskCommentSerializer(comment).data,
+                "status_changed": status_changed,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="reopen",
+    )
+    @transaction.atomic
+    def reopen(self, request, pk=None):
+        visible_task = self.get_object()
+
+        task = (
+            Task.objects
+            .select_for_update()
+            .get(pk=visible_task.pk)
+        )
+
+        if not usuario_puede_reabrir_tarea(request.user, task):
+            raise PermissionDenied(
+                "No tienes permiso para reabrir esta tarea."
+            )
+
+        serializer = TaskReopenSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        reason = serializer.validated_data["reason"]
+        old_status = task.status
+
+        task.status = "pending"
+        task.completed_at = None
+        task.save(
+            update_fields=[
+                "status",
+                "completed_at",
+                "updated_at",
+            ]
+        )
+
+        self._register_status_history(
+            task=task,
+            old_status=old_status,
+            new_status="pending",
+            note=reason,
+        )
+
+        notify_task_reopened(
+            task,
+            actor=request.user,
+        )
+
+        return Response(self.get_serializer(task).data)
+
+    @action(
+        detail=True,
+        methods=["post"],
         url_path="change-status",
     )
     def change_status(self, request, pk=None):
@@ -524,6 +656,11 @@ class TaskViewSet(viewsets.ModelViewSet):
         if not usuario_puede_dar_seguimiento_tarea(request.user, task):
             raise PermissionDenied(
                 "No tienes permiso para cambiar el estado de esta tarea."
+            )
+
+        if task.status in ["completed", "cancelled"]:
+            raise PermissionDenied(
+                "Una tarea cerrada debe reabrirse mediante la acción de reapertura."
             )
 
         serializer = TaskStatusUpdateSerializer(data=request.data)

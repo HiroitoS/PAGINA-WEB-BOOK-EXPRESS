@@ -99,16 +99,28 @@ def usuario_puede_ver_tarea(user, task):
     return False
 
 
+def tarea_esta_cerrada(task):
+    return bool(
+        task
+        and task.status in ["completed", "cancelled"]
+    )
+
+
 def usuario_puede_editar_datos_tarea(user, task):
     """
-    Permite cambiar planificación de la tarea:
-    título, grupo, responsable, fecha, categoría, prioridad y descripción.
-    """
-    if usuario_es_administrador(user):
-        return True
+    Permite cambiar planificación únicamente mientras la tarea está activa.
 
+    Una tarea completada/cancelada se conserva como registro histórico.
+    Para retomarla debe usarse la acción explícita de reapertura.
+    """
     if not user or not user.is_authenticated or not task:
         return False
+
+    if tarea_esta_cerrada(task):
+        return False
+
+    if usuario_es_administrador(user):
+        return True
 
     if task.created_by_id == user.id:
         return True
@@ -121,22 +133,56 @@ def usuario_puede_editar_datos_tarea(user, task):
 
 def usuario_puede_dar_seguimiento_tarea(user, task):
     """
-    Permite comentar, evidenciar, cambiar estado o completar.
-    """
-    if usuario_puede_editar_datos_tarea(user, task):
-        return True
+    Permite registrar gestión únicamente al responsable asignado.
 
+    Quien crea o supervisa una tarea puede consultar su avance y, si tiene
+    permiso, ajustar la planificación; la gestión operativa corresponde al
+    usuario asignado. Esto evita que un jefe/administrador registre trabajo
+    en nombre del asesor y preserva la trazabilidad por responsable.
+    """
     if not user or not user.is_authenticated or not task:
         return False
 
-    if task.assigned_to_id == user.id:
-        return True
+    if tarea_esta_cerrada(task):
+        return False
 
-    return False
+    return task.assigned_to_id == user.id
 
 
 def usuario_puede_completar_tarea(user, task):
     return usuario_puede_dar_seguimiento_tarea(user, task)
+
+
+def usuario_puede_reabrir_tarea(user, task):
+    """
+    Reapertura controlada de tareas cerradas.
+
+    - Administrador: cualquier tarea visible.
+    - Responsable: su propia tarea asignada.
+    - Creador: la tarea que creó.
+    - Responsable/coordinador del grupo: tareas de ese grupo.
+
+    Siempre se exige un motivo y se registra en TaskStatusHistory.
+    """
+    if not user or not user.is_authenticated or not task:
+        return False
+
+    if not tarea_esta_cerrada(task):
+        return False
+
+    if usuario_es_administrador(user):
+        return True
+
+    if task.assigned_to_id == user.id:
+        return True
+
+    if task.created_by_id == user.id:
+        return True
+
+    if task.group and usuario_puede_gestionar_grupo(user, task.group):
+        return True
+
+    return False
 
 
 def usuario_puede_editar_tarea(user, task):

@@ -107,6 +107,21 @@ class WorkspaceNotificationEventTests(TestCase):
             {self.creator.id, self.assignee.id},
         )
 
+        notification = Notification.objects.filter(
+            recipient=self.creator,
+            event_type="workspace.task_comment_added",
+            source_id=str(comment.id),
+        ).first()
+
+        self.assertIsNotNone(notification)
+        self.assertEqual(
+            notification.link,
+            (
+                f"/admin/workspace/tasks?task={task.id}"
+                f"&tab=history&comment={comment.id}"
+            ),
+        )
+
     def test_group_membership_notifies_new_member(self):
         membership = WorkspaceMembership.objects.create(
             group=self.group,
@@ -197,7 +212,7 @@ class WorkspaceNotificationLifecycleTests(TestCase):
 
         self.assertEqual(
             notification.link,
-            f"/admin/workspace/tasks?task={task.id}",
+            f"/admin/workspace/tasks?task={task.id}&tab=info",
         )
 
     def test_task_resolution_closes_related_notifications(self):

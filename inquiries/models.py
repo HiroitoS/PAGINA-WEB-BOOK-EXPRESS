@@ -21,6 +21,15 @@ class ContactRequest(TimeStampedModel):
         ("catalog", "Catálogo"),
     ]
 
+    INQUIRY_TYPE_CHOICES = [
+        ("product", "Libro o material educativo"),
+        ("school", "Consulta para colegio"),
+        ("reading_plan", "Plan lector"),
+        ("catalog", "Editoriales y catálogo"),
+        ("training", "Capacitación docente"),
+        ("other", "Otra consulta"),
+    ]
+
     PRIORITY_CHOICES = [
         ("low", "Baja"),
         ("medium", "Media"),
@@ -60,6 +69,13 @@ class ContactRequest(TimeStampedModel):
 
     message = models.TextField(
         verbose_name="Mensaje"
+    )
+    inquiry_type = models.CharField(
+        max_length=30,
+        choices=INQUIRY_TYPE_CHOICES,
+        default="other",
+        db_index=True,
+        verbose_name="Tipo de consulta"
     )
     source = models.CharField(
         max_length=30,

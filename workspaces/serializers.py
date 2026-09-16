@@ -18,6 +18,7 @@ from .permissions import (
     usuario_puede_editar_datos_evento,
     usuario_puede_editar_datos_recordatorio,
     usuario_puede_editar_datos_tarea,
+    usuario_puede_reabrir_tarea,
 )
 
 
@@ -221,6 +222,7 @@ class TaskSerializer(serializers.ModelSerializer):
     can_edit_details = serializers.SerializerMethodField()
     can_follow_up = serializers.SerializerMethodField()
     can_complete = serializers.SerializerMethodField()
+    can_reopen = serializers.SerializerMethodField()
     is_read_only = serializers.SerializerMethodField()
 
     class Meta:
@@ -254,6 +256,7 @@ class TaskSerializer(serializers.ModelSerializer):
             "can_edit_details",
             "can_follow_up",
             "can_complete",
+            "can_reopen",
             "is_read_only",
             "created_at",
             "updated_at",
@@ -263,6 +266,7 @@ class TaskSerializer(serializers.ModelSerializer):
             "created_by",
             "created_by_name",
             "assigned_to_name",
+            "status",
             "completed_at",
             "is_overdue",
             "comments",
@@ -270,6 +274,7 @@ class TaskSerializer(serializers.ModelSerializer):
             "can_edit_details",
             "can_follow_up",
             "can_complete",
+            "can_reopen",
             "is_read_only",
             "created_at",
             "updated_at",
@@ -293,8 +298,15 @@ class TaskSerializer(serializers.ModelSerializer):
         user = get_request_user(self)
         return usuario_puede_completar_tarea(user, obj)
 
+    def get_can_reopen(self, obj):
+        user = get_request_user(self)
+        return usuario_puede_reabrir_tarea(user, obj)
+
     def get_is_read_only(self, obj):
-        return not self.get_can_edit_details(obj) and not self.get_can_follow_up(obj)
+        return (
+            not self.get_can_edit_details(obj)
+            and not self.get_can_follow_up(obj)
+        )
 
 
 class TaskStatusUpdateSerializer(serializers.Serializer):
@@ -332,6 +344,51 @@ class TaskAddCommentSerializer(serializers.Serializer):
     comment = serializers.CharField(
         trim_whitespace=True,
     )
+
+
+class TaskManagementSerializer(serializers.Serializer):
+    """
+    Una sola gestión de usuario puede registrar actividad y, opcionalmente,
+    cambiar el estado de la tarea.
+    """
+    action_type = serializers.ChoiceField(
+        choices=TaskComment.ACTION_TYPE_CHOICES,
+        default="comment",
+    )
+    comment = serializers.CharField(
+        trim_whitespace=True,
+    )
+    status = serializers.ChoiceField(
+        choices=Task.STATUS_CHOICES,
+        required=False,
+        allow_null=True,
+    )
+
+    def validate_comment(self, value):
+        value = value.strip()
+
+        if not value:
+            raise serializers.ValidationError(
+                "Ingresa el detalle o resultado de la gestión."
+            )
+
+        return value
+
+
+class TaskReopenSerializer(serializers.Serializer):
+    reason = serializers.CharField(
+        trim_whitespace=True,
+    )
+
+    def validate_reason(self, value):
+        value = value.strip()
+
+        if not value:
+            raise serializers.ValidationError(
+                "Debes indicar el motivo de la reapertura."
+            )
+
+        return value
 
 
 class CalendarEventSerializer(serializers.ModelSerializer):

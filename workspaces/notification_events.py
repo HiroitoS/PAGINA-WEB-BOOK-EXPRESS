@@ -120,7 +120,7 @@ def notify_task_assigned(task, actor, previous_assignee=None):
                 if task.priority in ["high", "urgent"]
                 else "info"
             ),
-            link=f"/admin/workspace/tasks?task={task.id}",
+            link=f"/admin/workspace/tasks?task={task.id}&tab=info",
             source_app="workspaces",
             source_model="Task",
             source_id=task.id,
@@ -154,15 +154,18 @@ def notify_task_comment_created(comment, actor):
             recipients=recipients,
             exclude_user=actor,
             actor=actor,
-            title="Nuevo seguimiento en una tarea",
+            title="Nueva gestión en una tarea",
             message=(
-                f"{actor_name} registró seguimiento en "
+                f"{actor_name} registró una gestión en "
                 f"\"{task.title}\"."
             ),
             event_type="workspace.task_comment_added",
             module="todo",
             severity="info",
-            link=f"/admin/workspace/tasks?task={task.id}",
+            link=(
+                f"/admin/workspace/tasks?task={task.id}"
+                f"&tab=history&comment={comment.id}"
+            ),
             source_app="workspaces",
             source_model="TaskComment",
             source_id=comment.id,
@@ -302,6 +305,52 @@ def resolve_task_notifications(task):
             source_model="Task",
             source_id=task.id,
             related_metadata={"task_id": task.id},
+        )
+
+    _schedule(callback)
+
+
+def notify_task_reopened(task, actor):
+    """
+    Informa la reapertura sin revivir notificaciones históricas ya resueltas.
+    """
+    recipients = [
+        task.created_by,
+        task.assigned_to,
+    ]
+
+    actor_name = _display_name(actor)
+
+    def callback():
+        create_notifications_for_users(
+            recipients=recipients,
+            exclude_user=actor,
+            actor=actor,
+            title="Tarea reabierta",
+            message=(
+                f"{actor_name} reabrió la tarea "
+                f"\"{task.title}\"."
+            ),
+            event_type="workspace.task_reopened",
+            module="todo",
+            severity="warning",
+            link=(
+                f"/admin/workspace/tasks?task={task.id}"
+                f"&tab=history&event=reopened"
+                f"&at={int(task.updated_at.timestamp())}"
+            ),
+            source_app="workspaces",
+            source_model="Task",
+            source_id=task.id,
+            metadata={
+                "task_id": task.id,
+                "task_title": task.title,
+                "status": task.status,
+            },
+            dedup_key_prefix=(
+                f"workspace:task:{task.id}:reopened:"
+                f"{task.updated_at.isoformat()}"
+            ),
         )
 
     _schedule(callback)

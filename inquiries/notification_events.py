@@ -7,6 +7,7 @@ from notifications.services import (
     create_notification,
     create_notifications_for_users,
     get_active_users_with_permission,
+    resolve_notifications_for_source,
 )
 
 
@@ -218,6 +219,20 @@ def notify_contact_request_comment_added(comment, actor):
                 f"inquiries:comment:{comment.id}:"
                 f"recipient:{recipient.id}"
             ),
+        )
+
+    _schedule(callback)
+
+
+def resolve_contact_request_notifications(contact_request):
+    def callback():
+        resolve_notifications_for_source(
+            source_app="inquiries",
+            source_model="ContactRequest",
+            source_id=contact_request.id,
+            related_metadata={
+                "request_id": contact_request.id,
+            },
         )
 
     _schedule(callback)

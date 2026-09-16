@@ -31,6 +31,7 @@ class ContactRequestCreateSerializer(serializers.ModelSerializer):
             "provider",
             "provider_name",
             "message",
+            "inquiry_type",
             "source",
             "status",
             "created_at",
@@ -175,6 +176,10 @@ class ContactRequestAdminSerializer(serializers.ModelSerializer):
         source="get_source_display",
         read_only=True
     )
+    inquiry_type_display = serializers.CharField(
+        source="get_inquiry_type_display",
+        read_only=True
+    )
     comments = ContactRequestCommentSerializer(
         many=True,
         read_only=True
@@ -196,6 +201,8 @@ class ContactRequestAdminSerializer(serializers.ModelSerializer):
             "provider",
             "provider_name",
             "message",
+            "inquiry_type",
+            "inquiry_type_display",
             "source",
             "source_display",
             "status",
@@ -216,7 +223,9 @@ class ContactRequestAdminSerializer(serializers.ModelSerializer):
             "id",
             "product_name",
             "provider_name",
+            "inquiry_type_display",
             "source_display",
+            "status",
             "status_display",
             "priority_display",
             "assigned_to_name",
@@ -227,6 +236,24 @@ class ContactRequestAdminSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+    def validate(self, attrs):
+        if "status" in self.initial_data:
+            raise serializers.ValidationError({
+                "status": (
+                    "El estado debe cambiarse mediante una acción de atención "
+                    "para conservar la trazabilidad."
+                )
+            })
+
+        if "assigned_to" in self.initial_data:
+            raise serializers.ValidationError({
+                "assigned_to": (
+                    "El responsable debe cambiarse mediante la acción de asignación."
+                )
+            })
+
+        return attrs
 
     def get_assigned_to_name(self, obj):
         if not obj.assigned_to:
@@ -245,8 +272,9 @@ class ContactRequestStatusUpdateSerializer(serializers.Serializer):
         choices=ContactRequest.STATUS_CHOICES
     )
     note = serializers.CharField(
-        required=False,
-        allow_blank=True
+        required=True,
+        allow_blank=False,
+        trim_whitespace=True
     )
 
 
@@ -264,3 +292,26 @@ class ContactRequestAddCommentSerializer(serializers.Serializer):
         default="general"
     )
     comment = serializers.CharField()
+
+class ContactRequestAttentionSerializer(serializers.Serializer):
+    action_type = serializers.ChoiceField(
+        choices=ContactRequestComment.ACTION_TYPE_CHOICES,
+        default="general",
+    )
+    comment = serializers.CharField(
+        allow_blank=False,
+        trim_whitespace=True,
+    )
+    status = serializers.ChoiceField(
+        choices=ContactRequest.STATUS_CHOICES,
+        required=False,
+        allow_blank=True,
+    )
+
+
+class ContactRequestReopenSerializer(serializers.Serializer):
+    reason = serializers.CharField(
+        allow_blank=False,
+        trim_whitespace=True,
+        max_length=1000,
+    )
