@@ -116,6 +116,10 @@ class WorkspaceGroupSerializer(serializers.ModelSerializer):
 
 class TaskCommentSerializer(serializers.ModelSerializer):
     user_name = serializers.SerializerMethodField()
+    action_type_display = serializers.CharField(
+        source="get_action_type_display",
+        read_only=True,
+    )
 
     class Meta:
         model = TaskComment
@@ -124,6 +128,8 @@ class TaskCommentSerializer(serializers.ModelSerializer):
             "task",
             "user",
             "user_name",
+            "action_type",
+            "action_type_display",
             "comment",
             "created_at",
             "updated_at",
@@ -133,6 +139,7 @@ class TaskCommentSerializer(serializers.ModelSerializer):
             "task",
             "user",
             "user_name",
+            "action_type_display",
             "created_at",
             "updated_at",
         ]
@@ -297,11 +304,34 @@ class TaskStatusUpdateSerializer(serializers.Serializer):
     note = serializers.CharField(
         required=False,
         allow_blank=True,
+        trim_whitespace=True,
     )
+
+    def validate(self, attrs):
+        status_value = attrs.get("status")
+        note = attrs.get("note", "").strip()
+
+        if status_value == "completed" and not note:
+            raise serializers.ValidationError(
+                {
+                    "note": (
+                        "Debes registrar un sustento antes de completar la tarea."
+                    )
+                }
+            )
+
+        attrs["note"] = note
+        return attrs
 
 
 class TaskAddCommentSerializer(serializers.Serializer):
-    comment = serializers.CharField()
+    action_type = serializers.ChoiceField(
+        choices=TaskComment.ACTION_TYPE_CHOICES,
+        default="comment",
+    )
+    comment = serializers.CharField(
+        trim_whitespace=True,
+    )
 
 
 class CalendarEventSerializer(serializers.ModelSerializer):

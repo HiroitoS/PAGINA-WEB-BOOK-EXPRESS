@@ -216,6 +216,69 @@ class ProductPublicDetailSerializer(serializers.ModelSerializer):
         return data
 
 
+class ProductCatalogReadSerializer(serializers.ModelSerializer):
+    """
+    Lectura interna de catálogo para usuarios que pueden consultar
+    productos, pero no tienen permiso de ver precios internos.
+    """
+
+    provider_name = serializers.CharField(source="provider.name", read_only=True)
+    series_name = serializers.CharField(source="series.name", read_only=True)
+    level_name = serializers.CharField(source="level.name", read_only=True)
+    grade_name = serializers.CharField(source="grade.name", read_only=True)
+    area_name = serializers.CharField(source="area.name", read_only=True)
+    product_type_name = serializers.CharField(source="product_type.name", read_only=True)
+    latest_price = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Product
+        fields = [
+            "id",
+            "provider",
+            "provider_name",
+            "name",
+            "slug",
+            "code",
+            "sku",
+            "series",
+            "series_name",
+            "level",
+            "level_name",
+            "grade",
+            "grade_name",
+            "area",
+            "area_name",
+            "product_type",
+            "product_type_name",
+            "cover_image",
+            "description",
+            "is_featured",
+            "is_active",
+            "order",
+            "latest_price",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_latest_price(self, obj):
+        price = obj.prices.filter(is_active=True).order_by("-year").first()
+
+        if not price:
+            return None
+
+        return {
+            "id": price.id,
+            "year": price.year,
+            "campaign": price.campaign,
+            "currency": price.currency,
+            "show_price": price.show_price,
+            "consult_price": price.consult_price,
+            "availability": price.availability,
+            "is_active": price.is_active,
+        }
+
+
 class ProductAdminSerializer(serializers.ModelSerializer):
     provider_name = serializers.CharField(source="provider.name", read_only=True)
     series_name = serializers.CharField(source="series.name", read_only=True)

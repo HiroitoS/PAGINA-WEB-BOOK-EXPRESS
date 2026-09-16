@@ -19,11 +19,15 @@ class WorkspaceMembershipInline(admin.TabularInline):
 class TaskCommentInline(admin.TabularInline):
     model = TaskComment
     extra = 0
+    fields = (
+        "action_type",
+        "user",
+        "comment",
+        "created_at",
+    )
     readonly_fields = (
         "created_at",
-        "updated_at",
     )
-
 
 class TaskStatusHistoryInline(admin.TabularInline):
     model = TaskStatusHistory
@@ -133,16 +137,20 @@ class TaskAdmin(admin.ModelAdmin):
 class TaskCommentAdmin(admin.ModelAdmin):
     list_display = (
         "task",
+        "action_type",
         "user",
         "created_at",
     )
     list_filter = (
+        "action_type",
         "created_at",
     )
     search_fields = (
         "task__title",
         "comment",
         "user__username",
+        "user__first_name",
+        "user__last_name",
     )
     readonly_fields = (
         "created_at",

@@ -41,6 +41,7 @@ from workspaces.views import (
     WorkspaceGroupViewSet,
     WorkspaceMembershipViewSet,
     WorkspaceSummaryAPIView,
+    WorkspaceAssignableUsersAPIView,
 )
 
 public_router = DefaultRouter()
@@ -82,6 +83,7 @@ urlpatterns = [
 
     path("api/public/", include(public_router.urls)),
     path("api/admin/", include(admin_router.urls)),
+    path("api/admin/", include("notifications.urls")),
 
     path("api-auth/", include("rest_framework.urls")),
 
@@ -92,6 +94,12 @@ urlpatterns = [
     ),
 
         path(
+        "api/admin/workspace/assignable-users/",
+        WorkspaceAssignableUsersAPIView.as_view(),
+        name="admin-workspace-assignable-users",
+    ),
+
+    path(
         "api/admin/workspace/summary/",
         WorkspaceSummaryAPIView.as_view(),
         name="admin-workspace-summary",

@@ -6,12 +6,21 @@ from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
-from accounts.permissions import EsAdministradorOAtencion
+from accounts.permissions import (
+    PermisoSolicitudes,
+    PuedeAsignarSolicitudes,
+)
 
 from .models import (
     ContactRequest,
     ContactRequestComment,
     ContactRequestStatusHistory,
+)
+from .notification_events import (
+    notify_contact_request_assigned,
+    notify_contact_request_comment_added,
+    notify_contact_request_status_changed,
+    notify_new_contact_request,
 )
 from .serializers import (
     ContactRequestCreateSerializer,
@@ -32,10 +41,21 @@ class PublicContactRequestViewSet(
     serializer_class = ContactRequestCreateSerializer
     permission_classes = [AllowAny]
 
+    def perform_create(self, serializer):
+        contact_request = serializer.save()
+
+        notify_new_contact_request(contact_request)
+
 
 class AdminContactRequestViewSet(viewsets.ModelViewSet):
     serializer_class = ContactRequestAdminSerializer
-    permission_classes = [EsAdministradorOAtencion]
+    permission_classes = [PermisoSolicitudes]
+
+    def get_permissions(self):
+        if self.action == "assign":
+            return [PuedeAsignarSolicitudes()]
+
+        return [permission() for permission in self.permission_classes]
 
     def get_queryset(self):
         queryset = (
@@ -120,6 +140,12 @@ class AdminContactRequestViewSet(viewsets.ModelViewSet):
                 ]
             )
 
+            notify_contact_request_status_changed(
+                updated_instance,
+                actor=self.request.user,
+                old_status=old_status,
+            )
+
     def _register_status_history(
         self,
         contact_request,
@@ -180,6 +206,12 @@ class AdminContactRequestViewSet(viewsets.ModelViewSet):
             note=note
         )
 
+        notify_contact_request_status_changed(
+            contact_request,
+            actor=request.user,
+            old_status=old_status,
+        )
+
         response_serializer = self.get_serializer(contact_request)
 
         return Response(response_serializer.data)
@@ -195,6 +227,7 @@ class AdminContactRequestViewSet(viewsets.ModelViewSet):
 
         serializer.is_valid(raise_exception=True)
 
+        previous_assignee = contact_request.assigned_to
         contact_request.assigned_to = serializer.validated_data.get("assigned_to")
         contact_request.mark_attention()
         contact_request.save(
@@ -210,6 +243,12 @@ class AdminContactRequestViewSet(viewsets.ModelViewSet):
             user=request.user,
             action_type="internal",
             comment="Se actualizó el responsable de atención."
+        )
+
+        notify_contact_request_assigned(
+            contact_request,
+            actor=request.user,
+            previous_assignee=previous_assignee,
         )
 
         response_serializer = self.get_serializer(contact_request)
@@ -240,6 +279,11 @@ class AdminContactRequestViewSet(viewsets.ModelViewSet):
                 "last_attention_at",
                 "updated_at",
             ]
+        )
+
+        notify_contact_request_comment_added(
+            comment,
+            actor=request.user,
         )
 
         response_serializer = ContactRequestCommentSerializer(comment)

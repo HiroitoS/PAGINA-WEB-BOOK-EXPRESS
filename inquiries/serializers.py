@@ -160,9 +160,7 @@ class ContactRequestAdminSerializer(serializers.ModelSerializer):
         read_only=True
     )
     assigned_to = serializers.PrimaryKeyRelatedField(
-        queryset=User.objects.filter(is_active=True),
-        required=False,
-        allow_null=True
+        read_only=True
     )
     assigned_to_name = serializers.SerializerMethodField()
     status_display = serializers.CharField(

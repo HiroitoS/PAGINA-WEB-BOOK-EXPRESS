@@ -1,5 +1,6 @@
 from datetime import datetime, time
 
+from django.contrib.auth import get_user_model
 from django.db.models import Q
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
@@ -21,8 +22,18 @@ from .models import (
     WorkspaceGroup,
     WorkspaceMembership,
 )
+from .notification_events import (
+    notify_event_assigned,
+    notify_group_membership_created,
+    notify_reminder_assigned,
+    notify_task_assigned,
+    notify_task_comment_created,
+    resolve_task_notifications,
+)
 from .permissions import (
     EsUsuarioWorkspace,
+    usuario_puede_asignar_trabajo,
+    usuario_puede_crear_grupo,
     usuario_es_miembro_activo,
     usuario_puede_completar_recordatorio,
     usuario_puede_completar_tarea,
@@ -91,6 +102,9 @@ def user_can_assign_to_other_user(request_user, assigned_user, group=None):
         return True
 
     if group and usuario_puede_gestionar_grupo(request_user, group):
+        return True
+
+    if usuario_puede_asignar_trabajo(request_user):
         return True
 
     return False
@@ -230,9 +244,9 @@ class WorkspaceGroupViewSet(viewsets.ModelViewSet):
         return queryset.distinct()
 
     def perform_create(self, serializer):
-        if not usuario_es_administrador(self.request.user):
+        if not usuario_puede_crear_grupo(self.request.user):
             raise PermissionDenied(
-                "Solo un administrador puede crear grupos de trabajo."
+                "No tienes permiso para crear grupos de trabajo."
             )
 
         group = serializer.save(created_by=self.request.user)
@@ -256,6 +270,14 @@ class WorkspaceGroupViewSet(viewsets.ModelViewSet):
 
         serializer.save()
 
+    def perform_destroy(self, instance):
+        if not usuario_puede_gestionar_grupo(self.request.user, instance):
+            raise PermissionDenied(
+                "No tienes permiso para eliminar este grupo."
+            )
+
+        instance.delete()
+
 
 class WorkspaceMembershipViewSet(viewsets.ModelViewSet):
     serializer_class = WorkspaceMembershipSerializer
@@ -278,7 +300,12 @@ class WorkspaceMembershipViewSet(viewsets.ModelViewSet):
                 "No tienes permiso para agregar miembros a este grupo."
             )
 
-        serializer.save()
+        membership = serializer.save()
+
+        notify_group_membership_created(
+            membership,
+            actor=self.request.user,
+        )
 
     def perform_update(self, serializer):
         membership = self.get_object()
@@ -389,9 +416,14 @@ class TaskViewSet(viewsets.ModelViewSet):
                 "No tienes permiso para asignar tareas a otro usuario."
             )
 
-        serializer.save(
+        task = serializer.save(
             created_by=self.request.user,
             assigned_to=assigned_to,
+        )
+
+        notify_task_assigned(
+            task,
+            actor=self.request.user,
         )
 
     def perform_update(self, serializer):
@@ -420,7 +452,14 @@ class TaskViewSet(viewsets.ModelViewSet):
             )
 
         old_status = task.status
+        old_assigned_to = task.assigned_to
         updated_task = serializer.save()
+
+        notify_task_assigned(
+            updated_task,
+            actor=self.request.user,
+            previous_assignee=old_assigned_to,
+        )
 
         if old_status != updated_task.status:
             self._register_status_history(
@@ -431,6 +470,20 @@ class TaskViewSet(viewsets.ModelViewSet):
             )
 
             self._update_completed_at(updated_task)
+
+            if updated_task.status in ["completed", "cancelled"]:
+                resolve_task_notifications(updated_task)
+
+    def perform_destroy(self, instance):
+        if not usuario_puede_editar_datos_tarea(
+            self.request.user,
+            instance,
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para eliminar esta tarea."
+            )
+
+        instance.delete()
 
     def _update_completed_at(self, task):
         if task.status == "completed":
@@ -508,6 +561,9 @@ class TaskViewSet(viewsets.ModelViewSet):
             note=note,
         )
 
+        if new_status in ["completed", "cancelled"]:
+            resolve_task_notifications(task)
+
         response_serializer = self.get_serializer(task)
 
         return Response(response_serializer.data)
@@ -531,7 +587,13 @@ class TaskViewSet(viewsets.ModelViewSet):
         comment = TaskComment.objects.create(
             task=task,
             user=request.user,
+            action_type=serializer.validated_data["action_type"],
             comment=serializer.validated_data["comment"],
+        )
+
+        notify_task_comment_created(
+            comment,
+            actor=request.user,
         )
 
         response_serializer = TaskCommentSerializer(comment)
@@ -641,9 +703,14 @@ class CalendarEventViewSet(viewsets.ModelViewSet):
                 "No tienes permiso para asignar eventos a otro usuario."
             )
 
-        serializer.save(
+        event = serializer.save(
             created_by=self.request.user,
             assigned_to=assigned_to,
+        )
+
+        notify_event_assigned(
+            event,
+            actor=self.request.user,
         )
 
     def perform_update(self, serializer):
@@ -671,7 +738,25 @@ class CalendarEventViewSet(viewsets.ModelViewSet):
                 "No tienes permiso para asignar eventos a otro usuario."
             )
 
-        serializer.save()
+        old_assigned_to = event.assigned_to
+        updated_event = serializer.save()
+
+        notify_event_assigned(
+            updated_event,
+            actor=self.request.user,
+            previous_assignee=old_assigned_to,
+        )
+
+    def perform_destroy(self, instance):
+        if not usuario_puede_editar_datos_evento(
+            self.request.user,
+            instance,
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para eliminar este evento."
+            )
+
+        instance.delete()
 
 
 class ReminderViewSet(viewsets.ModelViewSet):
@@ -767,10 +852,15 @@ class ReminderViewSet(viewsets.ModelViewSet):
                 "No tienes permiso para asignar recordatorios a otro usuario."
             )
 
-        serializer.save(
+        reminder = serializer.save(
             created_by=self.request.user,
             user=assigned_user,
             group=group,
+        )
+
+        notify_reminder_assigned(
+            reminder,
+            actor=self.request.user,
         )
 
     def perform_update(self, serializer):
@@ -809,7 +899,84 @@ class ReminderViewSet(viewsets.ModelViewSet):
                 "No tienes permiso para asignar recordatorios a otro usuario."
             )
 
-        serializer.save()
+        old_user = reminder.user
+        updated_reminder = serializer.save()
+
+        notify_reminder_assigned(
+            updated_reminder,
+            actor=self.request.user,
+            previous_user=old_user,
+        )
+
+    def perform_destroy(self, instance):
+        if not usuario_puede_editar_datos_recordatorio(
+            self.request.user,
+            instance,
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para eliminar este recordatorio."
+            )
+
+        instance.delete()
+
+
+class WorkspaceAssignableUsersAPIView(APIView):
+    """
+    Directorio seguro de usuarios que pueden participar en ToDo.
+
+    No expone datos administrativos sensibles. Solo puede consultarlo quien
+    tenga capacidad para asignar trabajo o crear grupos de trabajo.
+    """
+
+    permission_classes = [EsUsuarioWorkspace]
+
+    def get(self, request):
+        can_assign = usuario_puede_asignar_trabajo(request.user)
+        can_create_group = usuario_puede_crear_grupo(request.user)
+
+        if not (
+            usuario_es_administrador(request.user)
+            or can_assign
+            or can_create_group
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para consultar usuarios asignables."
+            )
+
+        User = get_user_model()
+
+        users = (
+            User.objects
+            .filter(is_active=True)
+            .filter(
+                Q(is_superuser=True)
+                | Q(
+                    user_permissions__content_type__app_label="workspaces",
+                    user_permissions__codename="use_workspace",
+                )
+                | Q(
+                    groups__permissions__content_type__app_label="workspaces",
+                    groups__permissions__codename="use_workspace",
+                )
+            )
+            .distinct()
+            .order_by("first_name", "last_name", "username")
+        )
+
+        results = []
+
+        for user in users:
+            full_name = user.get_full_name().strip()
+
+            results.append({
+                "id": user.id,
+                "username": user.username,
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+                "full_name": full_name or user.username,
+            })
+
+        return Response(results)
 
 
 class WorkspaceSummaryAPIView(APIView):

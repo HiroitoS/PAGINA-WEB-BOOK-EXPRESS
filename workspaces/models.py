@@ -37,6 +37,11 @@ class WorkspaceGroup(TimeStampedModel):
         verbose_name = "Grupo de trabajo"
         verbose_name_plural = "Grupos de trabajo"
         ordering = ["name"]
+        permissions = [
+            ("use_workspace", "Puede usar ToDo y Agenda"),
+            ("create_workspace_group", "Puede crear grupos de trabajo"),
+            ("supervise_workspace", "Puede supervisar trabajo"),
+        ]
 
     def __str__(self):
         return self.name
@@ -207,6 +212,9 @@ class Task(TimeStampedModel):
         verbose_name = "Tarea"
         verbose_name_plural = "Tareas"
         ordering = ["status", "due_at", "-created_at"]
+        permissions = [
+            ("assign_work", "Puede asignar trabajo a otros usuarios"),
+        ]
 
     def __str__(self):
         return self.title
@@ -227,6 +235,18 @@ class Task(TimeStampedModel):
 
 
 class TaskComment(TimeStampedModel):
+    ACTION_TYPE_CHOICES = [
+        ("comment", "Comentario"),
+        ("call", "Llamada"),
+        ("whatsapp", "WhatsApp"),
+        ("meeting", "Reunión"),
+        ("visit", "Visita"),
+        ("sample_delivery", "Entrega de muestra"),
+        ("presentation", "Presentación"),
+        ("evidence", "Evidencia"),
+        ("other", "Otro"),
+    ]
+
     task = models.ForeignKey(
         Task,
         on_delete=models.CASCADE,
@@ -241,17 +261,23 @@ class TaskComment(TimeStampedModel):
         related_name="task_comments",
         verbose_name="Usuario"
     )
+    action_type = models.CharField(
+        max_length=30,
+        choices=ACTION_TYPE_CHOICES,
+        default="comment",
+        verbose_name="Tipo de seguimiento"
+    )
     comment = models.TextField(
-        verbose_name="Comentario / evidencia"
+        verbose_name="Detalle del seguimiento"
     )
 
     class Meta:
-        verbose_name = "Comentario de tarea"
-        verbose_name_plural = "Comentarios de tareas"
+        verbose_name = "Seguimiento de tarea"
+        verbose_name_plural = "Seguimientos de tareas"
         ordering = ["-created_at"]
 
     def __str__(self):
-        return f"{self.task} - {self.user}"
+        return f"{self.get_action_type_display()} - {self.task}"
 
 
 class TaskStatusHistory(models.Model):

@@ -107,6 +107,11 @@ class ContactRequest(TimeStampedModel):
         verbose_name = "Solicitud de contacto"
         verbose_name_plural = "Solicitudes de contacto"
         ordering = ["-created_at"]
+        permissions = [
+            ("view_inquiries", "Puede consultar solicitudes"),
+            ("manage_inquiries", "Puede gestionar solicitudes"),
+            ("assign_inquiries", "Puede asignar solicitudes"),
+        ]
 
     def mark_attention(self):
         self.last_attention_at = timezone.now()

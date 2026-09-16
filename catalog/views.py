@@ -6,7 +6,14 @@ from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
-from accounts.permissions import EsAdministradorOCatalogo, EsAdministrador, EsUsuarioPanel
+from accounts.permissions import (
+    EsAdministrador,
+    EsUsuarioPanel,
+    PermisoCatalogo,
+    PermisoPrecios,
+    PuedeGestionarImportaciones,
+    usuario_tiene_permiso,
+)
 from inquiries.models import ContactRequest
 
 from .models import (
@@ -32,6 +39,7 @@ from .serializers import (
     ProductPublicListSerializer,
     ProductPublicDetailSerializer,
     ProductAdminSerializer,
+    ProductCatalogReadSerializer,
     CargaExcelSerializer,
     CargaExcelListSerializer,
     CargaExcelPreviewSerializer,
@@ -200,37 +208,37 @@ class PublicProductViewSet(viewsets.ReadOnlyModelViewSet):
 class AdminProviderViewSet(viewsets.ModelViewSet):
     queryset = Provider.objects.all().order_by("order", "name")
     serializer_class = ProviderSerializer
-    permission_classes = [EsAdministradorOCatalogo]
+    permission_classes = [PermisoCatalogo]
 
 
 class AdminLevelViewSet(viewsets.ModelViewSet):
     queryset = Level.objects.all().order_by("name")
     serializer_class = LevelSerializer
-    permission_classes = [EsAdministradorOCatalogo]
+    permission_classes = [PermisoCatalogo]
 
 
 class AdminGradeViewSet(viewsets.ModelViewSet):
     queryset = Grade.objects.all().order_by("order", "name")
     serializer_class = GradeSerializer
-    permission_classes = [EsAdministradorOCatalogo]
+    permission_classes = [PermisoCatalogo]
 
 
 class AdminAreaViewSet(viewsets.ModelViewSet):
     queryset = Area.objects.all().order_by("name")
     serializer_class = AreaSerializer
-    permission_classes = [EsAdministradorOCatalogo]
+    permission_classes = [PermisoCatalogo]
 
 
 class AdminSeriesViewSet(viewsets.ModelViewSet):
     queryset = Series.objects.select_related("provider").all().order_by("name")
     serializer_class = SeriesSerializer
-    permission_classes = [EsAdministradorOCatalogo]
+    permission_classes = [PermisoCatalogo]
 
 
 class AdminProductTypeViewSet(viewsets.ModelViewSet):
     queryset = ProductType.objects.all().order_by("name")
     serializer_class = ProductTypeSerializer
-    permission_classes = [EsAdministradorOCatalogo]
+    permission_classes = [PermisoCatalogo]
 
 
 class AdminProductViewSet(viewsets.ModelViewSet):
@@ -249,7 +257,7 @@ class AdminProductViewSet(viewsets.ModelViewSet):
         .order_by("provider__name", "order", "name")
     )
     serializer_class = ProductAdminSerializer
-    permission_classes = [EsAdministradorOCatalogo]
+    permission_classes = [PermisoCatalogo]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = [
         "name",
@@ -266,6 +274,18 @@ class AdminProductViewSet(viewsets.ModelViewSet):
         "updated_at",
         "order",
     ]
+
+    def get_serializer_class(self):
+        if (
+            self.action in ["list", "retrieve"]
+            and not usuario_tiene_permiso(
+                self.request.user,
+                "catalog.view_prices",
+            )
+        ):
+            return ProductCatalogReadSerializer
+
+        return ProductAdminSerializer
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -329,7 +349,7 @@ class AdminProductViewSet(viewsets.ModelViewSet):
 
 class AdminProductPriceViewSet(viewsets.ModelViewSet):
     serializer_class = ProductPriceSerializer
-    permission_classes = [EsAdministradorOCatalogo]
+    permission_classes = [PermisoPrecios]
 
     def get_queryset(self):
         queryset = (
@@ -518,7 +538,7 @@ class DashboardResumenAPIView(APIView):
 # ============================================================
 
 class VistaPreviaCargaProductosAPIView(APIView):
-    permission_classes = [EsAdministradorOCatalogo]
+    permission_classes = [PuedeGestionarImportaciones]
 
     def post(self, request):
         serializer = CargaExcelPreviewSerializer(data=request.data)
@@ -546,7 +566,7 @@ class VistaPreviaCargaProductosAPIView(APIView):
 
 
 class ConfirmarCargaProductosAPIView(APIView):
-    permission_classes = [EsAdministradorOCatalogo]
+    permission_classes = [PuedeGestionarImportaciones]
 
     def post(self, request, carga_id):
         try:
@@ -576,7 +596,7 @@ class AdminCargaExcelViewSet(viewsets.ReadOnlyModelViewSet):
         .all()
         .order_by("-creado_en")
     )
-    permission_classes = [EsAdministradorOCatalogo]
+    permission_classes = [PuedeGestionarImportaciones]
 
     def get_queryset(self):
         queryset = super().get_queryset()

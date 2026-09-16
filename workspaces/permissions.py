@@ -1,18 +1,50 @@
 from rest_framework.permissions import BasePermission
 
-from accounts.permissions import usuario_es_administrador
+from accounts.permissions import usuario_es_administrador, usuario_tiene_permiso
 
 
 class EsUsuarioWorkspace(BasePermission):
     """
     Permiso base para el módulo interno de ToDo.
 
-    Permite ingresar a usuarios autenticados del panel.
-    Las reglas finas se controlan en queryset, serializers y ViewSets.
+    Requiere el permiso funcional workspaces.use_workspace.
+    Las reglas finas por objeto se controlan en queryset, serializers
+    y ViewSets.
     """
 
     def has_permission(self, request, view):
-        return bool(request.user and request.user.is_authenticated)
+        return usuario_tiene_permiso(
+            request.user,
+            "workspaces.use_workspace",
+        )
+
+
+def usuario_puede_crear_grupo(user):
+    return usuario_tiene_permiso(
+        user,
+        "workspaces.create_workspace_group",
+    )
+
+
+def usuario_puede_asignar_trabajo(user):
+    return usuario_tiene_permiso(
+        user,
+        "workspaces.assign_work",
+    )
+
+
+def usuario_puede_supervisar_workspace(user):
+    """
+    Capacidad reservada para supervisión transversal.
+
+    Por ahora no amplía automáticamente la visibilidad a todos los grupos
+    de la empresa. Ese alcance se definirá cuando exista una estructura
+    formal de equipos/CRM.
+    """
+    return usuario_tiene_permiso(
+        user,
+        "workspaces.supervise_workspace",
+    )
 
 
 def usuario_puede_gestionar_grupo(user, group):

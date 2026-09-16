@@ -307,6 +307,10 @@ class Product(TimeStampedModel):
         verbose_name = "Producto / Libro"
         verbose_name_plural = "Productos / Libros"
         ordering = ["provider__name", "order", "name"]
+        permissions = [
+            ("view_catalog", "Puede consultar el catálogo interno"),
+            ("manage_catalog", "Puede gestionar el catálogo"),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["provider", "name"],
@@ -387,6 +391,10 @@ class ProductPrice(TimeStampedModel):
         verbose_name = "Precio por año"
         verbose_name_plural = "Precios por año"
         ordering = ["-year", "product__name"]
+        permissions = [
+            ("view_prices", "Puede consultar precios internos"),
+            ("manage_prices", "Puede gestionar precios"),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["product", "year", "campaign"],
@@ -426,6 +434,9 @@ class CargaExcel(models.Model):
     class Meta:
         verbose_name = "Carga Excel"
         verbose_name_plural = "Cargas Excel"
+        permissions = [
+            ("manage_imports", "Puede gestionar importaciones de catálogo"),
+        ]
 
     def __str__(self):
         return f"Carga Excel {self.id} - {self.anio_catalogo} - {self.estado}"
