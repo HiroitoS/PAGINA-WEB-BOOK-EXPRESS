@@ -5,6 +5,12 @@ from .opportunities import (
     reopen_opportunity,
     transition_opportunity_stage,
 )
+from .planning import (
+    CRMPlanningError,
+    create_opportunity_event,
+    create_opportunity_reminder,
+    create_opportunity_task,
+)
 from .work_items import CRMWorkItemLinkError, link_work_item_to_opportunity
 
 __all__ = [
@@ -14,6 +20,10 @@ __all__ = [
     "create_opportunity",
     "reopen_opportunity",
     "transition_opportunity_stage",
+    "CRMPlanningError",
+    "create_opportunity_task",
+    "create_opportunity_event",
+    "create_opportunity_reminder",
     "CRMWorkItemLinkError",
     "link_work_item_to_opportunity",
 ]
