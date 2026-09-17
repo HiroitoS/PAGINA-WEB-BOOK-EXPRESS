@@ -67,6 +67,12 @@ class Opportunity(TimeStampedModel):
         blank=True,
         verbose_name="Resumen / observaciones",
     )
+    last_activity_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        verbose_name="Última actividad comercial",
+    )
     closed_at = models.DateTimeField(
         null=True,
         blank=True,

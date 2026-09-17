@@ -1,8 +1,10 @@
+from .activity import CommercialActivity
 from .campaign import Campaign
 from .opportunity import Opportunity, OpportunityStageHistory
 from .pipeline import Pipeline, PipelineStage
 from .school import School, SchoolContact
 from .team import CommercialTeam, CommercialTeamMembership
+from .work_item import CRMWorkItemLink
 
 __all__ = [
     "Campaign",
@@ -14,4 +16,6 @@ __all__ = [
     "PipelineStage",
     "Opportunity",
     "OpportunityStageHistory",
+    "CommercialActivity",
+    "CRMWorkItemLink",
 ]
