@@ -119,6 +119,8 @@ urlpatterns = [
         ConfirmarCargaProductosAPIView.as_view(),
         name="confirmar-carga-productos",
     ),
+    path("api/admin/crm/",include("crm.urls"),
+),
 ]
 
 if settings.DEBUG:

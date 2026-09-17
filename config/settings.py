@@ -60,6 +60,7 @@ INSTALLED_APPS = [
     "accounts",
     "workspaces",
     "notifications",
+    "crm.apps.CrmConfig",
 ]
 
 
