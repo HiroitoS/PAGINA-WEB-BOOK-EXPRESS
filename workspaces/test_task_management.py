@@ -7,6 +7,74 @@ from .models import Task, TaskComment, TaskStatusHistory
 
 
 class TaskManagementLifecycleTests(TestCase):
+
+    def test_task_list_preserves_assignee_operational_permissions(self):
+        task = self.create_task()
+        self.client.force_login(self.assignee)
+
+        response = self.client.get("/api/admin/tasks/")
+
+        self.assertEqual(response.status_code, 200)
+
+        listed_task = next(
+            item for item in response.data
+            if item["id"] == task.id
+        )
+
+        self.assertTrue(listed_task["can_follow_up"])
+        self.assertTrue(listed_task["can_complete"])
+        self.assertFalse(listed_task["can_reopen"])
+        self.assertFalse(listed_task["is_read_only"])
+
+    def test_task_list_is_lightweight_and_detail_keeps_history(self):
+        task = self.create_task()
+
+        TaskComment.objects.create(
+            task=task,
+            user=self.assignee,
+            action_type="call",
+            comment="Se realizó el seguimiento.",
+        )
+
+        TaskStatusHistory.objects.create(
+            task=task,
+            changed_by=self.assignee,
+            old_status="pending",
+            new_status="in_progress",
+            note="Se inició la gestión.",
+        )
+
+        self.client.force_login(self.creator)
+
+        list_response = self.client.get("/api/admin/tasks/")
+        self.assertEqual(list_response.status_code, 200)
+
+        listed_task = next(
+            item for item in list_response.data
+            if item["id"] == task.id
+        )
+
+        self.assertNotIn("comments", listed_task)
+        self.assertNotIn("status_history", listed_task)
+
+        detail_response = self.client.get(
+            f"/api/admin/tasks/{task.id}/"
+        )
+
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertIn("comments", detail_response.data)
+        self.assertIn("status_history", detail_response.data)
+
+        self.assertEqual(
+            len(detail_response.data["comments"]),
+            1,
+        )
+
+        self.assertEqual(
+            len(detail_response.data["status_history"]),
+            1,
+        )
+
     def setUp(self):
         self.use_workspace = Permission.objects.get(
             content_type__app_label="workspaces",

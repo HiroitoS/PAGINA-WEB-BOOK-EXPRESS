@@ -54,6 +54,7 @@ from .serializers import (
     ReminderSerializer,
     TaskAddCommentSerializer,
     TaskCommentSerializer,
+    TaskListSerializer,
     TaskManagementSerializer,
     TaskReopenSerializer,
     TaskSerializer,
@@ -61,6 +62,7 @@ from .serializers import (
     TaskStatusUpdateSerializer,
     WorkspaceGroupSerializer,
     WorkspaceMembershipSerializer,
+    
 )
 
 
@@ -137,12 +139,6 @@ def visible_tasks_queryset(user):
             "created_by",
             "assigned_to",
             "related_contact_request",
-        )
-        .prefetch_related(
-            "comments",
-            "comments__user",
-            "status_history",
-            "status_history__changed_by",
         )
         .all()
     )
@@ -347,8 +343,20 @@ class TaskViewSet(viewsets.ModelViewSet):
     # métricas server-side en lugar de volver a depender de conteos por página.
     pagination_class = None
 
+    def get_serializer_class(self):
+        if self.action == "list":
+            return TaskListSerializer
+
+        return TaskSerializer
+
     def get_queryset(self):
         queryset = visible_tasks_queryset(self.request.user)
+
+        if self.action == "retrieve":
+            queryset = queryset.prefetch_related(
+            "comments__user",
+            "status_history__changed_by",
+        )
 
         status_param = self.request.query_params.get("status")
         priority = self.request.query_params.get("priority")

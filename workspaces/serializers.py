@@ -186,7 +186,14 @@ class TaskStatusHistorySerializer(serializers.ModelSerializer):
         )
 
 
-class TaskSerializer(serializers.ModelSerializer):
+class TaskListSerializer(serializers.ModelSerializer):
+    """
+    Serializer liviano para listados de tareas.
+
+    No incluye seguimientos ni historial de estados. Esos datos se consultan
+    únicamente cuando el usuario abre el detalle de una tarea.
+    """
+
     created_by_name = serializers.SerializerMethodField()
     assigned_to_name = serializers.SerializerMethodField()
     group_name = serializers.CharField(
@@ -206,19 +213,13 @@ class TaskSerializer(serializers.ModelSerializer):
         read_only=True,
     )
     is_overdue = serializers.BooleanField(read_only=True)
-    comments = TaskCommentSerializer(
-        many=True,
-        read_only=True,
-    )
-    status_history = TaskStatusHistorySerializer(
-        many=True,
-        read_only=True,
-    )
+
     assigned_to = serializers.PrimaryKeyRelatedField(
         queryset=User.objects.filter(is_active=True),
         required=False,
         allow_null=True,
     )
+
     can_edit_details = serializers.SerializerMethodField()
     can_follow_up = serializers.SerializerMethodField()
     can_complete = serializers.SerializerMethodField()
@@ -251,8 +252,6 @@ class TaskSerializer(serializers.ModelSerializer):
             "is_private",
             "is_overdue",
             "related_contact_request",
-            "comments",
-            "status_history",
             "can_edit_details",
             "can_follow_up",
             "can_complete",
@@ -261,6 +260,7 @@ class TaskSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
         read_only_fields = [
             "id",
             "created_by",
@@ -269,8 +269,6 @@ class TaskSerializer(serializers.ModelSerializer):
             "status",
             "completed_at",
             "is_overdue",
-            "comments",
-            "status_history",
             "can_edit_details",
             "can_follow_up",
             "can_complete",
@@ -308,6 +306,31 @@ class TaskSerializer(serializers.ModelSerializer):
             and not self.get_can_follow_up(obj)
         )
 
+
+class TaskSerializer(TaskListSerializer):
+    """
+    Serializer completo usado para detalle y escritura de tareas.
+    """
+
+    comments = TaskCommentSerializer(
+        many=True,
+        read_only=True,
+    )
+    status_history = TaskStatusHistorySerializer(
+        many=True,
+        read_only=True,
+    )
+
+    class Meta(TaskListSerializer.Meta):
+        fields = TaskListSerializer.Meta.fields + [
+            "comments",
+            "status_history",
+        ]
+
+        read_only_fields = TaskListSerializer.Meta.read_only_fields + [
+            "comments",
+            "status_history",
+        ]
 
 class TaskStatusUpdateSerializer(serializers.Serializer):
     status = serializers.ChoiceField(
