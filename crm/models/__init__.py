@@ -4,7 +4,6 @@ from .opportunity import Opportunity, OpportunityStageHistory
 from .pipeline import Pipeline, PipelineStage
 from .school import (
     School,
-    SchoolCampus,
     SchoolContact,
     SchoolEducationalService,
 )
@@ -23,7 +22,6 @@ __all__ = [
     "CommercialTeam",
     "CommercialTeamMembership",
     "School",
-    "SchoolCampus",
     "SchoolEducationalService",
     "SchoolContact",
     "SchoolPopulationRecord",
