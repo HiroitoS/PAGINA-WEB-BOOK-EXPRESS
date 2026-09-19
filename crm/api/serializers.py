@@ -13,7 +13,11 @@ from crm.models import (
     Pipeline,
     PipelineStage,
     School,
+    SchoolCommercialProfile,
     SchoolContact,
+    SchoolEditorialUsage,
+    SchoolEducationalService,
+    SchoolPopulationRecord,
 )
 from workspaces.models import CalendarEvent, Task, WorkspaceGroup
 
@@ -106,27 +110,266 @@ class SchoolContactSerializer(serializers.ModelSerializer):
         read_only_fields = ("id", "created_at", "updated_at")
 
 
+class SchoolPopulationRecordSerializer(serializers.ModelSerializer):
+    source_display = serializers.CharField(
+        source="get_source_display",
+        read_only=True,
+    )
+
+    class Meta:
+        model = SchoolPopulationRecord
+        fields = (
+            "id",
+            "year",
+            "student_count",
+            "source",
+            "source_display",
+            "source_detail",
+            "is_current",
+            "created_at",
+            "updated_at",
+        )
+
+
+class SchoolEducationalServiceSerializer(serializers.ModelSerializer):
+    level = LevelSummarySerializer(read_only=True)
+    latest_population = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SchoolEducationalService
+        fields = (
+            "id",
+            "level",
+            "modular_code",
+            "modality",
+            "is_active",
+            "latest_population",
+        )
+
+    def get_latest_population(self, obj):
+        record = next(
+            (
+                item
+                for item in obj.population_records.all()
+                if item.is_current
+            ),
+            None,
+        )
+
+        if record is None:
+            return None
+
+        return SchoolPopulationRecordSerializer(record).data
+
+
+class SchoolEditorialUsageSerializer(serializers.ModelSerializer):
+    status_display = serializers.CharField(
+        source="get_status_display",
+        read_only=True,
+    )
+    source_display = serializers.CharField(
+        source="get_source_display",
+        read_only=True,
+    )
+    service = serializers.SerializerMethodField()
+    area = serializers.SerializerMethodField()
+    provider = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SchoolEditorialUsage
+        fields = (
+            "id",
+            "year",
+            "service",
+            "area",
+            "provider",
+            "status",
+            "status_display",
+            "source",
+            "source_display",
+            "observed_on",
+            "notes",
+            "created_at",
+            "updated_at",
+        )
+
+    def get_service(self, obj):
+        if obj.service_id is None:
+            return None
+
+        return {
+            "id": obj.service_id,
+            "level": obj.service.level.name,
+            "modular_code": obj.service.modular_code,
+        }
+
+    def get_area(self, obj):
+        if obj.area_id is None:
+            return None
+
+        return {
+            "id": obj.area_id,
+            "name": obj.area.name,
+        }
+
+    def get_provider(self, obj):
+        return {
+            "id": obj.provider_id,
+            "name": obj.provider.name,
+        }
+
+
+class SchoolCommercialProfileSerializer(serializers.ModelSerializer):
+    campaign = CampaignSerializer(read_only=True)
+    segment_display = serializers.CharField(
+        source="get_segment_display",
+        read_only=True,
+    )
+    priority_display = serializers.CharField(
+        source="get_priority_display",
+        read_only=True,
+    )
+    textbook_usage_display = serializers.CharField(
+        source="get_textbook_usage_display",
+        read_only=True,
+    )
+
+    class Meta:
+        model = SchoolCommercialProfile
+        fields = (
+            "id",
+            "campaign",
+            "population_total",
+            "segment",
+            "segment_display",
+            "textbook_usage",
+            "textbook_usage_display",
+            "priority",
+            "priority_display",
+            "priority_score",
+            "score_reasons",
+            "score_version",
+            "scored_at",
+            "updated_at",
+        )
+
+
+def _latest_population_for_service(service):
+    current_records = [
+        record
+        for record in service.population_records.all()
+        if record.is_current
+    ]
+
+    if not current_records:
+        return None
+
+    return max(
+        current_records,
+        key=lambda record: (record.year, record.created_at, record.id),
+    )
+
+
+def _current_population_total(school):
+    total = 0
+
+    for service in school.educational_services.all():
+        if not service.is_active:
+            continue
+
+        record = _latest_population_for_service(service)
+
+        if record is not None:
+            total += record.student_count
+
+    return total
+
+
 class SchoolListSerializer(serializers.ModelSerializer):
     owner = UserSummarySerializer(read_only=True)
     team = CommercialTeamSummarySerializer(read_only=True)
     levels = LevelSummarySerializer(many=True, read_only=True)
+    current_population_total = serializers.SerializerMethodField()
+    segment = serializers.SerializerMethodField()
 
     class Meta:
         model = School
         fields = (
-            "id", "name", "modular_code", "ruc", "phone", "whatsapp", "email",
-            "department", "province", "district", "estimated_students", "levels",
-            "team", "owner", "is_active", "updated_at",
+            "id",
+            "institution_code",
+            "name",
+            "modular_code",
+            "ruc",
+            "phone",
+            "whatsapp",
+            "email",
+            "department",
+            "province",
+            "district",
+            "estimated_students",
+            "current_population_total",
+            "segment",
+            "levels",
+            "team",
+            "owner",
+            "is_active",
+            "updated_at",
         )
+
+    def get_current_population_total(self, obj):
+        total = _current_population_total(obj)
+
+        if total > 0:
+            return total
+
+        return obj.estimated_students
+
+    def get_segment(self, obj):
+        population = self.get_current_population_total(obj)
+
+        if population is None:
+            return "OUT"
+        if population >= 500:
+            return "A"
+        if population >= 250:
+            return "B"
+        if population >= 101:
+            return "C"
+
+        return "OUT"
 
 
 class SchoolDetailSerializer(SchoolListSerializer):
     contacts = SchoolContactSerializer(many=True, read_only=True)
+    educational_services = SchoolEducationalServiceSerializer(
+        many=True,
+        read_only=True,
+    )
+    editorial_usages = SchoolEditorialUsageSerializer(
+        many=True,
+        read_only=True,
+    )
+    commercial_profile = serializers.SerializerMethodField()
 
     class Meta(SchoolListSerializer.Meta):
         fields = SchoolListSerializer.Meta.fields + (
-            "address", "reference", "notes", "contacts", "created_at",
+            "address",
+            "reference",
+            "notes",
+            "contacts",
+            "educational_services",
+            "editorial_usages",
+            "commercial_profile",
+            "created_at",
         )
+
+    def get_commercial_profile(self, obj):
+        profile = next(iter(obj.commercial_profiles.all()), None)
+
+        if profile is None:
+            return None
+
+        return SchoolCommercialProfileSerializer(profile).data
 
 
 class SchoolWriteSerializer(serializers.ModelSerializer):
@@ -137,7 +380,7 @@ class SchoolWriteSerializer(serializers.ModelSerializer):
     class Meta:
         model = School
         fields = (
-            "name", "modular_code", "ruc", "phone", "whatsapp", "email", "address",
+            "institution_code", "name", "modular_code", "ruc", "phone", "whatsapp", "email", "address",
             "reference", "department", "province", "district", "estimated_students",
             "levels", "team", "owner", "notes", "is_active",
         )
