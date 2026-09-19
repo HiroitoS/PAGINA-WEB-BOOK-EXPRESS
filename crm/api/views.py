@@ -151,9 +151,23 @@ class SchoolViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "patch", "head", "options"]
 
     def get_queryset(self):
-        queryset = visible_schools_queryset(self.request.user).select_related("team", "owner").prefetch_related("levels")
+        queryset = (
+            visible_schools_queryset(self.request.user)
+            .select_related("team", "owner")
+            .prefetch_related(
+                "levels",
+                "educational_services__level",
+                "educational_services__population_records",
+            )
+        )
         if self.action == "retrieve":
-            queryset = queryset.prefetch_related("contacts")
+            queryset = queryset.prefetch_related(
+                "contacts",
+                "editorial_usages__provider",
+                "editorial_usages__area",
+                "editorial_usages__service__level",
+                "commercial_profiles__campaign",
+            )
         search = self.request.query_params.get("search", "").strip()
         team = self.request.query_params.get("team")
         owner = self.request.query_params.get("owner")
@@ -163,7 +177,11 @@ class SchoolViewSet(viewsets.ModelViewSet):
         is_active = self.request.query_params.get("is_active")
         if search:
             queryset = queryset.filter(
-                Q(name__icontains=search) | Q(modular_code__icontains=search) | Q(ruc__icontains=search)
+                Q(name__icontains=search)
+                | Q(institution_code__icontains=search)
+                | Q(modular_code__icontains=search)
+                | Q(educational_services__modular_code__icontains=search)
+                | Q(ruc__icontains=search)
                 | Q(phone__icontains=search) | Q(whatsapp__icontains=search) | Q(email__icontains=search)
                 | Q(owner__username__icontains=search) | Q(owner__first_name__icontains=search)
                 | Q(owner__last_name__icontains=search)
@@ -182,7 +200,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(is_active=True)
         elif is_active == "false":
             queryset = queryset.filter(is_active=False)
-        return queryset.order_by("name", "id")
+        return queryset.distinct().order_by("name", "id")
 
     def get_serializer_class(self):
         if self.action == "list":
