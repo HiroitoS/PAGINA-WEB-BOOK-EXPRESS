@@ -303,6 +303,21 @@ class SchoolCommercialProfile(TimeStampedModel):
             ),
         ]
 
+    @staticmethod
+    def segment_for_population(population_total):
+        if population_total >= 500:
+            return SchoolCommercialProfile.Segment.A
+        if population_total >= 250:
+            return SchoolCommercialProfile.Segment.B
+        if population_total >= 101:
+            return SchoolCommercialProfile.Segment.C
+
+        return SchoolCommercialProfile.Segment.OUT
+
+    def save(self, *args, **kwargs):
+        self.segment = self.segment_for_population(self.population_total)
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return (
             f"{self.school.name} - "
