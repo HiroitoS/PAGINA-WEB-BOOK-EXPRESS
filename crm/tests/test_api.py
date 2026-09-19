@@ -8,6 +8,7 @@ from django.utils import timezone
 
 from rest_framework.test import APIClient
 
+from catalog.models import Level
 from crm.models import (
     Campaign,
     CommercialTeam,
@@ -17,6 +18,8 @@ from crm.models import (
     Pipeline,
     PipelineStage,
     School,
+    SchoolEducationalService,
+    SchoolPopulationRecord,
 )
 
 
@@ -131,6 +134,44 @@ class CRMApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 201)
         self.assertTrue(CRMWorkItemLink.objects.filter(opportunity=self.opportunity, task_id=response.data["id"]).exists())
+
+    def test_school_detail_exposes_services_population_and_segment(self):
+        level = Level.objects.create(
+            name="Primaria CRM API",
+            is_active=True,
+        )
+        service = SchoolEducationalService.objects.create(
+            school=self.school,
+            level=level,
+            modular_code="1234567",
+            modality="Educación Básica Regular",
+            created_by=self.admin,
+        )
+        SchoolPopulationRecord.objects.create(
+            service=service,
+            year=2026,
+            student_count=520,
+            source="manual",
+            is_current=True,
+            recorded_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+        response = self.client.get(
+            reverse("crm:school-detail", args=[self.school.id])
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["current_population_total"], 520)
+        self.assertEqual(response.data["segment"], "A")
+        self.assertEqual(
+            response.data["educational_services"][0]["modular_code"],
+            "1234567",
+        )
+        self.assertEqual(
+            response.data["educational_services"][0]["level"]["name"],
+            "Primaria CRM API",
+        )
 
     def test_school_delete_is_not_exposed(self):
         self.authenticate(self.admin)
