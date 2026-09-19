@@ -15,29 +15,6 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.CreateModel(
-            name='SchoolCampus',
-            fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='Fecha de creación')),
-                ('updated_at', models.DateTimeField(auto_now=True, verbose_name='Fecha de actualización')),
-                ('name', models.CharField(default='Sede principal', max_length=150, verbose_name='Nombre de la sede')),
-                ('address', models.CharField(blank=True, max_length=250, verbose_name='Dirección')),
-                ('reference', models.CharField(blank=True, max_length=250, verbose_name='Referencia')),
-                ('department', models.CharField(blank=True, db_index=True, max_length=100, verbose_name='Departamento')),
-                ('province', models.CharField(blank=True, db_index=True, max_length=100, verbose_name='Provincia')),
-                ('district', models.CharField(blank=True, db_index=True, max_length=100, verbose_name='Distrito')),
-                ('latitude', models.DecimalField(blank=True, decimal_places=6, max_digits=9, null=True, verbose_name='Latitud')),
-                ('longitude', models.DecimalField(blank=True, decimal_places=6, max_digits=9, null=True, verbose_name='Longitud')),
-                ('is_main', models.BooleanField(default=False, verbose_name='Sede principal')),
-                ('is_active', models.BooleanField(default=True, verbose_name='Activo')),
-            ],
-            options={
-                'verbose_name': 'Sede de colegio',
-                'verbose_name_plural': 'Sedes de colegios',
-                'ordering': ['school__name', '-is_main', 'name'],
-            },
-        ),
-        migrations.CreateModel(
             name='SchoolCommercialProfile',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
@@ -89,7 +66,7 @@ class Migration(migrations.Migration):
             options={
                 'verbose_name': 'Servicio educativo',
                 'verbose_name_plural': 'Servicios educativos',
-                'ordering': ['campus__school__name', 'level__name'],
+                'ordering': ['school__name', 'level__name'],
             },
         ),
         migrations.CreateModel(
@@ -118,16 +95,6 @@ class Migration(migrations.Migration):
         migrations.AddConstraint(
             model_name='school',
             constraint=models.UniqueConstraint(condition=models.Q(('institution_code__isnull', False)), fields=('institution_code',), name='crm_school_unique_institution_code'),
-        ),
-        migrations.AddField(
-            model_name='schoolcampus',
-            name='created_by',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='created_crm_school_campuses', to=settings.AUTH_USER_MODEL, verbose_name='Creado por'),
-        ),
-        migrations.AddField(
-            model_name='schoolcampus',
-            name='school',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='campuses', to='crm.school', verbose_name='Colegio'),
         ),
         migrations.AddField(
             model_name='schoolcommercialprofile',
@@ -161,8 +128,8 @@ class Migration(migrations.Migration):
         ),
         migrations.AddField(
             model_name='schooleducationalservice',
-            name='campus',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='educational_services', to='crm.schoolcampus', verbose_name='Sede'),
+            name='school',
+            field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='educational_services', to='crm.school', verbose_name='Colegio'),
         ),
         migrations.AddField(
             model_name='schooleducationalservice',
@@ -190,14 +157,6 @@ class Migration(migrations.Migration):
             field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='population_records', to='crm.schooleducationalservice', verbose_name='Servicio educativo'),
         ),
         migrations.AddIndex(
-            model_name='schoolcampus',
-            index=models.Index(fields=['school', 'is_active'], name='crm_campus_school_active_idx'),
-        ),
-        migrations.AddIndex(
-            model_name='schoolcampus',
-            index=models.Index(fields=['department', 'province', 'district'], name='crm_campus_location_idx'),
-        ),
-        migrations.AddIndex(
             model_name='schoolcommercialprofile',
             index=models.Index(fields=['campaign', 'segment'], name='crm_profile_segment_idx'),
         ),
@@ -211,7 +170,7 @@ class Migration(migrations.Migration):
         ),
         migrations.AddIndex(
             model_name='schooleducationalservice',
-            index=models.Index(fields=['campus', 'is_active'], name='crm_service_campus_active_idx'),
+            index=models.Index(fields=['school', 'is_active'], name='crm_service_school_active_idx'),
         ),
         migrations.AddIndex(
             model_name='schooleducationalservice',
