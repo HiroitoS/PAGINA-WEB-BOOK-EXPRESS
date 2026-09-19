@@ -11,12 +11,13 @@ class School(TimeStampedModel):
     """
     Institución educativa entendida como cliente/prospecto comercial.
 
-    Un School puede tener una o más sedes físicas y cada sede puede
-    contener uno o varios servicios educativos (Inicial, Primaria,
-    Secundaria, etc.).
+    Cada School representa una institución educativa dentro del CRM.
+    Sus niveles o servicios educativos dependen directamente del colegio,
+    sin una capa intermedia de sedes.
 
     Los campos modular_code, estimated_students y levels se mantienen
-    temporalmente por compatibilidad con la primera versión del CRM.
+    temporalmente por compatibilidad mientras el frontend y las
+    importaciones terminan de migrar al nuevo modelo.
     """
 
     institution_code = models.CharField(
@@ -62,9 +63,6 @@ class School(TimeStampedModel):
         verbose_name="Correo",
     )
 
-    # LEGACY / ubicación principal provisional.
-    # Posteriormente la ubicación física será responsabilidad
-    # principalmente de SchoolCampus.
     address = models.CharField(
         max_length=250,
         blank=True,
@@ -179,117 +177,19 @@ class School(TimeStampedModel):
         return self.name
 
 
-class SchoolCampus(TimeStampedModel):
+class SchoolEducationalService(TimeStampedModel):
     """
-    Sede física de una institución educativa.
+    Servicio o nivel educativo ofrecido directamente por el colegio.
 
-    Una institución puede tener una o varias sedes.
+    Aquí vive el código modular porque identifica el servicio educativo
+    correspondiente, no necesariamente a toda la institución.
     """
 
     school = models.ForeignKey(
         School,
         on_delete=models.CASCADE,
-        related_name="campuses",
-        verbose_name="Colegio",
-    )
-    name = models.CharField(
-        max_length=150,
-        default="Sede principal",
-        verbose_name="Nombre de la sede",
-    )
-    address = models.CharField(
-        max_length=250,
-        blank=True,
-        verbose_name="Dirección",
-    )
-    reference = models.CharField(
-        max_length=250,
-        blank=True,
-        verbose_name="Referencia",
-    )
-    department = models.CharField(
-        max_length=100,
-        blank=True,
-        db_index=True,
-        verbose_name="Departamento",
-    )
-    province = models.CharField(
-        max_length=100,
-        blank=True,
-        db_index=True,
-        verbose_name="Provincia",
-    )
-    district = models.CharField(
-        max_length=100,
-        blank=True,
-        db_index=True,
-        verbose_name="Distrito",
-    )
-
-    latitude = models.DecimalField(
-        max_digits=9,
-        decimal_places=6,
-        null=True,
-        blank=True,
-        verbose_name="Latitud",
-    )
-    longitude = models.DecimalField(
-        max_digits=9,
-        decimal_places=6,
-        null=True,
-        blank=True,
-        verbose_name="Longitud",
-    )
-
-    is_main = models.BooleanField(
-        default=False,
-        verbose_name="Sede principal",
-    )
-    is_active = models.BooleanField(
-        default=True,
-        verbose_name="Activo",
-    )
-    created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="created_crm_school_campuses",
-        verbose_name="Creado por",
-    )
-
-    class Meta:
-        verbose_name = "Sede de colegio"
-        verbose_name_plural = "Sedes de colegios"
-        ordering = ["school__name", "-is_main", "name"]
-        indexes = [
-            models.Index(
-                fields=["school", "is_active"],
-                name="crm_campus_school_active_idx",
-            ),
-            models.Index(
-                fields=["department", "province", "district"],
-                name="crm_campus_location_idx",
-            ),
-        ]
-
-    def __str__(self):
-        return f"{self.school.name} - {self.name}"
-
-
-class SchoolEducationalService(TimeStampedModel):
-    """
-    Servicio educativo existente dentro de una sede.
-
-    Aquí vive el código modular porque este identifica el servicio/nivel,
-    no a toda la institución.
-    """
-
-    campus = models.ForeignKey(
-        SchoolCampus,
-        on_delete=models.CASCADE,
         related_name="educational_services",
-        verbose_name="Sede",
+        verbose_name="Colegio",
     )
     level = models.ForeignKey(
         "catalog.Level",
@@ -325,11 +225,11 @@ class SchoolEducationalService(TimeStampedModel):
     class Meta:
         verbose_name = "Servicio educativo"
         verbose_name_plural = "Servicios educativos"
-        ordering = ["campus__school__name", "level__name"]
+        ordering = ["school__name", "level__name"]
         indexes = [
             models.Index(
-                fields=["campus", "is_active"],
-                name="crm_service_campus_active_idx",
+                fields=["school", "is_active"],
+                name="crm_service_school_active_idx",
             ),
             models.Index(
                 fields=["level", "is_active"],
@@ -352,7 +252,7 @@ class SchoolEducationalService(TimeStampedModel):
 
     def __str__(self):
         return (
-            f"{self.campus.school.name} - "
+            f"{self.school.name} - "
             f"{self.level.name}"
         )
 
