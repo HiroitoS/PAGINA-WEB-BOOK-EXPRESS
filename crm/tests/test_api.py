@@ -177,3 +177,74 @@ class CRMApiTests(TestCase):
         self.authenticate(self.admin)
         response = self.client.delete(reverse("crm:school-detail", args=[self.school.id]))
         self.assertEqual(response.status_code, 405)
+
+    def test_advisor_can_create_school_educational_service(self):
+        level = Level.objects.create(
+            name="Primaria servicio CRM",
+            is_active=True,
+        )
+
+        self.authenticate(self.advisor)
+
+        response = self.client.post(
+            reverse(
+                "crm:school-educational-services",
+                args=[self.school.id],
+            ),
+            {
+                "level": level.id,
+                "modular_code": "7654321",
+                "is_active": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+
+        service = SchoolEducationalService.objects.get(
+            school=self.school,
+            level=level,
+        )
+
+        self.assertEqual(service.modular_code, "7654321")
+        self.assertEqual(
+            response.data["level"]["name"],
+            "Primaria servicio CRM",
+        )
+
+    def test_school_cannot_repeat_educational_level(self):
+        level = Level.objects.create(
+            name="Secundaria servicio CRM",
+            is_active=True,
+        )
+
+        SchoolEducationalService.objects.create(
+            school=self.school,
+            level=level,
+            modular_code="1111111",
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+
+        response = self.client.post(
+            reverse(
+                "crm:school-educational-services",
+                args=[self.school.id],
+            ),
+            {
+                "level": level.id,
+                "modular_code": "2222222",
+                "is_active": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            SchoolEducationalService.objects.filter(
+                school=self.school,
+                level=level,
+            ).count(),
+            1,
+        )

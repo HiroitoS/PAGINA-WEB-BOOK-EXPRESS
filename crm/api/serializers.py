@@ -161,6 +161,65 @@ class SchoolEducationalServiceSerializer(serializers.ModelSerializer):
 
         return SchoolPopulationRecordSerializer(record).data
 
+class SchoolEducationalServiceWriteSerializer(serializers.ModelSerializer):
+    level = serializers.PrimaryKeyRelatedField(
+        queryset=Level.objects.filter(is_active=True),
+    )
+
+    class Meta:
+        model = SchoolEducationalService
+        fields = (
+            "level",
+            "modular_code",
+            "modality",
+            "is_active",
+        )
+
+    def validate_modular_code(self, value):
+        modular_code = (value or "").strip()
+
+        if not modular_code:
+            return None
+
+        queryset = SchoolEducationalService.objects.filter(
+            modular_code=modular_code,
+        )
+
+        if self.instance is not None:
+            queryset = queryset.exclude(pk=self.instance.pk)
+
+        if queryset.exists():
+            raise serializers.ValidationError(
+                "Este código modular ya está registrado."
+            )
+
+        return modular_code
+
+    def validate(self, attrs):
+        school = self.context.get("school")
+        level = attrs.get("level")
+
+        if school is not None and level is not None:
+            queryset = SchoolEducationalService.objects.filter(
+                school=school,
+                level=level,
+            )
+
+            if self.instance is not None:
+                queryset = queryset.exclude(pk=self.instance.pk)
+
+            if queryset.exists():
+                raise serializers.ValidationError(
+                    {
+                        "level": (
+                            "Este nivel educativo ya está registrado "
+                            "en el colegio."
+                        )
+                    }
+                )
+
+        return attrs
+
 
 class SchoolEditorialUsageSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(

@@ -57,6 +57,8 @@ from .serializers import (
     PipelineSerializer,
     SchoolContactSerializer,
     SchoolDetailSerializer,
+    SchoolEducationalServiceSerializer,
+    SchoolEducationalServiceWriteSerializer,
     SchoolListSerializer,
     SchoolWriteSerializer,
     WorkItemLinkSerializer,
@@ -256,20 +258,95 @@ class SchoolViewSet(viewsets.ModelViewSet):
             school.levels.set(levels)
         return Response(SchoolDetailSerializer(school).data)
 
-    @action(detail=True, methods=["get", "post"], url_path="contacts")
+    @action(
+        detail=True,
+        methods=["get", "post"],
+        url_path="educational-services",
+        url_name="educational-services",
+    )
+    def educational_services(self, request, pk=None):
+        school = self.get_object()
+
+        if request.method == "GET":
+            services = (
+                school.educational_services
+                .select_related("level")
+                .prefetch_related("population_records")
+                .order_by("level__name", "id")
+            )
+
+            return Response(
+                SchoolEducationalServiceSerializer(
+                    services,
+                    many=True,
+                ).data
+            )
+
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para registrar niveles educativos."
+            )
+
+        serializer = SchoolEducationalServiceWriteSerializer(
+            data=request.data,
+            context={"school": school},
+        )
+        serializer.is_valid(raise_exception=True)
+
+        service = serializer.save(
+            school=school,
+            created_by=request.user,
+        )
+
+        return Response(
+            SchoolEducationalServiceSerializer(service).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["get", "post"],
+        url_path="contacts",
+    )
     def contacts(self, request, pk=None):
         school = self.get_object()
+
         if request.method == "GET":
-            contacts = visible_school_contacts_queryset(request.user).filter(school=school).order_by("-is_primary", "full_name")
-            return Response(SchoolContactSerializer(contacts, many=True).data)
+            contacts = (
+                visible_school_contacts_queryset(request.user)
+                .filter(school=school)
+                .order_by("-is_primary", "full_name")
+            )
+
+            return Response(
+                SchoolContactSerializer(
+                    contacts,
+                    many=True,
+                ).data
+            )
+
         if not usuario_puede_gestionar_colegios(request.user):
-            raise PermissionDenied("No tienes permiso para registrar contactos.")
+            raise PermissionDenied(
+                "No tienes permiso para registrar contactos."
+            )
+
         serializer = SchoolContactSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
         if serializer.validated_data.get("is_primary"):
-            school.contacts.filter(is_primary=True).update(is_primary=False)
-        contact = serializer.save(school=school, created_by=request.user)
-        return Response(SchoolContactSerializer(contact).data, status=status.HTTP_201_CREATED)
+            school.contacts.filter(
+                is_primary=True
+            ).update(is_primary=False)
+
+        contact = serializer.save(
+            school=school,
+            created_by=request.user,
+        )
+
+        return Response(
+            SchoolContactSerializer(contact).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class OpportunityViewSet(viewsets.ModelViewSet):

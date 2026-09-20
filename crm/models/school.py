@@ -238,6 +238,10 @@ class SchoolEducationalService(TimeStampedModel):
         ]
         constraints = [
             models.UniqueConstraint(
+                fields=["school", "level"],
+                name="crm_service_unique_school_level",
+            ),
+            models.UniqueConstraint(
                 fields=["modular_code"],
                 condition=Q(modular_code__isnull=False),
                 name="crm_service_unique_modular_code",
