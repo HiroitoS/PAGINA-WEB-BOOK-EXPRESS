@@ -72,11 +72,13 @@ class SchoolPopulationRecord(TimeStampedModel):
                 name="crm_population_current_idx",
             ),
         ]
-        models.UniqueConstraint(
-            fields=["service"],
-            condition=Q(is_current=True),
-            name="crm_population_one_current",
-        ),
+        constraints = [
+            models.UniqueConstraint(
+                fields=["service"],
+                condition=Q(is_current=True),
+                name="crm_population_one_current",
+            ),
+        ]
 
     def __str__(self):
         return (
