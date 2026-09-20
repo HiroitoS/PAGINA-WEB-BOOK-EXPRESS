@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.db.models import Count, Q
 from django.utils import timezone
 
@@ -60,6 +61,8 @@ from .serializers import (
     SchoolEducationalServiceSerializer,
     SchoolEducationalServiceWriteSerializer,
     SchoolListSerializer,
+    SchoolPopulationRecordSerializer,
+    SchoolPopulationRecordWriteSerializer,
     SchoolWriteSerializer,
     WorkItemLinkSerializer,
 )
@@ -300,6 +303,80 @@ class SchoolViewSet(viewsets.ModelViewSet):
 
         return Response(
             SchoolEducationalServiceSerializer(service).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["get", "post"],
+        url_path=r"educational-services/(?P<service_id>[^/.]+)/population",
+        url_name="educational-service-population",
+    )
+    def educational_service_population(
+        self,
+        request,
+        pk=None,
+        service_id=None,
+    ):
+        school = self.get_object()
+
+        service = (
+            school.educational_services
+            .select_related("level")
+            .filter(pk=service_id)
+            .first()
+        )
+
+        if service is None:
+            return Response(
+                {
+                    "detail": (
+                        "El nivel educativo no pertenece "
+                        "a este colegio."
+                    )
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if request.method == "GET":
+            records = service.population_records.order_by(
+                "-is_current",
+                "-year",
+                "-created_at",
+            )
+
+            return Response(
+                SchoolPopulationRecordSerializer(
+                    records,
+                    many=True,
+                ).data
+            )
+
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para registrar población."
+            )
+
+        serializer = SchoolPopulationRecordWriteSerializer(
+            data=request.data,
+        )
+        serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            service.population_records.filter(
+                is_current=True,
+            ).update(
+                is_current=False,
+            )
+
+            population = serializer.save(
+                service=service,
+                is_current=True,
+                recorded_by=request.user,
+            )
+
+        return Response(
+            SchoolPopulationRecordSerializer(population).data,
             status=status.HTTP_201_CREATED,
         )
 

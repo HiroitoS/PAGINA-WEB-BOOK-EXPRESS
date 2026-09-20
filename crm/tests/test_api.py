@@ -248,3 +248,101 @@ class CRMApiTests(TestCase):
             ).count(),
             1,
         )
+
+    def test_advisor_can_register_school_population(self):
+        level = Level.objects.create(
+            name="Primaria población CRM",
+            is_active=True,
+        )
+
+        service = SchoolEducationalService.objects.create(
+            school=self.school,
+            level=level,
+            modular_code="3333333",
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+
+        response = self.client.post(
+            reverse(
+                "crm:school-educational-service-population",
+                args=[self.school.id, service.id],
+            ),
+            {
+                "year": 2026,
+                "student_count": 320,
+                "source": "advisor",
+                "source_detail": "Dato informado por el colegio",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+
+        population = SchoolPopulationRecord.objects.get(
+            service=service,
+        )
+
+        self.assertEqual(population.student_count, 320)
+        self.assertTrue(population.is_current)
+        self.assertEqual(population.recorded_by, self.advisor)
+
+    def test_new_population_replaces_current_population(self):
+        level = Level.objects.create(
+            name="Secundaria población CRM",
+            is_active=True,
+        )
+
+        service = SchoolEducationalService.objects.create(
+            school=self.school,
+            level=level,
+            modular_code="4444444",
+            created_by=self.admin,
+        )
+
+        previous = SchoolPopulationRecord.objects.create(
+            service=service,
+            year=2025,
+            student_count=280,
+            source="manual",
+            is_current=True,
+            recorded_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+
+        response = self.client.post(
+            reverse(
+                "crm:school-educational-service-population",
+                args=[self.school.id, service.id],
+            ),
+            {
+                "year": 2026,
+                "student_count": 310,
+                "source": "advisor",
+                "source_detail": "Actualización de población",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+
+        previous.refresh_from_db()
+
+        self.assertFalse(previous.is_current)
+
+        current = SchoolPopulationRecord.objects.get(
+            service=service,
+            is_current=True,
+        )
+
+        self.assertEqual(current.year, 2026)
+        self.assertEqual(current.student_count, 310)
+
+        self.assertEqual(
+            SchoolPopulationRecord.objects.filter(
+                service=service,
+            ).count(),
+            2,
+        )

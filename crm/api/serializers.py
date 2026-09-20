@@ -130,6 +130,16 @@ class SchoolPopulationRecordSerializer(serializers.ModelSerializer):
             "updated_at",
         )
 
+class SchoolPopulationRecordWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SchoolPopulationRecord
+        fields = (
+            "year",
+            "student_count",
+            "source",
+            "source_detail",
+        )
+
 
 class SchoolEducationalServiceSerializer(serializers.ModelSerializer):
     level = LevelSummarySerializer(read_only=True)
