@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from rest_framework.test import APIClient
 
-from catalog.models import Level
+from catalog.models import Area, Level, Provider
 from crm.models import (
     Campaign,
     CommercialTeam,
@@ -509,3 +509,139 @@ class CRMApiTests(TestCase):
 
         self.assertFalse(contact.is_active)
         self.assertFalse(contact.is_primary)
+
+
+
+    def test_advisor_can_register_school_editorial_usage(self):
+        level = Level.objects.create(
+            name="Primaria editorial CRM",
+            is_active=True,
+        )
+        area = Area.objects.create(
+            name="Matemática editorial CRM",
+            is_active=True,
+        )
+        provider = Provider.objects.create(
+            name="Editorial CRM",
+            is_active=True,
+        )
+
+        service = SchoolEducationalService.objects.create(
+            school=self.school,
+            level=level,
+            modular_code="7777777",
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+
+        response = self.client.post(
+            reverse(
+                "crm:school-editorial-usages",
+                args=[self.school.id],
+            ),
+            {
+                "year": 2026,
+                "service": service.id,
+                "area": area.id,
+                "provider": provider.id,
+                "status": "current",
+                "source": "advisor",
+                "notes": "Información confirmada.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+
+        usage = self.school.editorial_usages.get()
+
+        self.assertEqual(usage.provider, provider)
+        self.assertEqual(usage.area, area)
+        self.assertEqual(usage.service, service)
+        self.assertEqual(usage.recorded_by, self.advisor)
+
+
+
+    def test_school_editorial_usage_rejects_service_from_other_school(self):
+        level = Level.objects.create(
+            name="Secundaria editorial CRM",
+            is_active=True,
+        )
+        provider = Provider.objects.create(
+            name="Editorial externa CRM",
+            is_active=True,
+        )
+
+        service = SchoolEducationalService.objects.create(
+            school=self.other_school,
+            level=level,
+            modular_code="8888888",
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+
+        response = self.client.post(
+            reverse(
+                "crm:school-editorial-usages",
+                args=[self.school.id],
+            ),
+            {
+                "year": 2026,
+                "service": service.id,
+                "provider": provider.id,
+                "status": "reported",
+                "source": "advisor",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+
+
+
+    def test_advisor_can_update_school_editorial_usage(self):
+        provider = Provider.objects.create(
+            name="Editorial actualización CRM",
+            is_active=True,
+        )
+
+        usage = self.school.editorial_usages.create(
+            year=2026,
+            provider=provider,
+            status="reported",
+            source="manual",
+            recorded_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+
+        response = self.client.patch(
+            reverse(
+                "crm:school-editorial-usage-detail",
+                args=[
+                    self.school.id,
+                    usage.id,
+                ],
+            ),
+            {
+                "status": "current",
+                "notes": "Información confirmada.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        usage.refresh_from_db()
+
+        self.assertEqual(
+            usage.status,
+            "current",
+        )
+        self.assertEqual(
+            usage.notes,
+            "Información confirmada.",
+        )

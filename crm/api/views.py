@@ -65,6 +65,8 @@ from .serializers import (
     SchoolPopulationRecordWriteSerializer,
     SchoolWriteSerializer,
     WorkItemLinkSerializer,
+    SchoolEditorialUsageSerializer,
+    SchoolEditorialUsageWriteSerializer,
 )
 
 
@@ -522,6 +524,115 @@ class SchoolViewSet(viewsets.ModelViewSet):
             SchoolContactSerializer(contact).data
         )
 
+    @action(
+        detail=True,
+        methods=["get", "post"],
+        url_path="editorial-usages",
+        url_name="editorial-usages",
+    )
+    def editorial_usages(self, request, pk=None):
+        school = self.get_object()
+
+        if request.method == "GET":
+            usages = (
+                school.editorial_usages
+                .select_related(
+                    "provider",
+                    "area",
+                    "service__level",
+                )
+                .order_by(
+                    "-year",
+                    "provider__name",
+                    "area__name",
+                )
+            )
+
+            return Response(
+                SchoolEditorialUsageSerializer(
+                    usages,
+                    many=True,
+                ).data
+            )
+
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para registrar editoriales."
+            )
+
+        serializer = SchoolEditorialUsageWriteSerializer(
+            data=request.data,
+            context={"school": school},
+        )
+        serializer.is_valid(raise_exception=True)
+
+        usage = serializer.save(
+            school=school,
+            recorded_by=request.user,
+        )
+
+        return Response(
+            SchoolEditorialUsageSerializer(usage).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["patch"],
+        url_path=r"editorial-usages/(?P<usage_id>[^/.]+)",
+        url_name="editorial-usage-detail",
+    )
+    def editorial_usage_detail(
+        self,
+        request,
+        pk=None,
+        usage_id=None,
+    ):
+        school = self.get_object()
+
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para modificar editoriales."
+            )
+
+        usage = (
+            school.editorial_usages
+            .select_related(
+                "provider",
+                "area",
+                "service__level",
+            )
+            .filter(pk=usage_id)
+            .first()
+        )
+
+        if usage is None:
+            return Response(
+                {
+                    "detail": (
+                        "La información editorial "
+                        "no pertenece a este colegio."
+                    )
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = SchoolEditorialUsageWriteSerializer(
+            usage,
+            data=request.data,
+            partial=True,
+            context={"school": school},
+        )
+        serializer.is_valid(raise_exception=True)
+
+        usage = serializer.save(
+            recorded_by=request.user,
+        )
+
+        return Response(
+            SchoolEditorialUsageSerializer(usage).data
+        )
+    
 class OpportunityViewSet(viewsets.ModelViewSet):
     permission_classes = [EsUsuarioCRM]
     pagination_class = CRMPageNumberPagination

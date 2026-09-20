@@ -1,7 +1,7 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
-from catalog.models import Level
+from catalog.models import Area, Level, Provider
 from crm.models import (
     Campaign,
     CommercialActivity,
@@ -287,6 +287,82 @@ class SchoolEditorialUsageSerializer(serializers.ModelSerializer):
             "name": obj.provider.name,
         }
 
+class SchoolEditorialUsageWriteSerializer(serializers.ModelSerializer):
+    service = serializers.PrimaryKeyRelatedField(
+        queryset=SchoolEducationalService.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    area = serializers.PrimaryKeyRelatedField(
+        queryset=Area.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
+    provider = serializers.PrimaryKeyRelatedField(
+        queryset=Provider.objects.filter(is_active=True),
+    )
+
+    class Meta:
+        model = SchoolEditorialUsage
+        fields = (
+            "year",
+            "service",
+            "area",
+            "provider",
+            "status",
+            "source",
+            "observed_on",
+            "notes",
+        )
+
+    def validate(self, attrs):
+        school = self.context.get("school")
+
+        service = attrs.get(
+            "service",
+            getattr(self.instance, "service", None),
+        )
+
+        if service is not None and service.school_id != school.id:
+            raise serializers.ValidationError(
+                {
+                    "service": (
+                        "El nivel educativo seleccionado "
+                        "no pertenece a este colegio."
+                    )
+                }
+            )
+
+        year = attrs.get(
+            "year",
+            getattr(self.instance, "year", None),
+        )
+        area = attrs.get(
+            "area",
+            getattr(self.instance, "area", None),
+        )
+        provider = attrs.get(
+            "provider",
+            getattr(self.instance, "provider", None),
+        )
+
+        queryset = SchoolEditorialUsage.objects.filter(
+            school=school,
+            year=year,
+            service=service,
+            area=area,
+            provider=provider,
+        )
+
+        if self.instance is not None:
+            queryset = queryset.exclude(pk=self.instance.pk)
+
+        if queryset.exists():
+            raise serializers.ValidationError(
+                "Esta información editorial ya está registrada."
+            )
+
+        return attrs
 
 class SchoolCommercialProfileSerializer(serializers.ModelSerializer):
     campaign = CampaignSerializer(read_only=True)
