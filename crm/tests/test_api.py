@@ -645,3 +645,43 @@ class CRMApiTests(TestCase):
             usage.notes,
             "Información confirmada.",
         )
+
+    def test_advisor_can_update_school_educational_service(self):
+        level = Level.objects.create(
+            name="Primaria edición CRM",
+            is_active=True,
+        )
+
+        service = SchoolEducationalService.objects.create(
+            school=self.school,
+            level=level,
+            modular_code="9990001",
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+
+        response = self.client.patch(
+            reverse(
+                "crm:school-educational-service-detail",
+                args=[
+                    self.school.id,
+                    service.id,
+                ],
+            ),
+            {
+                "modular_code": "9990002",
+                "is_active": False,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        service.refresh_from_db()
+
+        self.assertEqual(
+            service.modular_code,
+            "9990002",
+        )
+        self.assertFalse(service.is_active)

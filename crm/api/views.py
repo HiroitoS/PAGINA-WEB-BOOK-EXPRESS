@@ -310,6 +310,57 @@ class SchoolViewSet(viewsets.ModelViewSet):
 
     @action(
         detail=True,
+        methods=["patch"],
+        url_path=r"educational-services/(?P<service_id>[^/.]+)",
+        url_name="educational-service-detail",
+    )
+    def educational_service_detail(
+        self,
+        request,
+        pk=None,
+        service_id=None,
+    ):
+        school = self.get_object()
+
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para modificar niveles educativos."
+            )
+
+        service = (
+            school.educational_services
+            .select_related("level")
+            .filter(pk=service_id)
+            .first()
+        )
+
+        if service is None:
+            return Response(
+                {
+                    "detail": (
+                        "El nivel educativo no pertenece "
+                        "a este colegio."
+                    )
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = SchoolEducationalServiceWriteSerializer(
+            service,
+            data=request.data,
+            partial=True,
+            context={"school": school},
+        )
+        serializer.is_valid(raise_exception=True)
+
+        service = serializer.save()
+
+        return Response(
+            SchoolEducationalServiceSerializer(service).data
+        )
+
+    @action(
+        detail=True,
         methods=["get", "post"],
         url_path=r"educational-services/(?P<service_id>[^/.]+)/population",
         url_name="educational-service-population",
