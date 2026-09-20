@@ -392,7 +392,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
             contacts = (
                 visible_school_contacts_queryset(request.user)
                 .filter(school=school)
-                .order_by("-is_primary", "full_name")
+                .order_by("-is_primary", "-is_active", "full_name")
             )
 
             return Response(
@@ -407,24 +407,120 @@ class SchoolViewSet(viewsets.ModelViewSet):
                 "No tienes permiso para registrar contactos."
             )
 
-        serializer = SchoolContactSerializer(data=request.data)
+        serializer = SchoolContactSerializer(
+            data=request.data,
+        )
         serializer.is_valid(raise_exception=True)
 
-        if serializer.validated_data.get("is_primary"):
-            school.contacts.filter(
-                is_primary=True
-            ).update(is_primary=False)
-
-        contact = serializer.save(
-            school=school,
-            created_by=request.user,
+        is_active = serializer.validated_data.get(
+            "is_active",
+            True,
         )
+        is_primary = (
+            serializer.validated_data.get(
+                "is_primary",
+                False,
+            )
+            if is_active
+            else False
+        )
+
+        with transaction.atomic():
+            if is_primary:
+                school.contacts.filter(
+                    is_primary=True,
+                ).update(
+                    is_primary=False,
+                )
+
+            contact = serializer.save(
+                school=school,
+                created_by=request.user,
+                is_primary=is_primary,
+            )
 
         return Response(
             SchoolContactSerializer(contact).data,
             status=status.HTTP_201_CREATED,
         )
 
+    @action(
+        detail=True,
+        methods=["patch"],
+        url_path=r"contacts/(?P<contact_id>[^/.]+)",
+        url_name="contact-detail",
+    )
+    def contact_detail(
+        self,
+        request,
+        pk=None,
+        contact_id=None,
+    ):
+        school = self.get_object()
+
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para modificar contactos."
+            )
+
+        contact = (
+            visible_school_contacts_queryset(request.user)
+            .filter(
+                school=school,
+                pk=contact_id,
+            )
+            .first()
+        )
+
+        if contact is None:
+            return Response(
+                {
+                    "detail": (
+                        "El contacto no pertenece "
+                        "a este colegio."
+                    )
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = SchoolContactSerializer(
+            contact,
+            data=request.data,
+            partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+
+        is_active = serializer.validated_data.get(
+            "is_active",
+            contact.is_active,
+        )
+
+        is_primary = (
+            serializer.validated_data.get(
+                "is_primary",
+                contact.is_primary,
+            )
+            if is_active
+            else False
+        )
+
+        with transaction.atomic():
+            if is_primary:
+                school.contacts.exclude(
+                    pk=contact.pk,
+                ).filter(
+                    is_primary=True,
+                ).update(
+                    is_primary=False,
+                )
+
+            contact = serializer.save(
+                is_primary=is_primary,
+            )
+
+        return Response(
+            SchoolContactSerializer(contact).data
+        )
 
 class OpportunityViewSet(viewsets.ModelViewSet):
     permission_classes = [EsUsuarioCRM]

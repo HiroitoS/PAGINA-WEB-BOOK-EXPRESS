@@ -407,3 +407,105 @@ class CRMApiTests(TestCase):
             response.data["segment"],
             "A",
         )
+
+    def test_advisor_can_create_primary_school_contact(self):
+        self.authenticate(self.advisor)
+
+        response = self.client.post(
+            reverse(
+                "crm:school-contacts",
+                args=[self.school.id],
+            ),
+            {
+                "full_name": "Director de prueba",
+                "position": "Director",
+                "phone": "999111222",
+                "is_primary": True,
+                "is_active": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+
+        contact = self.school.contacts.get(
+            full_name="Director de prueba",
+        )
+
+        self.assertTrue(contact.is_primary)
+        self.assertTrue(contact.is_active)
+        self.assertEqual(
+            contact.created_by,
+            self.advisor,
+        )
+
+
+    def test_new_primary_contact_replaces_previous_primary(self):
+        previous = self.school.contacts.create(
+            full_name="Director anterior",
+            position="Director",
+            is_primary=True,
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+
+        response = self.client.post(
+            reverse(
+                "crm:school-contacts",
+                args=[self.school.id],
+            ),
+            {
+                "full_name": "Nueva directora",
+                "position": "Directora",
+                "is_primary": True,
+                "is_active": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+
+        previous.refresh_from_db()
+
+        self.assertFalse(previous.is_primary)
+
+        new_contact = self.school.contacts.get(
+            full_name="Nueva directora",
+        )
+
+        self.assertTrue(new_contact.is_primary)
+
+
+
+    def test_advisor_can_deactivate_primary_school_contact(self):
+        contact = self.school.contacts.create(
+            full_name="Contacto temporal",
+            position="Coordinador",
+            is_primary=True,
+            is_active=True,
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+
+        response = self.client.patch(
+            reverse(
+                "crm:school-contact-detail",
+                args=[
+                    self.school.id,
+                    contact.id,
+                ],
+            ),
+            {
+                "is_active": False,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        contact.refresh_from_db()
+
+        self.assertFalse(contact.is_active)
+        self.assertFalse(contact.is_primary)
