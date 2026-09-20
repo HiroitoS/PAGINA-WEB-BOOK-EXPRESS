@@ -346,3 +346,64 @@ class CRMApiTests(TestCase):
             ).count(),
             2,
         )
+
+    def test_school_population_total_sums_current_levels(self):
+        primary = Level.objects.create(
+            name="Primaria total CRM",
+            is_active=True,
+        )
+        secondary = Level.objects.create(
+            name="Secundaria total CRM",
+            is_active=True,
+        )
+
+        primary_service = SchoolEducationalService.objects.create(
+            school=self.school,
+            level=primary,
+            modular_code="5555555",
+            created_by=self.admin,
+        )
+
+        secondary_service = SchoolEducationalService.objects.create(
+            school=self.school,
+            level=secondary,
+            modular_code="6666666",
+            created_by=self.admin,
+        )
+
+        SchoolPopulationRecord.objects.create(
+            service=primary_service,
+            year=2026,
+            student_count=300,
+            source="manual",
+            is_current=True,
+            recorded_by=self.admin,
+        )
+
+        SchoolPopulationRecord.objects.create(
+            service=secondary_service,
+            year=2026,
+            student_count=220,
+            source="manual",
+            is_current=True,
+            recorded_by=self.admin,
+        )
+
+        self.authenticate(self.admin)
+
+        response = self.client.get(
+            reverse(
+                "crm:school-detail",
+                args=[self.school.id],
+            )
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data["current_population_total"],
+            520,
+        )
+        self.assertEqual(
+            response.data["segment"],
+            "A",
+        )
