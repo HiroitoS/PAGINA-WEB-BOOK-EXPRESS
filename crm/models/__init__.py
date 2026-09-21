@@ -9,6 +9,7 @@ from .school import (
 )
 from .school_intelligence import (
     InformationSource,
+    MarketEditorial,
     SchoolCommercialProfile,
     SchoolEditorialUsage,
     SchoolPopulationRecord,
@@ -34,4 +35,5 @@ __all__ = [
     "OpportunityStageHistory",
     "CommercialActivity",
     "CRMWorkItemLink",
+    "MarketEditorial",
 ]

@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
+from django.utils.text import slugify
 
 from core.models import TimeStampedModel
 
@@ -15,6 +16,73 @@ class InformationSource(models.TextChoices):
     MANAGEMENT = "management", "Jefatura comercial"
     MANUAL = "manual", "Registro manual"
     OTHER = "other", "Otro"
+
+class MarketEditorial(TimeStampedModel):
+    """
+    Maestro CRM de editoriales identificadas en el mercado.
+
+    Puede representar:
+    - una editorial que Book Express comercializa;
+    - una editorial externa o competidora;
+    - una editorial detectada por un asesor y pendiente de validación.
+
+    No convierte automáticamente una editorial externa en proveedor
+    ni hace que aparezca en el catálogo público.
+    """
+
+    class VerificationStatus(models.TextChoices):
+        PENDING = "pending", "Pendiente de validación"
+        VERIFIED = "verified", "Validada"
+
+    name = models.CharField(
+        max_length=180,
+        verbose_name="Editorial",
+    )
+    normalized_name = models.CharField(
+        max_length=220,
+        unique=True,
+        editable=False,
+        verbose_name="Nombre normalizado",
+    )
+    catalog_provider = models.OneToOneField(
+        "catalog.Provider",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="crm_market_editorial",
+        verbose_name="Editorial vinculada al catálogo",
+    )
+    verification_status = models.CharField(
+        max_length=20,
+        choices=VerificationStatus.choices,
+        default=VerificationStatus.PENDING,
+        verbose_name="Estado de validación",
+    )
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name="Activa",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_crm_market_editorials",
+        verbose_name="Registrada por",
+    )
+
+    class Meta:
+        verbose_name = "Editorial del mercado"
+        verbose_name_plural = "Editoriales del mercado"
+        ordering = ["name"]
+
+    def save(self, *args, **kwargs):
+        self.name = " ".join((self.name or "").split())
+        self.normalized_name = slugify(self.name) or self.name.casefold()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.name
 
 
 class SchoolPopulationRecord(TimeStampedModel):
@@ -126,6 +194,14 @@ class SchoolEditorialUsage(TimeStampedModel):
         related_name="crm_school_editorial_usages",
         verbose_name="Área",
     )
+    editorial = models.ForeignKey(
+    MarketEditorial,
+    on_delete=models.PROTECT,
+    null=True,
+    blank=True,
+    related_name="school_usages",
+    verbose_name="Editorial",
+)
     provider = models.ForeignKey(
         "catalog.Provider",
         on_delete=models.PROTECT,
