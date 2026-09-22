@@ -20,6 +20,7 @@ from crm.models import (
     School,
     SchoolEducationalService,
     SchoolPopulationRecord,
+    MarketEditorial,
 )
 
 
@@ -525,6 +526,14 @@ class CRMApiTests(TestCase):
             name="Editorial CRM",
             is_active=True,
         )
+        editorial = MarketEditorial.objects.create(
+            name="Editorial CRM",
+            catalog_provider=provider,
+            verification_status=(
+                MarketEditorial.VerificationStatus.VERIFIED
+            ),
+            created_by=self.admin,
+        )
 
         service = SchoolEducationalService.objects.create(
             school=self.school,
@@ -544,7 +553,7 @@ class CRMApiTests(TestCase):
                 "year": 2026,
                 "service": service.id,
                 "area": area.id,
-                "provider": provider.id,
+                "editorial": editorial.id,
                 "status": "current",
                 "source": "advisor",
                 "notes": "Información confirmada.",
@@ -552,25 +561,132 @@ class CRMApiTests(TestCase):
             format="json",
         )
 
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            response.status_code,
+            201,
+        )
 
         usage = self.school.editorial_usages.get()
 
-        self.assertEqual(usage.provider, provider)
-        self.assertEqual(usage.area, area)
-        self.assertEqual(usage.service, service)
-        self.assertEqual(usage.recorded_by, self.advisor)
+        self.assertEqual(
+            usage.editorial,
+            editorial,
+        )
+        self.assertEqual(
+            usage.provider,
+            provider,
+        )
+        self.assertEqual(
+            usage.area,
+            area,
+        )
+        self.assertEqual(
+            usage.service,
+            service,
+        )
+        self.assertEqual(
+            usage.recorded_by,
+            self.advisor,
+        )
 
+    def test_advisor_can_register_external_market_editorial(self):
+        self.authenticate(self.advisor)
 
+        response = self.client.post(
+            reverse(
+                "crm:market-editorial-list",
+            ),
+            {
+                "name": "Editorial Centauro",
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            201,
+        )
+
+        editorial = MarketEditorial.objects.get(
+            name="Editorial Centauro",
+        )
+
+        self.assertIsNone(
+            editorial.catalog_provider,
+        )
+        self.assertEqual(
+            editorial.verification_status,
+            MarketEditorial.VerificationStatus.PENDING,
+        )
+        self.assertEqual(
+            editorial.created_by,
+            self.advisor,
+        )
+
+    def test_advisor_can_register_external_editorial_usage(self):
+        editorial = MarketEditorial.objects.create(
+            name="Editorial Lobito",
+            created_by=self.admin,
+        )
+
+        level = Level.objects.create(
+            name="Primaria editorial externa CRM",
+            is_active=True,
+        )
+
+        area = Area.objects.create(
+            name="Comunicación editorial externa CRM",
+            is_active=True,
+        )
+
+        service = SchoolEducationalService.objects.create(
+            school=self.school,
+            level=level,
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+
+        response = self.client.post(
+            reverse(
+                "crm:school-editorial-usages",
+                args=[self.school.id],
+            ),
+            {
+                "year": 2026,
+                "service": service.id,
+                "area": area.id,
+                "editorial": editorial.id,
+                "status": "reported",
+                "source": "advisor",
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            201,
+        )
+
+        usage = self.school.editorial_usages.get()
+
+        self.assertEqual(
+            usage.editorial,
+            editorial,
+        )
+        self.assertIsNone(
+            usage.provider,
+        )
 
     def test_school_editorial_usage_rejects_service_from_other_school(self):
         level = Level.objects.create(
             name="Secundaria editorial CRM",
             is_active=True,
         )
-        provider = Provider.objects.create(
+
+        editorial = MarketEditorial.objects.create(
             name="Editorial externa CRM",
-            is_active=True,
+            created_by=self.admin,
         )
 
         service = SchoolEducationalService.objects.create(
@@ -590,15 +706,17 @@ class CRMApiTests(TestCase):
             {
                 "year": 2026,
                 "service": service.id,
-                "provider": provider.id,
+                "editorial": editorial.id,
                 "status": "reported",
                 "source": "advisor",
             },
             format="json",
         )
 
-        self.assertEqual(response.status_code, 400)
-
+        self.assertEqual(
+            response.status_code,
+            400,
+        )
 
 
 
@@ -608,8 +726,18 @@ class CRMApiTests(TestCase):
             is_active=True,
         )
 
+        editorial = MarketEditorial.objects.create(
+            name="Editorial actualización CRM",
+            catalog_provider=provider,
+            verification_status=(
+                MarketEditorial.VerificationStatus.VERIFIED
+            ),
+            created_by=self.admin,
+        )
+
         usage = self.school.editorial_usages.create(
             year=2026,
+            editorial=editorial,
             provider=provider,
             status="reported",
             source="manual",
@@ -633,7 +761,10 @@ class CRMApiTests(TestCase):
             format="json",
         )
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
 
         usage.refresh_from_db()
 
@@ -644,6 +775,14 @@ class CRMApiTests(TestCase):
         self.assertEqual(
             usage.notes,
             "Información confirmada.",
+        )
+        self.assertEqual(
+            usage.editorial,
+            editorial,
+        )
+        self.assertEqual(
+            usage.provider,
+            provider,
         )
 
     def test_advisor_can_update_school_educational_service(self):

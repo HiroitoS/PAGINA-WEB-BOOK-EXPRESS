@@ -195,18 +195,20 @@ class SchoolEditorialUsage(TimeStampedModel):
         verbose_name="Área",
     )
     editorial = models.ForeignKey(
-    MarketEditorial,
-    on_delete=models.PROTECT,
-    null=True,
-    blank=True,
-    related_name="school_usages",
-    verbose_name="Editorial",
-)
+        MarketEditorial,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="school_usages",
+        verbose_name="Editorial",
+    )
     provider = models.ForeignKey(
         "catalog.Provider",
         on_delete=models.PROTECT,
+        null=True,
+        blank=True,
         related_name="crm_school_usages",
-        verbose_name="Editorial",
+        verbose_name="Editorial del catálogo",
     )
     status = models.CharField(
         max_length=20,
@@ -245,7 +247,7 @@ class SchoolEditorialUsage(TimeStampedModel):
             "school__name",
             "-year",
             "area__name",
-            "provider__name",
+            "editorial__name",
         ]
         indexes = [
             models.Index(
@@ -262,14 +264,25 @@ class SchoolEditorialUsage(TimeStampedModel):
             ),
         ]
 
-    def __str__(self):
-        area = self.area.name if self.area else "Área no especificada"
+        def __str__(self):
+            area_name = (
+                self.area.name
+                if self.area
+                else "Área no especificada"
+            )
 
-        return (
-            f"{self.school.name} - "
-            f"{self.provider.name} - "
-            f"{area} - {self.year}"
-        )
+            if self.editorial:
+                editorial_name = self.editorial.name
+            elif self.provider:
+                editorial_name = self.provider.name
+            else:
+                editorial_name = "Editorial no especificada"
+
+            return (
+                f"{self.school.name} - "
+                f"{editorial_name} - "
+                f"{area_name} - {self.year}"
+            )
 
 
 class SchoolCommercialProfile(TimeStampedModel):

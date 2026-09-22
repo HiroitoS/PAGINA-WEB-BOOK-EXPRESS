@@ -9,7 +9,15 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.permissions import usuario_es_administrador
-from crm.models import CommercialTeam, CommercialTeamMembership, Pipeline, PipelineStage, School
+from crm.models import (
+    Campaign,
+    CommercialTeam,
+    CommercialTeamMembership,
+    MarketEditorial,
+    Pipeline,
+    PipelineStage,
+    School,
+)
 from crm.permissions import (
     EsUsuarioCRM,
     usuario_puede_asignar_colegios,
@@ -37,7 +45,6 @@ from crm.services import (
     reopen_opportunity,
     transition_opportunity_stage,
 )
-from crm.models import Campaign
 
 from .pagination import CRMPageNumberPagination
 from .serializers import (
@@ -67,6 +74,8 @@ from .serializers import (
     WorkItemLinkSerializer,
     SchoolEditorialUsageSerializer,
     SchoolEditorialUsageWriteSerializer,
+    MarketEditorialCreateSerializer,
+    MarketEditorialSerializer,
 )
 
 
@@ -152,6 +161,67 @@ class CommercialTeamViewSet(viewsets.ReadOnlyModelViewSet):
         return queryset.filter(memberships__user=user, memberships__is_active=True).distinct().order_by("name")
 
 
+class MarketEditorialViewSet(viewsets.ModelViewSet):
+    permission_classes = [EsUsuarioCRM]
+    pagination_class = None
+    http_method_names = [
+        "get",
+        "post",
+        "head",
+        "options",
+    ]
+
+    def get_queryset(self):
+        queryset = (
+            MarketEditorial.objects
+            .filter(is_active=True)
+            .select_related("catalog_provider")
+        )
+
+        search = self.request.query_params.get(
+            "search",
+            "",
+        ).strip()
+
+        if search:
+            queryset = queryset.filter(
+                name__icontains=search,
+            )
+
+        return queryset.order_by("name", "id")
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return MarketEditorialCreateSerializer
+
+        return MarketEditorialSerializer
+
+    def create(self, request, *args, **kwargs):
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para registrar editoriales."
+            )
+
+        serializer = self.get_serializer(
+            data=request.data,
+        )
+        serializer.is_valid(
+            raise_exception=True,
+        )
+
+        editorial = serializer.save(
+            created_by=request.user,
+            verification_status=(
+                MarketEditorial.VerificationStatus.PENDING
+            ),
+            is_active=True,
+        )
+
+        return Response(
+            MarketEditorialSerializer(editorial).data,
+            status=status.HTTP_201_CREATED,
+        )
+
 class SchoolViewSet(viewsets.ModelViewSet):
     permission_classes = [EsUsuarioCRM]
     pagination_class = CRMPageNumberPagination
@@ -170,6 +240,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
         if self.action == "retrieve":
             queryset = queryset.prefetch_related(
                 "contacts",
+                "editorial_usages__editorial",
                 "editorial_usages__provider",
                 "editorial_usages__area",
                 "editorial_usages__service__level",
@@ -588,13 +659,15 @@ class SchoolViewSet(viewsets.ModelViewSet):
             usages = (
                 school.editorial_usages
                 .select_related(
+                    "editorial",
+                    "editorial__catalog_provider",
                     "provider",
                     "area",
                     "service__level",
                 )
                 .order_by(
                     "-year",
-                    "provider__name",
+                    "editorial__name",
                     "area__name",
                 )
             )
@@ -649,6 +722,8 @@ class SchoolViewSet(viewsets.ModelViewSet):
         usage = (
             school.editorial_usages
             .select_related(
+                "editorial",
+                "editorial__catalog_provider",
                 "provider",
                 "area",
                 "service__level",

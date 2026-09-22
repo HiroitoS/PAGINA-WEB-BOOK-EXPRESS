@@ -1,7 +1,9 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
-from catalog.models import Area, Level, Provider
+from django.utils.text import slugify
+
+from catalog.models import Area, Level
 from crm.models import (
     Campaign,
     CommercialActivity,
@@ -18,6 +20,7 @@ from crm.models import (
     SchoolEditorialUsage,
     SchoolEducationalService,
     SchoolPopulationRecord,
+    MarketEditorial,
 )
 from workspaces.models import CalendarEvent, Task, WorkspaceGroup
 
@@ -231,6 +234,58 @@ class SchoolEducationalServiceWriteSerializer(serializers.ModelSerializer):
         return attrs
 
 
+class MarketEditorialSerializer(serializers.ModelSerializer):
+    verification_status_display = serializers.CharField(
+        source="get_verification_status_display",
+        read_only=True,
+    )
+    catalog_provider = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MarketEditorial
+        fields = (
+            "id",
+            "name",
+            "catalog_provider",
+            "verification_status",
+            "verification_status_display",
+            "is_active",
+        )
+
+    def get_catalog_provider(self, obj):
+        if obj.catalog_provider_id is None:
+            return None
+
+        return {
+            "id": obj.catalog_provider_id,
+            "name": obj.catalog_provider.name,
+        }
+
+
+class MarketEditorialCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MarketEditorial
+        fields = ("name",)
+
+    def validate_name(self, value):
+        name = " ".join((value or "").split())
+
+        if not name:
+            raise serializers.ValidationError(
+                "Ingresa el nombre de la editorial."
+            )
+
+        normalized_name = slugify(name) or name.casefold()
+
+        if MarketEditorial.objects.filter(
+            normalized_name=normalized_name,
+        ).exists():
+            raise serializers.ValidationError(
+                "Esta editorial ya está registrada."
+            )
+
+        return name
+
 class SchoolEditorialUsageSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(
         source="get_status_display",
@@ -242,6 +297,7 @@ class SchoolEditorialUsageSerializer(serializers.ModelSerializer):
     )
     service = serializers.SerializerMethodField()
     area = serializers.SerializerMethodField()
+    editorial = serializers.SerializerMethodField()
     provider = serializers.SerializerMethodField()
 
     class Meta:
@@ -251,6 +307,7 @@ class SchoolEditorialUsageSerializer(serializers.ModelSerializer):
             "year",
             "service",
             "area",
+            "editorial",
             "provider",
             "status",
             "status_display",
@@ -281,11 +338,31 @@ class SchoolEditorialUsageSerializer(serializers.ModelSerializer):
             "name": obj.area.name,
         }
 
+    def get_editorial(self, obj):
+        if obj.editorial_id is None:
+            return None
+
+        return {
+            "id": obj.editorial_id,
+            "name": obj.editorial.name,
+            "verification_status": obj.editorial.verification_status,
+            "verification_status_display": (
+                obj.editorial.get_verification_status_display()
+            ),
+            "is_catalog_editorial": (
+                obj.editorial.catalog_provider_id is not None
+            ),
+        }
+
     def get_provider(self, obj):
+        if obj.provider_id is None:
+            return None
+
         return {
             "id": obj.provider_id,
             "name": obj.provider.name,
         }
+
 
 class SchoolEditorialUsageWriteSerializer(serializers.ModelSerializer):
     service = serializers.PrimaryKeyRelatedField(
@@ -298,8 +375,8 @@ class SchoolEditorialUsageWriteSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True,
     )
-    provider = serializers.PrimaryKeyRelatedField(
-        queryset=Provider.objects.filter(is_active=True),
+    editorial = serializers.PrimaryKeyRelatedField(
+        queryset=MarketEditorial.objects.filter(is_active=True),
     )
 
     class Meta:
@@ -308,7 +385,7 @@ class SchoolEditorialUsageWriteSerializer(serializers.ModelSerializer):
             "year",
             "service",
             "area",
-            "provider",
+            "editorial",
             "status",
             "source",
             "observed_on",
@@ -341,17 +418,28 @@ class SchoolEditorialUsageWriteSerializer(serializers.ModelSerializer):
             "area",
             getattr(self.instance, "area", None),
         )
-        provider = attrs.get(
-            "provider",
-            getattr(self.instance, "provider", None),
+        editorial = attrs.get(
+            "editorial",
+            getattr(self.instance, "editorial", None),
         )
+
+        if editorial is None:
+            raise serializers.ValidationError(
+                {
+                    "editorial": (
+                        "Selecciona una editorial."
+                    )
+                }
+            )
+
+        attrs["provider"] = editorial.catalog_provider
 
         queryset = SchoolEditorialUsage.objects.filter(
             school=school,
             year=year,
             service=service,
             area=area,
-            provider=provider,
+            editorial=editorial,
         )
 
         if self.instance is not None:
