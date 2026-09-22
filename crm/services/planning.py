@@ -429,6 +429,29 @@ def create_school_event(
     return event
 
 
+def _validate_related_item_belongs_to_school(
+    *,
+    school,
+    task=None,
+    event=None,
+):
+    if task and not CRMWorkItemLink.objects.filter(
+        school=school,
+        task=task,
+    ).exists():
+        raise CRMPlanningError(
+            "La tarea seleccionada no pertenece a este colegio."
+        )
+
+    if event and not CRMWorkItemLink.objects.filter(
+        school=school,
+        event=event,
+    ).exists():
+        raise CRMPlanningError(
+            "El evento seleccionado no pertenece a este colegio."
+        )
+
+
 @transaction.atomic
 def create_school_reminder(
     *,
@@ -456,6 +479,12 @@ def create_school_reminder(
     _validate_school_commercial_scope(
         school=locked_school,
         assigned_user=assignee,
+    )
+
+    _validate_related_item_belongs_to_school(
+        school=locked_school,
+        task=task,
+        event=event,
     )
 
     try:
