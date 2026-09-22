@@ -416,10 +416,12 @@ class SchoolEditorialUsageWriteSerializer(serializers.ModelSerializer):
             "year",
             getattr(self.instance, "year", None),
         )
+
         area = attrs.get(
             "area",
             getattr(self.instance, "area", None),
         )
+
         editorial = attrs.get(
             "editorial",
             getattr(self.instance, "editorial", None),
@@ -428,12 +430,21 @@ class SchoolEditorialUsageWriteSerializer(serializers.ModelSerializer):
         if editorial is None:
             raise serializers.ValidationError(
                 {
-                    "editorial": (
-                        "Selecciona una editorial."
-                    )
+                    "editorial": "Selecciona una editorial."
                 }
             )
 
+        product_name = " ".join(
+            (
+                attrs.get(
+                    "product_name",
+                    getattr(self.instance, "product_name", ""),
+                )
+                or ""
+            ).split()
+        )
+
+        attrs["product_name"] = product_name
         attrs["provider"] = editorial.catalog_provider
 
         queryset = SchoolEditorialUsage.objects.filter(
@@ -444,14 +455,6 @@ class SchoolEditorialUsageWriteSerializer(serializers.ModelSerializer):
             editorial=editorial,
             product_name__iexact=product_name,
         )
-        product_name = " ".join(
-            attrs.get(
-                "product_name",
-                getattr(self.instance, "product_name", ""),
-            ).split()
-        )
-
-        attrs["product_name"] = product_name
 
         if self.instance is not None:
             queryset = queryset.exclude(pk=self.instance.pk)
