@@ -104,11 +104,28 @@ class CommercialTeamDetailSerializer(serializers.ModelSerializer):
 
 
 class SchoolContactSerializer(serializers.ModelSerializer):
+    decision_role_display = serializers.CharField(
+        source="get_decision_role_display",
+        read_only=True,
+    )
+
     class Meta:
         model = SchoolContact
         fields = (
-            "id", "full_name", "position", "phone", "whatsapp", "email",
-            "is_primary", "is_active", "notes", "created_at", "updated_at",
+            "id",
+            "full_name",
+            "position",
+            "decision_role",
+            "decision_role_display",
+            "relationship_level",
+            "phone",
+            "whatsapp",
+            "email",
+            "is_primary",
+            "is_active",
+            "notes",
+            "created_at",
+            "updated_at",
         )
         read_only_fields = ("id", "created_at", "updated_at")
 
