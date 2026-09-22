@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import Q
 
@@ -262,6 +263,11 @@ class SchoolEducationalService(TimeStampedModel):
 
 
 class SchoolContact(TimeStampedModel):
+    class DecisionRole(models.TextChoices):
+        DECISION_MAKER = "decision_maker", "Decisor"
+        INFLUENCER = "influencer", "Influenciador"
+        OTHER = "other", "Otro"
+
     school = models.ForeignKey(
         School,
         on_delete=models.CASCADE,
@@ -276,6 +282,22 @@ class SchoolContact(TimeStampedModel):
         max_length=120,
         blank=True,
         verbose_name="Cargo / función",
+    )
+    decision_role = models.CharField(
+        max_length=30,
+        choices=DecisionRole.choices,
+        blank=True,
+        default="",
+        verbose_name="Rol en la decisión",
+    )
+    relationship_level = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        validators=[
+            MinValueValidator(1),
+            MaxValueValidator(5),
+        ],
+        verbose_name="Nivel de relacionamiento",
     )
     phone = models.CharField(
         max_length=30,
