@@ -785,6 +785,70 @@ class OpportunityReminderCreateSerializer(serializers.Serializer):
     event = serializers.PrimaryKeyRelatedField(queryset=CalendarEvent.objects.all(), required=False, allow_null=True)
 
 
+class SchoolCommercialActivityCreateSerializer(
+    CommercialActivityCreateSerializer
+):
+    opportunity = serializers.PrimaryKeyRelatedField(
+        queryset=Opportunity.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+
+
+class SchoolTaskCreateSerializer(OpportunityTaskCreateSerializer):
+    contact = serializers.PrimaryKeyRelatedField(
+        queryset=SchoolContact.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
+    opportunity = serializers.PrimaryKeyRelatedField(
+        queryset=Opportunity.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    origin_activity = serializers.PrimaryKeyRelatedField(
+        queryset=CommercialActivity.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+
+
+class SchoolEventCreateSerializer(OpportunityEventCreateSerializer):
+    contact = serializers.PrimaryKeyRelatedField(
+        queryset=SchoolContact.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
+    opportunity = serializers.PrimaryKeyRelatedField(
+        queryset=Opportunity.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    origin_activity = serializers.PrimaryKeyRelatedField(
+        queryset=CommercialActivity.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+
+
+class SchoolReminderCreateSerializer(OpportunityReminderCreateSerializer):
+    contact = serializers.PrimaryKeyRelatedField(
+        queryset=SchoolContact.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
+    opportunity = serializers.PrimaryKeyRelatedField(
+        queryset=Opportunity.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    origin_activity = serializers.PrimaryKeyRelatedField(
+        queryset=CommercialActivity.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+
+
 class WorkItemLinkSerializer(serializers.ModelSerializer):
     type = serializers.CharField(source="work_item_type", read_only=True)
     item = serializers.SerializerMethodField()
