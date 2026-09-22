@@ -32,6 +32,7 @@ from crm.selectors import (
     visible_school_contacts_queryset,
     visible_schools_queryset,
     work_items_for_opportunity,
+    work_items_for_school,
 )
 from crm.services import (
     CRMPlanningError,
@@ -41,6 +42,9 @@ from crm.services import (
     create_opportunity_event,
     create_opportunity_reminder,
     create_opportunity_task,
+    create_school_event,
+    create_school_reminder,
+    create_school_task,
     record_commercial_activity,
     reopen_opportunity,
     transition_opportunity_stage,
@@ -63,13 +67,17 @@ from .serializers import (
     OpportunityTaskCreateSerializer,
     OpportunityUpdateSerializer,
     PipelineSerializer,
+    SchoolCommercialActivityCreateSerializer,
     SchoolContactSerializer,
     SchoolDetailSerializer,
     SchoolEducationalServiceSerializer,
     SchoolEducationalServiceWriteSerializer,
+    SchoolEventCreateSerializer,
     SchoolListSerializer,
     SchoolPopulationRecordSerializer,
     SchoolPopulationRecordWriteSerializer,
+    SchoolReminderCreateSerializer,
+    SchoolTaskCreateSerializer,
     SchoolWriteSerializer,
     WorkItemLinkSerializer,
     SchoolEditorialUsageSerializer,
@@ -644,6 +652,303 @@ class SchoolViewSet(viewsets.ModelViewSet):
 
         return Response(
             SchoolContactSerializer(contact).data
+        )
+
+    @action(
+        detail=True,
+        methods=["get", "post"],
+        url_path="activities",
+        url_name="activities",
+    )
+    def school_activities(self, request, pk=None):
+        school = self.get_object()
+
+        if request.method == "GET":
+            queryset = (
+                visible_commercial_activities_queryset(request.user)
+                .filter(school=school)
+                .select_related(
+                    "contact",
+                    "opportunity",
+                    "performed_by",
+                    "created_by",
+                )
+                .order_by("-occurred_at", "-id")
+            )
+
+            page = self.paginate_queryset(queryset)
+
+            if page is not None:
+                return self.get_paginated_response(
+                    CommercialActivitySerializer(
+                        page,
+                        many=True,
+                    ).data
+                )
+
+            return Response(
+                CommercialActivitySerializer(
+                    queryset,
+                    many=True,
+                ).data
+            )
+
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para registrar actividad comercial."
+            )
+
+        serializer = SchoolCommercialActivityCreateSerializer(
+            data=request.data,
+        )
+        serializer.is_valid(raise_exception=True)
+
+        data = dict(serializer.validated_data)
+        opportunity = data.pop("opportunity", None)
+
+        if (
+            opportunity is not None
+            and not visible_opportunities_queryset(request.user)
+            .filter(
+                pk=opportunity.pk,
+                school=school,
+            )
+            .exists()
+        ):
+            raise serializers.ValidationError(
+                {
+                    "opportunity": (
+                        "La oportunidad no pertenece al colegio "
+                        "o no está dentro de tu alcance comercial."
+                    )
+                }
+            )
+
+        try:
+            activity = record_commercial_activity(
+                school=school,
+                opportunity=opportunity,
+                performed_by=request.user,
+                created_by=request.user,
+                **data,
+            )
+        except CommercialActivityError as exc:
+            _raise_service_validation_error(exc)
+
+        return Response(
+            CommercialActivitySerializer(activity).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="work-items",
+        url_name="work-items",
+    )
+    def school_work_items(self, request, pk=None):
+        school = self.get_object()
+        queryset = work_items_for_school(school)
+
+        page = self.paginate_queryset(queryset)
+
+        if page is not None:
+            return self.get_paginated_response(
+                WorkItemLinkSerializer(
+                    page,
+                    many=True,
+                ).data
+            )
+
+        return Response(
+            WorkItemLinkSerializer(
+                queryset,
+                many=True,
+            ).data
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="tasks",
+        url_name="create-task",
+    )
+    def create_school_task(self, request, pk=None):
+        school = self.get_object()
+
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para programar tareas comerciales."
+            )
+
+        serializer = SchoolTaskCreateSerializer(
+            data=request.data,
+        )
+        serializer.is_valid(raise_exception=True)
+
+        data = dict(serializer.validated_data)
+        opportunity = data.get("opportunity")
+
+        if (
+            opportunity is not None
+            and not visible_opportunities_queryset(request.user)
+            .filter(
+                pk=opportunity.pk,
+                school=school,
+            )
+            .exists()
+        ):
+            raise serializers.ValidationError(
+                {
+                    "opportunity": (
+                        "La oportunidad no pertenece al colegio "
+                        "o no está dentro de tu alcance comercial."
+                    )
+                }
+            )
+
+        try:
+            task = create_school_task(
+                school=school,
+                actor=request.user,
+                **data,
+            )
+        except CRMPlanningError as exc:
+            _raise_service_validation_error(exc)
+
+        return Response(
+            {
+                "id": task.id,
+                "title": task.title,
+                "status": task.status,
+                "priority": task.priority,
+                "assigned_to_id": task.assigned_to_id,
+                "due_at": task.due_at,
+                "reminder_at": task.reminder_at,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="events",
+        url_name="create-event",
+    )
+    def create_school_event(self, request, pk=None):
+        school = self.get_object()
+
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para programar eventos comerciales."
+            )
+
+        serializer = SchoolEventCreateSerializer(
+            data=request.data,
+        )
+        serializer.is_valid(raise_exception=True)
+
+        data = dict(serializer.validated_data)
+        opportunity = data.get("opportunity")
+
+        if (
+            opportunity is not None
+            and not visible_opportunities_queryset(request.user)
+            .filter(
+                pk=opportunity.pk,
+                school=school,
+            )
+            .exists()
+        ):
+            raise serializers.ValidationError(
+                {
+                    "opportunity": (
+                        "La oportunidad no pertenece al colegio "
+                        "o no está dentro de tu alcance comercial."
+                    )
+                }
+            )
+
+        try:
+            event = create_school_event(
+                school=school,
+                actor=request.user,
+                **data,
+            )
+        except CRMPlanningError as exc:
+            _raise_service_validation_error(exc)
+
+        return Response(
+            {
+                "id": event.id,
+                "title": event.title,
+                "event_type": event.event_type,
+                "assigned_to_id": event.assigned_to_id,
+                "start_at": event.start_at,
+                "end_at": event.end_at,
+                "location": event.location,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="reminders",
+        url_name="create-reminder",
+    )
+    def create_school_reminder(self, request, pk=None):
+        school = self.get_object()
+
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para programar recordatorios comerciales."
+            )
+
+        serializer = SchoolReminderCreateSerializer(
+            data=request.data,
+        )
+        serializer.is_valid(raise_exception=True)
+
+        data = dict(serializer.validated_data)
+        opportunity = data.get("opportunity")
+
+        if (
+            opportunity is not None
+            and not visible_opportunities_queryset(request.user)
+            .filter(
+                pk=opportunity.pk,
+                school=school,
+            )
+            .exists()
+        ):
+            raise serializers.ValidationError(
+                {
+                    "opportunity": (
+                        "La oportunidad no pertenece al colegio "
+                        "o no está dentro de tu alcance comercial."
+                    )
+                }
+            )
+
+        try:
+            reminder = create_school_reminder(
+                school=school,
+                actor=request.user,
+                **data,
+            )
+        except CRMPlanningError as exc:
+            _raise_service_validation_error(exc)
+
+        return Response(
+            {
+                "id": reminder.id,
+                "title": reminder.title,
+                "status": reminder.status,
+                "user_id": reminder.user_id,
+                "remind_at": reminder.remind_at,
+            },
+            status=status.HTTP_201_CREATED,
         )
 
     @action(
