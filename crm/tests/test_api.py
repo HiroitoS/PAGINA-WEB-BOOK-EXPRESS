@@ -107,6 +107,114 @@ class CRMApiTests(TestCase):
         self.opportunity.refresh_from_db()
         self.assertIsNotNone(self.opportunity.last_activity_at)
 
+    def test_advisor_can_register_activity_directly_from_school_contact(self):
+        contact = SchoolContact.objects.create(
+            school=self.school,
+            full_name="Directora contacto CRM",
+            position="Directora",
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+
+        response = self.client.post(
+            reverse(
+                "crm:school-activities",
+                args=[self.school.id],
+            ),
+            {
+                "activity_type": "visit",
+                "summary": "Visita al colegio",
+                "result": "Solicitaron propuesta académica.",
+                "contact": contact.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["school_id"], self.school.id)
+        self.assertIsNone(response.data["opportunity_id"])
+        self.assertEqual(response.data["contact"]["id"], contact.id)
+
+    def test_advisor_can_create_school_task_linked_to_contact_without_opportunity(
+        self,
+    ):
+        contact = SchoolContact.objects.create(
+            school=self.school,
+            full_name="Coordinadora seguimiento CRM",
+            position="Coordinadora",
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+
+        response = self.client.post(
+            reverse(
+                "crm:school-create-task",
+                args=[self.school.id],
+            ),
+            {
+                "title": "Llamar a coordinadora",
+                "contact": contact.id,
+                "due_at": (
+                    timezone.now() + timedelta(days=1)
+                ).isoformat(),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(
+            CRMWorkItemLink.objects.filter(
+                school=self.school,
+                contact=contact,
+                opportunity__isnull=True,
+                task_id=response.data["id"],
+            ).exists()
+        )
+
+    def test_school_work_items_expose_linked_task_context(self):
+        contact = SchoolContact.objects.create(
+            school=self.school,
+            full_name="Director agenda CRM",
+            position="Director",
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+
+        task_response = self.client.post(
+            reverse(
+                "crm:school-create-task",
+                args=[self.school.id],
+            ),
+            {
+                "title": "Preparar material para visita",
+                "contact": contact.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(task_response.status_code, 201)
+
+        response = self.client.get(
+            reverse(
+                "crm:school-work-items",
+                args=[self.school.id],
+            )
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(
+            response.data["results"][0]["contact_id"],
+            contact.id,
+        )
+        self.assertEqual(
+            response.data["results"][0]["type"],
+            "task",
+        )
+
     def test_advisor_can_move_own_opportunity_to_open_stage(self):
         self.authenticate(self.advisor)
         response = self.client.post(
