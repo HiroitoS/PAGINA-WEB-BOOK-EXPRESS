@@ -441,6 +441,42 @@ class CRMApiTests(TestCase):
         )
 
 
+    def test_advisor_can_register_contact_decision_context(self):
+        self.authenticate(self.advisor)
+
+        response = self.client.post(
+            reverse(
+                "crm:school-contacts",
+                args=[self.school.id],
+            ),
+            {
+                "full_name": "Coordinadora académica",
+                "position": "Coordinadora",
+                "decision_role": "influencer",
+                "relationship_level": 4,
+                "is_active": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["decision_role"], "influencer")
+        self.assertEqual(
+            response.data["decision_role_display"],
+            "Influenciador",
+        )
+        self.assertEqual(response.data["relationship_level"], 4)
+
+        contact = self.school.contacts.get(
+            full_name="Coordinadora académica",
+        )
+        self.assertEqual(
+            contact.decision_role,
+            SchoolContact.DecisionRole.INFLUENCER,
+        )
+        self.assertEqual(contact.relationship_level, 4)
+
+
     def test_new_primary_contact_replaces_previous_primary(self):
         previous = self.school.contacts.create(
             full_name="Director anterior",
