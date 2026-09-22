@@ -18,6 +18,7 @@ from crm.models import (
     Pipeline,
     PipelineStage,
     School,
+    SchoolContact,
     SchoolEducationalService,
     SchoolPopulationRecord,
     MarketEditorial,
