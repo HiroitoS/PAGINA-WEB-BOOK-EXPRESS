@@ -6,7 +6,7 @@ from django.utils import timezone
 from core.models import TimeStampedModel
 
 from .opportunity import Opportunity
-from .school import SchoolContact
+from .school import School, SchoolContact
 
 
 class CommercialActivity(TimeStampedModel):
@@ -22,9 +22,17 @@ class CommercialActivity(TimeStampedModel):
         FOLLOW_UP = "follow_up", "Seguimiento"
         OTHER = "other", "Otro"
 
+    school = models.ForeignKey(
+        School,
+        on_delete=models.PROTECT,
+        related_name="commercial_activities",
+        verbose_name="Colegio",
+    )
     opportunity = models.ForeignKey(
         Opportunity,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="commercial_activities",
         verbose_name="Oportunidad",
     )
@@ -79,6 +87,10 @@ class CommercialActivity(TimeStampedModel):
         ordering = ["-occurred_at", "-id"]
         indexes = [
             models.Index(
+                fields=["school", "-occurred_at"],
+                name="crm_act_school_date_idx",
+            ),
+            models.Index(
                 fields=["opportunity", "-occurred_at"],
                 name="crm_act_opp_date_idx",
             ),
@@ -93,19 +105,31 @@ class CommercialActivity(TimeStampedModel):
         ]
 
     def clean(self):
+        errors = {}
+
         if (
-            self.opportunity_id
+            self.school_id
             and self.contact_id
-            and self.contact.school_id != self.opportunity.school_id
+            and self.contact.school_id != self.school_id
         ):
-            raise ValidationError(
-                {
-                    "contact": (
-                        "El contacto seleccionado no pertenece al colegio "
-                        "de la oportunidad."
-                    )
-                }
+            errors["contact"] = (
+                "El contacto seleccionado no pertenece al colegio."
             )
 
+        if (
+            self.school_id
+            and self.opportunity_id
+            and self.opportunity.school_id != self.school_id
+        ):
+            errors["opportunity"] = (
+                "La oportunidad seleccionada no pertenece al colegio."
+            )
+
+        if errors:
+            raise ValidationError(errors)
+
     def __str__(self):
-        return f"{self.get_activity_type_display()} - {self.opportunity}"
+        return (
+            f"{self.get_activity_type_display()} - "
+            f"{self.school.name}"
+        )

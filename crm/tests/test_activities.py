@@ -16,12 +16,16 @@ from crm.models import (
     School,
     SchoolContact,
 )
-from crm.selectors import commercial_activities_for_opportunity
+from crm.selectors import (
+    commercial_activities_for_opportunity,
+    commercial_activities_for_school,
+)
 from crm.services import (
     CommercialActivityError,
     CRMWorkItemLinkError,
     create_opportunity,
     link_work_item_to_opportunity,
+    link_work_item_to_school,
     record_commercial_activity,
     transition_opportunity_stage,
 )
@@ -129,16 +133,32 @@ class CRMActivityAndWorkItemTests(TestCase):
 
         self.opportunity.refresh_from_db()
 
+        self.assertEqual(activity.school, self.school)
         self.assertEqual(activity.opportunity, self.opportunity)
         self.assertEqual(
             self.opportunity.last_activity_at,
             occurred_at,
         )
 
+    def test_activity_can_be_registered_before_opportunity(self):
+        activity = record_commercial_activity(
+            school=self.school,
+            activity_type=CommercialActivity.ActivityType.CALL,
+            summary="Primer contacto",
+            result="La directora acepta recibir información.",
+            performed_by=self.advisor,
+            created_by=self.advisor,
+            contact=self.contact,
+        )
+
+        self.assertEqual(activity.school, self.school)
+        self.assertEqual(activity.contact, self.contact)
+        self.assertIsNone(activity.opportunity)
+
     def test_activity_rejects_contact_from_another_school(self):
         with self.assertRaises(CommercialActivityError):
             record_commercial_activity(
-                opportunity=self.opportunity,
+                school=self.school,
                 activity_type=CommercialActivity.ActivityType.CALL,
                 summary="Llamada",
                 result="Se conversó con el contacto.",
@@ -167,7 +187,7 @@ class CRMActivityAndWorkItemTests(TestCase):
 
     def test_activity_selector_uses_single_query(self):
         for index in range(3):
-            CommercialActivity.objects.create(
+            record_commercial_activity(
                 opportunity=self.opportunity,
                 performed_by=self.advisor,
                 activity_type=CommercialActivity.ActivityType.FOLLOW_UP,
@@ -183,10 +203,28 @@ class CRMActivityAndWorkItemTests(TestCase):
                 )
             )
             for activity in activities:
+                _ = activity.school.name
                 _ = activity.performed_by.username
                 _ = activity.created_by.username
 
         self.assertEqual(len(activities), 3)
+
+    def test_school_activity_selector_includes_pre_opportunity_activity(self):
+        record_commercial_activity(
+            school=self.school,
+            performed_by=self.advisor,
+            activity_type=CommercialActivity.ActivityType.WHATSAPP,
+            summary="Primer WhatsApp",
+            result="Contacto inicial registrado.",
+            created_by=self.advisor,
+        )
+
+        activities = list(
+            commercial_activities_for_school(self.school)
+        )
+
+        self.assertEqual(len(activities), 1)
+        self.assertIsNone(activities[0].opportunity)
 
     def test_link_accepts_exactly_one_workspace_item(self):
         task = Task.objects.create(
@@ -228,10 +266,44 @@ class CRMActivityAndWorkItemTests(TestCase):
         )
 
         self.assertEqual(first.pk, second.pk)
+        self.assertEqual(first.school, self.school)
         self.assertEqual(
             CRMWorkItemLink.objects.filter(task=task).count(),
             1,
         )
+
+    def test_task_can_be_linked_to_school_before_opportunity(self):
+        task = Task.objects.create(
+            title="Confirmar reunión con dirección",
+            created_by=self.admin,
+            assigned_to=self.advisor,
+        )
+
+        link = link_work_item_to_school(
+            school=self.school,
+            contact=self.contact,
+            created_by=self.admin,
+            task=task,
+        )
+
+        self.assertEqual(link.school, self.school)
+        self.assertEqual(link.contact, self.contact)
+        self.assertIsNone(link.opportunity)
+
+    def test_school_task_rejects_contact_from_another_school(self):
+        task = Task.objects.create(
+            title="Tarea inválida",
+            created_by=self.admin,
+            assigned_to=self.advisor,
+        )
+
+        with self.assertRaises(CRMWorkItemLinkError):
+            link_work_item_to_school(
+                school=self.school,
+                contact=self.other_contact,
+                created_by=self.admin,
+                task=task,
+            )
 
     def test_database_rejects_more_than_one_workspace_item(self):
         task = Task.objects.create(
@@ -250,6 +322,7 @@ class CRMActivityAndWorkItemTests(TestCase):
         with self.assertRaises(IntegrityError):
             with transaction.atomic():
                 CRMWorkItemLink.objects.create(
+                    school=self.school,
                     opportunity=self.opportunity,
                     task=task,
                     reminder=reminder,

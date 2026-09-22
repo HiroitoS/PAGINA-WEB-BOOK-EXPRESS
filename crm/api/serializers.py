@@ -734,7 +734,8 @@ class CommercialActivitySerializer(serializers.ModelSerializer):
     class Meta:
         model = CommercialActivity
         fields = (
-            "id", "activity_type", "activity_type_display", "summary", "result",
+            "id", "school_id", "opportunity_id",
+            "activity_type", "activity_type_display", "summary", "result",
             "contact", "performed_by", "occurred_at", "is_important", "created_at",
         )
 
@@ -790,7 +791,16 @@ class WorkItemLinkSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CRMWorkItemLink
-        fields = ("id", "type", "item", "origin_activity_id", "created_at")
+        fields = (
+            "id",
+            "school_id",
+            "contact_id",
+            "opportunity_id",
+            "type",
+            "item",
+            "origin_activity_id",
+            "created_at",
+        )
 
     def get_item(self, obj):
         if obj.task_id:

@@ -2,7 +2,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
-from crm.models import CommercialActivity, Opportunity
+from crm.models import CommercialActivity, Opportunity, School
 
 
 class CommercialActivityError(ValidationError):
@@ -12,35 +12,56 @@ class CommercialActivityError(ValidationError):
 @transaction.atomic
 def record_commercial_activity(
     *,
-    opportunity,
     activity_type,
     summary,
     result,
     performed_by,
     created_by,
+    school=None,
+    opportunity=None,
     contact=None,
     occurred_at=None,
     is_important=False,
 ):
-    locked_opportunity = (
-        Opportunity.objects
-        .select_for_update()
-        .select_related("school", "stage")
-        .get(pk=opportunity.pk)
-    )
+    locked_opportunity = None
 
-    if locked_opportunity.is_closed:
+    if opportunity is not None:
+        locked_opportunity = (
+            Opportunity.objects
+            .select_for_update()
+            .select_related("school", "stage")
+            .get(pk=opportunity.pk)
+        )
+
+        if locked_opportunity.is_closed:
+            raise CommercialActivityError(
+                "La oportunidad está cerrada. Debe reabrirse antes de "
+                "registrar nueva actividad comercial."
+            )
+
+        resolved_school = locked_opportunity.school
+
+        if school is not None and school.pk != resolved_school.pk:
+            raise CommercialActivityError(
+                "La oportunidad no pertenece al colegio indicado."
+            )
+    elif school is not None:
+        resolved_school = (
+            School.objects
+            .select_for_update()
+            .get(pk=school.pk)
+        )
+    else:
         raise CommercialActivityError(
-            "La oportunidad está cerrada. Debe reabrirse antes de "
-            "registrar nueva actividad comercial."
+            "Debe indicar el colegio de la actividad."
         )
 
     if (
         contact is not None
-        and contact.school_id != locked_opportunity.school_id
+        and contact.school_id != resolved_school.id
     ):
         raise CommercialActivityError(
-            "El contacto no pertenece al colegio de la oportunidad."
+            "El contacto no pertenece al colegio."
         )
 
     cleaned_summary = summary.strip()
@@ -59,6 +80,7 @@ def record_commercial_activity(
     activity_date = occurred_at or timezone.now()
 
     activity = CommercialActivity(
+        school=resolved_school,
         opportunity=locked_opportunity,
         contact=contact,
         performed_by=performed_by,
@@ -72,7 +94,7 @@ def record_commercial_activity(
     activity.full_clean()
     activity.save()
 
-    if (
+    if locked_opportunity and (
         locked_opportunity.last_activity_at is None
         or activity_date > locked_opportunity.last_activity_at
     ):

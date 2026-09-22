@@ -11,7 +11,12 @@ from .planning import (
     create_opportunity_reminder,
     create_opportunity_task,
 )
-from .work_items import CRMWorkItemLinkError, link_work_item_to_opportunity
+from .work_items import (
+    CRMWorkItemLinkError,
+    link_crm_work_item,
+    link_work_item_to_opportunity,
+    link_work_item_to_school,
+)
 
 __all__ = [
     "CommercialActivityError",
@@ -25,5 +30,7 @@ __all__ = [
     "create_opportunity_event",
     "create_opportunity_reminder",
     "CRMWorkItemLinkError",
+    "link_crm_work_item",
+    "link_work_item_to_school",
     "link_work_item_to_opportunity",
 ]
