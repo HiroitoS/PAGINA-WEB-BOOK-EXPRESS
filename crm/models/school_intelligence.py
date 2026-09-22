@@ -194,6 +194,11 @@ class SchoolEditorialUsage(TimeStampedModel):
         related_name="crm_school_editorial_usages",
         verbose_name="Área",
     )
+    product_name = models.CharField(
+        max_length=250,
+        blank=True,
+        verbose_name="Producto / serie observada",
+    )
     editorial = models.ForeignKey(
         MarketEditorial,
         on_delete=models.PROTECT,

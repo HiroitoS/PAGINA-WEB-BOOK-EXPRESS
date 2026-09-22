@@ -307,6 +307,7 @@ class SchoolEditorialUsageSerializer(serializers.ModelSerializer):
             "year",
             "service",
             "area",
+            "product_name",
             "editorial",
             "provider",
             "status",
@@ -385,6 +386,7 @@ class SchoolEditorialUsageWriteSerializer(serializers.ModelSerializer):
             "year",
             "service",
             "area",
+            "product_name",
             "editorial",
             "status",
             "source",
@@ -440,7 +442,16 @@ class SchoolEditorialUsageWriteSerializer(serializers.ModelSerializer):
             service=service,
             area=area,
             editorial=editorial,
+            product_name__iexact=product_name,
         )
+        product_name = " ".join(
+            attrs.get(
+                "product_name",
+                getattr(self.instance, "product_name", ""),
+            ).split()
+        )
+
+        attrs["product_name"] = product_name
 
         if self.instance is not None:
             queryset = queryset.exclude(pk=self.instance.pk)
