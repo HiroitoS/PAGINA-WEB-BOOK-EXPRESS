@@ -10,6 +10,9 @@ from .planning import (
     create_opportunity_event,
     create_opportunity_reminder,
     create_opportunity_task,
+    create_school_event,
+    create_school_reminder,
+    create_school_task,
 )
 from .work_items import (
     CRMWorkItemLinkError,
@@ -29,6 +32,9 @@ __all__ = [
     "create_opportunity_task",
     "create_opportunity_event",
     "create_opportunity_reminder",
+    "create_school_task",
+    "create_school_event",
+    "create_school_reminder",
     "CRMWorkItemLinkError",
     "link_crm_work_item",
     "link_work_item_to_school",
