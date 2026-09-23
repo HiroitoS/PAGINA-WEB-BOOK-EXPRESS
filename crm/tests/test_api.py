@@ -658,6 +658,269 @@ class CRMApiTests(TestCase):
 
 
 
+    def test_advisor_global_contacts_only_list_own_scope(self):
+        own_contact = SchoolContact.objects.create(
+            school=self.school,
+            full_name="Contacto visible CRM",
+            position="Director",
+            created_by=self.admin,
+        )
+        SchoolContact.objects.create(
+            school=self.other_school,
+            full_name="Contacto fuera de alcance CRM",
+            position="Director",
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+
+        response = self.client.get(
+            reverse("crm:contact-list")
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(
+            response.data["results"][0]["id"],
+            own_contact.id,
+        )
+        self.assertEqual(
+            response.data["results"][0]["school"]["id"],
+            self.school.id,
+        )
+
+    def test_advisor_cannot_open_contact_outside_scope(self):
+        other_contact = SchoolContact.objects.create(
+            school=self.other_school,
+            full_name="Contacto privado CRM",
+            position="Director",
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+
+        response = self.client.get(
+            reverse(
+                "crm:contact-detail",
+                args=[other_contact.id],
+            )
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_global_contact_detail_exposes_related_school(self):
+        contact = SchoolContact.objects.create(
+            school=self.school,
+            full_name="Directora ficha contacto CRM",
+            position="Directora",
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+
+        response = self.client.get(
+            reverse(
+                "crm:contact-detail",
+                args=[contact.id],
+            )
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["id"], contact.id)
+        self.assertEqual(
+            response.data["school"]["id"],
+            self.school.id,
+        )
+        self.assertEqual(
+            response.data["school"]["name"],
+            self.school.name,
+        )
+
+    def test_global_contact_update_preserves_single_primary_contact(self):
+        previous = SchoolContact.objects.create(
+            school=self.school,
+            full_name="Director principal anterior CRM",
+            position="Director",
+            is_primary=True,
+            created_by=self.admin,
+        )
+        contact = SchoolContact.objects.create(
+            school=self.school,
+            full_name="Nueva directora principal CRM",
+            position="Directora",
+            is_primary=False,
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+
+        response = self.client.patch(
+            reverse(
+                "crm:contact-detail",
+                args=[contact.id],
+            ),
+            {
+                "is_primary": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        previous.refresh_from_db()
+        contact.refresh_from_db()
+
+        self.assertFalse(previous.is_primary)
+        self.assertTrue(contact.is_primary)
+
+    def test_global_contact_activities_only_show_selected_contact(self):
+        contact = SchoolContact.objects.create(
+            school=self.school,
+            full_name="Directora actividades CRM",
+            position="Directora",
+            created_by=self.admin,
+        )
+        other_contact = SchoolContact.objects.create(
+            school=self.school,
+            full_name="Coordinadora actividades CRM",
+            position="Coordinadora",
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+
+        first_response = self.client.post(
+            reverse(
+                "crm:school-activities",
+                args=[self.school.id],
+            ),
+            {
+                "activity_type": "visit",
+                "summary": "Visita con dirección",
+                "result": "Solicitaron propuesta.",
+                "contact": contact.id,
+            },
+            format="json",
+        )
+        second_response = self.client.post(
+            reverse(
+                "crm:school-activities",
+                args=[self.school.id],
+            ),
+            {
+                "activity_type": "call",
+                "summary": "Llamada a coordinación",
+                "result": "Pendiente nueva fecha.",
+                "contact": other_contact.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(first_response.status_code, 201)
+        self.assertEqual(second_response.status_code, 201)
+
+        response = self.client.get(
+            reverse(
+                "crm:contact-activities",
+                args=[contact.id],
+            )
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(
+            response.data["results"][0]["contact"]["id"],
+            contact.id,
+        )
+        self.assertEqual(
+            response.data["results"][0]["summary"],
+            "Visita con dirección",
+        )
+
+    def test_global_contact_work_items_only_show_selected_contact(self):
+        contact = SchoolContact.objects.create(
+            school=self.school,
+            full_name="Directora tareas CRM",
+            position="Directora",
+            created_by=self.admin,
+        )
+        other_contact = SchoolContact.objects.create(
+            school=self.school,
+            full_name="Coordinadora tareas CRM",
+            position="Coordinadora",
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+
+        first_response = self.client.post(
+            reverse(
+                "crm:school-create-task",
+                args=[self.school.id],
+            ),
+            {
+                "title": "Preparar reunión con dirección",
+                "contact": contact.id,
+            },
+            format="json",
+        )
+        second_response = self.client.post(
+            reverse(
+                "crm:school-create-task",
+                args=[self.school.id],
+            ),
+            {
+                "title": "Llamar a coordinación",
+                "contact": other_contact.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(first_response.status_code, 201)
+        self.assertEqual(second_response.status_code, 201)
+
+        response = self.client.get(
+            reverse(
+                "crm:contact-work-items",
+                args=[contact.id],
+            )
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(
+            response.data["results"][0]["contact_id"],
+            contact.id,
+        )
+        self.assertEqual(
+            response.data["results"][0]["type"],
+            "task",
+        )
+        self.assertEqual(
+            response.data["results"][0]["item"]["title"],
+            "Preparar reunión con dirección",
+        )
+
+    def test_global_contact_delete_is_not_exposed(self):
+        contact = SchoolContact.objects.create(
+            school=self.school,
+            full_name="Contacto protegido CRM",
+            position="Director",
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.admin)
+
+        response = self.client.delete(
+            reverse(
+                "crm:contact-detail",
+                args=[contact.id],
+            )
+        )
+
+        self.assertEqual(response.status_code, 405)
+
+
     def test_advisor_can_register_school_editorial_usage(self):
         level = Level.objects.create(
             name="Primaria editorial CRM",
