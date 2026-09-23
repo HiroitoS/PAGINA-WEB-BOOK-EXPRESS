@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.core.validators import MinValueValidator
 from django.db import models
 from django.db.models import Q
 from django.utils.text import slugify
@@ -152,6 +153,63 @@ class SchoolPopulationRecord(TimeStampedModel):
         return (
             f"{self.service} - "
             f"{self.year}: {self.student_count}"
+        )
+
+
+class SchoolPopulationDetail(TimeStampedModel):
+    """
+    Desglose vigente de un registro de población por grado.
+
+    El total del grado se deriva de secciones x alumnos por sección.
+    SchoolPopulationRecord mantiene el total consolidado e histórico.
+    """
+
+    population = models.ForeignKey(
+        SchoolPopulationRecord,
+        on_delete=models.CASCADE,
+        related_name="details",
+        verbose_name="Registro de población",
+    )
+    grade = models.ForeignKey(
+        "catalog.Grade",
+        on_delete=models.PROTECT,
+        related_name="crm_school_population_details",
+        verbose_name="Grado",
+    )
+    section_count = models.PositiveSmallIntegerField(
+        validators=[MinValueValidator(1)],
+        verbose_name="Número de secciones",
+    )
+    students_per_section = models.PositiveSmallIntegerField(
+        validators=[MinValueValidator(1)],
+        verbose_name="Alumnos por sección",
+    )
+
+    class Meta:
+        verbose_name = "Detalle de población por grado"
+        verbose_name_plural = "Detalles de población por grado"
+        ordering = ["grade__order", "grade__name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["population", "grade"],
+                name="crm_population_unique_grade",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["population", "grade"],
+                name="crm_population_grade_idx",
+            ),
+        ]
+
+    @property
+    def student_count(self):
+        return self.section_count * self.students_per_section
+
+    def __str__(self):
+        return (
+            f"{self.population.service} - "
+            f"{self.grade.name}: {self.student_count}"
         )
 
 
