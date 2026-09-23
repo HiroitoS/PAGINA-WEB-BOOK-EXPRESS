@@ -22,5 +22,9 @@ def work_items_for_school(school):
     return _work_item_queryset().filter(school=school)
 
 
+def work_items_for_contact(contact):
+    return _work_item_queryset().filter(contact=contact)
+
+
 def work_items_for_opportunity(opportunity):
     return _work_item_queryset().filter(opportunity=opportunity)
