@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from rest_framework.test import APIClient
 
-from catalog.models import Area, Level, Provider
+from catalog.models import Area, Grade, Level, Provider
 from crm.models import (
     Campaign,
     CommercialTeam,
@@ -21,6 +21,7 @@ from crm.models import (
     SchoolContact,
     SchoolEducationalService,
     SchoolPopulationRecord,
+    SchoolPopulationDetail,
     MarketEditorial,
 )
 
@@ -397,6 +398,73 @@ class CRMApiTests(TestCase):
         self.assertEqual(population.student_count, 320)
         self.assertTrue(population.is_current)
         self.assertEqual(population.recorded_by, self.advisor)
+
+    def test_advisor_can_register_population_breakdown_by_grade(self):
+        level = Level.objects.create(
+            name="Primaria detalle CRM",
+            is_active=True,
+        )
+        first_grade = Grade.objects.create(
+            name="1ro Primaria detalle CRM",
+            order=1,
+            is_active=True,
+        )
+        second_grade = Grade.objects.create(
+            name="2do Primaria detalle CRM",
+            order=2,
+            is_active=True,
+        )
+        service = SchoolEducationalService.objects.create(
+            school=self.school,
+            level=level,
+            modular_code="3377337",
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+
+        response = self.client.post(
+            reverse(
+                "crm:school-educational-service-population",
+                args=[self.school.id, service.id],
+            ),
+            {
+                "year": 2026,
+                "source": "advisor",
+                "source_detail": "Detalle informado por el colegio",
+                "details": [
+                    {
+                        "grade": first_grade.id,
+                        "section_count": 3,
+                        "students_per_section": 20,
+                    },
+                    {
+                        "grade": second_grade.id,
+                        "section_count": 2,
+                        "students_per_section": 25,
+                    },
+                ],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["student_count"], 110)
+        self.assertEqual(len(response.data["details"]), 2)
+
+        population = SchoolPopulationRecord.objects.get(
+            service=service,
+            is_current=True,
+        )
+
+        self.assertEqual(population.student_count, 110)
+        self.assertEqual(
+            SchoolPopulationDetail.objects.filter(
+                population=population,
+            ).count(),
+            2,
+        )
+
 
     def test_new_population_replaces_current_population(self):
         level = Level.objects.create(
