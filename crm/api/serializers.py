@@ -3,7 +3,7 @@ from rest_framework import serializers
 
 from django.utils.text import slugify
 
-from catalog.models import Area, Level
+from catalog.models import Area, Grade, Level
 from crm.models import (
     Campaign,
     CommercialActivity,
@@ -20,6 +20,7 @@ from crm.models import (
     SchoolEditorialUsage,
     SchoolEducationalService,
     SchoolPopulationRecord,
+    SchoolPopulationDetail,
     MarketEditorial,
 )
 from workspaces.models import CalendarEvent, Task, WorkspaceGroup
@@ -43,6 +44,12 @@ class LevelSummarySerializer(serializers.ModelSerializer):
     class Meta:
         model = Level
         fields = ("id", "name")
+
+
+class GradeSummarySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Grade
+        fields = ("id", "name", "order")
 
 
 class CommercialTeamSummarySerializer(serializers.ModelSerializer):
@@ -143,9 +150,42 @@ class SchoolContactCRMSerializer(SchoolContactSerializer):
         }
 
 
+class SchoolPopulationDetailSerializer(serializers.ModelSerializer):
+    grade = GradeSummarySerializer(read_only=True)
+    student_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = SchoolPopulationDetail
+        fields = (
+            "id",
+            "grade",
+            "section_count",
+            "students_per_section",
+            "student_count",
+        )
+
+
+class SchoolPopulationDetailWriteSerializer(serializers.ModelSerializer):
+    grade = serializers.PrimaryKeyRelatedField(
+        queryset=Grade.objects.filter(is_active=True),
+    )
+
+    class Meta:
+        model = SchoolPopulationDetail
+        fields = (
+            "grade",
+            "section_count",
+            "students_per_section",
+        )
+
+
 class SchoolPopulationRecordSerializer(serializers.ModelSerializer):
     source_display = serializers.CharField(
         source="get_source_display",
+        read_only=True,
+    )
+    details = SchoolPopulationDetailSerializer(
+        many=True,
         read_only=True,
     )
 
@@ -159,11 +199,22 @@ class SchoolPopulationRecordSerializer(serializers.ModelSerializer):
             "source_display",
             "source_detail",
             "is_current",
+            "details",
             "created_at",
             "updated_at",
         )
 
+
 class SchoolPopulationRecordWriteSerializer(serializers.ModelSerializer):
+    student_count = serializers.IntegerField(
+        min_value=0,
+        required=False,
+    )
+    details = SchoolPopulationDetailWriteSerializer(
+        many=True,
+        required=False,
+    )
+
     class Meta:
         model = SchoolPopulationRecord
         fields = (
@@ -171,7 +222,64 @@ class SchoolPopulationRecordWriteSerializer(serializers.ModelSerializer):
             "student_count",
             "source",
             "source_detail",
+            "details",
         )
+
+    def validate(self, attrs):
+        details = attrs.get("details")
+        student_count = attrs.get("student_count")
+
+        if details:
+            grade_ids = [detail["grade"].id for detail in details]
+
+            if len(grade_ids) != len(set(grade_ids)):
+                raise serializers.ValidationError(
+                    {
+                        "details": (
+                            "No puedes registrar dos veces el mismo grado "
+                            "en un nivel."
+                        )
+                    }
+                )
+
+            attrs["student_count"] = sum(
+                detail["section_count"]
+                * detail["students_per_section"]
+                for detail in details
+            )
+        elif student_count is None:
+            raise serializers.ValidationError(
+                {
+                    "student_count": (
+                        "Registra la cantidad de alumnos o el detalle "
+                        "de población por grado."
+                    )
+                }
+            )
+
+        return attrs
+
+    def create(self, validated_data):
+        details = validated_data.pop("details", [])
+        population = SchoolPopulationRecord.objects.create(
+            **validated_data,
+        )
+
+        SchoolPopulationDetail.objects.bulk_create(
+            [
+                SchoolPopulationDetail(
+                    population=population,
+                    grade=detail["grade"],
+                    section_count=detail["section_count"],
+                    students_per_section=detail[
+                        "students_per_section"
+                    ],
+                )
+                for detail in details
+            ]
+        )
+
+        return population
 
 
 class SchoolEducationalServiceSerializer(serializers.ModelSerializer):
