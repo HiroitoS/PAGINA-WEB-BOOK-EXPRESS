@@ -10,6 +10,7 @@ from .activities import (
     commercial_activities_for_school,
 )
 from .work_items import (
+    work_items_for_contact,
     work_items_for_opportunity,
     work_items_for_school,
 )
@@ -23,5 +24,6 @@ __all__ = [
     "commercial_activities_for_school",
     "commercial_activities_for_opportunity",
     "work_items_for_school",
+    "work_items_for_contact",
     "work_items_for_opportunity",
 ]
