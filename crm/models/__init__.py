@@ -13,6 +13,7 @@ from .school_intelligence import (
     SchoolCommercialProfile,
     SchoolEditorialUsage,
     SchoolPopulationRecord,
+    SchoolPopulationDetail,
 )
 from .team import CommercialTeam, CommercialTeamMembership
 from .work_item import CRMWorkItemLink
@@ -26,6 +27,7 @@ __all__ = [
     "SchoolEducationalService",
     "SchoolContact",
     "SchoolPopulationRecord",
+    "SchoolPopulationDetail",
     "SchoolEditorialUsage",
     "SchoolCommercialProfile",
     "InformationSource",
