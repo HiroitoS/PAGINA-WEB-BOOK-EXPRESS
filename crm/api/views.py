@@ -31,6 +31,7 @@ from crm.selectors import (
     visible_opportunities_queryset,
     visible_school_contacts_queryset,
     visible_schools_queryset,
+    work_items_for_contact,
     work_items_for_opportunity,
     work_items_for_school,
 )
@@ -68,6 +69,7 @@ from .serializers import (
     OpportunityUpdateSerializer,
     PipelineSerializer,
     SchoolCommercialActivityCreateSerializer,
+    SchoolContactCRMSerializer,
     SchoolContactSerializer,
     SchoolDetailSerializer,
     SchoolEducationalServiceSerializer,
@@ -167,6 +169,165 @@ class CommercialTeamViewSet(viewsets.ReadOnlyModelViewSet):
         if usuario_es_administrador(user):
             return queryset.order_by("name")
         return queryset.filter(memberships__user=user, memberships__is_active=True).distinct().order_by("name")
+
+
+class SchoolContactViewSet(viewsets.ModelViewSet):
+    permission_classes = [EsUsuarioCRM]
+    pagination_class = CRMPageNumberPagination
+    serializer_class = SchoolContactCRMSerializer
+    http_method_names = ["get", "patch", "head", "options"]
+
+    def get_queryset(self):
+        queryset = (
+            visible_school_contacts_queryset(self.request.user)
+            .select_related("school")
+        )
+
+        search = self.request.query_params.get("search", "").strip()
+        school = self.request.query_params.get("school")
+        decision_role = self.request.query_params.get(
+            "decision_role",
+            "",
+        ).strip()
+        is_active = self.request.query_params.get("is_active")
+
+        if search:
+            queryset = queryset.filter(
+                Q(full_name__icontains=search)
+                | Q(position__icontains=search)
+                | Q(email__icontains=search)
+                | Q(phone__icontains=search)
+                | Q(whatsapp__icontains=search)
+                | Q(school__name__icontains=search)
+            )
+
+        if school:
+            queryset = queryset.filter(school_id=school)
+
+        if decision_role:
+            queryset = queryset.filter(decision_role=decision_role)
+
+        if is_active == "true":
+            queryset = queryset.filter(is_active=True)
+        elif is_active == "false":
+            queryset = queryset.filter(is_active=False)
+
+        return queryset.order_by(
+            "school__name",
+            "-is_primary",
+            "full_name",
+            "id",
+        )
+
+    def partial_update(self, request, *args, **kwargs):
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para modificar contactos."
+            )
+
+        contact = self.get_object()
+        serializer = self.get_serializer(
+            contact,
+            data=request.data,
+            partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+
+        is_active = serializer.validated_data.get(
+            "is_active",
+            contact.is_active,
+        )
+        is_primary = (
+            serializer.validated_data.get(
+                "is_primary",
+                contact.is_primary,
+            )
+            if is_active
+            else False
+        )
+
+        with transaction.atomic():
+            if is_primary:
+                contact.school.contacts.exclude(
+                    pk=contact.pk,
+                ).filter(
+                    is_primary=True,
+                ).update(
+                    is_primary=False,
+                )
+
+            contact = serializer.save(
+                is_primary=is_primary,
+            )
+
+        return Response(
+            self.get_serializer(contact).data
+        )
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="activities",
+        url_name="activities",
+    )
+    def activities(self, request, pk=None):
+        contact = self.get_object()
+
+        queryset = (
+            visible_commercial_activities_queryset(request.user)
+            .filter(contact=contact)
+            .select_related(
+                "contact",
+                "opportunity",
+                "performed_by",
+                "created_by",
+            )
+            .order_by("-occurred_at", "-id")
+        )
+
+        page = self.paginate_queryset(queryset)
+
+        if page is not None:
+            return self.get_paginated_response(
+                CommercialActivitySerializer(
+                    page,
+                    many=True,
+                ).data
+            )
+
+        return Response(
+            CommercialActivitySerializer(
+                queryset,
+                many=True,
+            ).data
+        )
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="work-items",
+        url_name="work-items",
+    )
+    def work_items(self, request, pk=None):
+        contact = self.get_object()
+        queryset = work_items_for_contact(contact)
+
+        page = self.paginate_queryset(queryset)
+
+        if page is not None:
+            return self.get_paginated_response(
+                WorkItemLinkSerializer(
+                    page,
+                    many=True,
+                ).data
+            )
+
+        return Response(
+            WorkItemLinkSerializer(
+                queryset,
+                many=True,
+            ).data
+        )
 
 
 class MarketEditorialViewSet(viewsets.ModelViewSet):
