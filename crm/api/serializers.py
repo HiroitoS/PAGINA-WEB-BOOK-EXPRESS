@@ -130,6 +130,19 @@ class SchoolContactSerializer(serializers.ModelSerializer):
         read_only_fields = ("id", "created_at", "updated_at")
 
 
+class SchoolContactCRMSerializer(SchoolContactSerializer):
+    school = serializers.SerializerMethodField()
+
+    class Meta(SchoolContactSerializer.Meta):
+        fields = SchoolContactSerializer.Meta.fields + ("school",)
+
+    def get_school(self, obj):
+        return {
+            "id": obj.school_id,
+            "name": obj.school.name,
+        }
+
+
 class SchoolPopulationRecordSerializer(serializers.ModelSerializer):
     source_display = serializers.CharField(
         source="get_source_display",
