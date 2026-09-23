@@ -404,6 +404,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
                 "levels",
                 "educational_services__level",
                 "educational_services__population_records",
+                "educational_services__population_records__details__grade",
             )
         )
         if self.action == "retrieve":
@@ -516,7 +517,10 @@ class SchoolViewSet(viewsets.ModelViewSet):
             services = (
                 school.educational_services
                 .select_related("level")
-                .prefetch_related("population_records")
+                .prefetch_related(
+                    "population_records",
+                    "population_records__details__grade",
+                )
                 .order_by("level__name", "id")
             )
 
@@ -632,10 +636,14 @@ class SchoolViewSet(viewsets.ModelViewSet):
             )
 
         if request.method == "GET":
-            records = service.population_records.order_by(
-                "-is_current",
-                "-year",
-                "-created_at",
+            records = (
+                service.population_records
+                .prefetch_related("details__grade")
+                .order_by(
+                    "-is_current",
+                    "-year",
+                    "-created_at",
+                )
             )
 
             return Response(
