@@ -61,15 +61,26 @@ class Command(BaseCommand):
 
         code = f"{campaign_type.replace('_', '-').upper()}-{year}"
 
-        campaign, created = Campaign.objects.get_or_create(
-            code=code,
-            defaults={
-                "name": name,
-                "year": year,
-                "campaign_type": campaign_type,
-                "status": status,
-            },
-        )
+        matching_campaigns = Campaign.objects.filter(
+            year=year,
+            campaign_type=campaign_type,
+        ).order_by("id")
+
+        if matching_campaigns.count() > 1:
+            raise CommandError(
+                "Existe más de una campaña para el mismo tipo y año. "
+                "Revísalas antes de sincronizar para no ocultar duplicados."
+            )
+
+        campaign = matching_campaigns.first()
+        created = campaign is None
+
+        if campaign is None:
+            campaign = Campaign(
+                code=code,
+                year=year,
+                campaign_type=campaign_type,
+            )
 
         campaign.name = name
         campaign.year = year
