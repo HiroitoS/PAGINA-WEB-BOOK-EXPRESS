@@ -87,15 +87,19 @@ class Command(BaseCommand):
         campaign.campaign_type = campaign_type
         campaign.status = status
         campaign.full_clean()
-        campaign.save(
-            update_fields=[
-                "name",
-                "year",
-                "campaign_type",
-                "status",
-                "updated_at",
-            ]
-        )
+
+        if created:
+            campaign.save()
+        else:
+            campaign.save(
+                update_fields=[
+                    "name",
+                    "year",
+                    "campaign_type",
+                    "status",
+                    "updated_at",
+                ]
+            )
 
         action = "creada" if created else "actualizada"
         self.stdout.write(
