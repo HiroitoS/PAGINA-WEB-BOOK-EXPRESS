@@ -57,3 +57,33 @@ class SyncCRMCampaignCommandTests(TestCase):
             campaign.status,
             Campaign.Status.ACTIVE,
         )
+
+
+    def test_sync_reuses_existing_campaign_for_same_type_and_year(self):
+        existing = Campaign.objects.create(
+            code="ESCOLAR-2027-LEGACY",
+            name="Campaña anterior",
+            year=2027,
+            campaign_type=Campaign.CampaignType.SCHOOL,
+            status=Campaign.Status.PLANNING,
+        )
+
+        call_command(
+            "sync_crm_campaign",
+            year=2027,
+            name="Campaña escolar 2027",
+            status=Campaign.Status.ACTIVE,
+        )
+
+        existing.refresh_from_db()
+
+        self.assertEqual(
+            Campaign.objects.filter(
+                year=2027,
+                campaign_type=Campaign.CampaignType.SCHOOL,
+            ).count(),
+            1,
+        )
+        self.assertEqual(existing.code, "ESCOLAR-2027-LEGACY")
+        self.assertEqual(existing.name, "Campaña escolar 2027")
+        self.assertEqual(existing.status, Campaign.Status.ACTIVE)
