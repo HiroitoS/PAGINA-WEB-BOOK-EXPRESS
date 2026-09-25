@@ -315,6 +315,39 @@ class CRMCommercialProjectionTests(TestCase):
                 ],
             )
 
+    def test_projection_products_api_uses_campaign_price(self):
+        self.client.force_authenticate(user=self.advisor)
+
+        response = self.client.get(
+            reverse(
+                "crm:opportunity-projection-products",
+                args=[self.opportunity.id],
+            ),
+            {
+                "service": self.service.id,
+                "grade": self.grade.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data["results"]), 1)
+        self.assertEqual(
+            response.data["results"][0]["id"],
+            self.product.id,
+        )
+        self.assertEqual(
+            response.data["results"][0]["editorial"]["name"],
+            "Editorial Proyección",
+        )
+        self.assertEqual(
+            response.data["results"][0]["unit_price"],
+            "50.00",
+        )
+        self.assertEqual(
+            response.data["results"][0]["price_year"],
+            2027,
+        )
+
     def test_projection_api_creates_reads_and_exposes_base_population(self):
         self.client.force_authenticate(user=self.advisor)
 
