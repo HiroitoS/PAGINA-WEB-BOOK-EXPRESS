@@ -348,6 +348,53 @@ class CRMCommercialProjectionTests(TestCase):
             2027,
         )
 
+    def test_projection_products_api_filters_catalog_without_filtering_opportunity(self):
+        second_provider = Provider.objects.create(
+            name="Otra Editorial Proyección",
+            is_active=True,
+        )
+        second_product = Product.objects.create(
+            provider=second_provider,
+            name="Comunicación 4 Proyección",
+            level=self.level,
+            grade=self.grade,
+            area=self.area,
+            is_active=True,
+        )
+        ProductPrice.objects.create(
+            product=second_product,
+            year=2027,
+            campaign="Campaña escolar",
+            price=Decimal("45.00"),
+            is_active=True,
+        )
+
+        self.client.force_authenticate(user=self.advisor)
+
+        response = self.client.get(
+            reverse(
+                "crm:opportunity-projection-products",
+                args=[self.opportunity.id],
+            ),
+            {
+                "service": self.service.id,
+                "grade": self.grade.id,
+                "product_search": "Matemática",
+                "editorial": self.provider.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data["results"][0]["id"],
+            self.product.id,
+        )
+        self.assertEqual(len(response.data["results"]), 1)
+        self.assertEqual(
+            {item["id"] for item in response.data["editorials"]},
+            {self.provider.id, second_provider.id},
+        )
+
     def test_projection_api_creates_reads_and_exposes_base_population(self):
         self.client.force_authenticate(user=self.advisor)
 
