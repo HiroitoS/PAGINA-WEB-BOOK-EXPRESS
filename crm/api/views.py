@@ -10,7 +10,9 @@ from rest_framework.views import APIView
 
 from accounts.permissions import usuario_es_administrador
 from crm.models import (
+    Adoption,
     Campaign,
+    CommercialQuotation,
     CommercialTeam,
     CommercialTeamMembership,
     CRMWorkItemLink,
@@ -37,9 +39,14 @@ from crm.selectors import (
     work_items_for_school,
 )
 from crm.services import (
+    AdoptionError,
     CRMPlanningError,
     CommercialActivityError,
+    CommercialQuotationError,
     OpportunityTransitionError,
+    accept_commercial_quotation,
+    confirm_adoption,
+    create_commercial_quotation,
     create_opportunity,
     create_opportunity_event,
     create_opportunity_reminder,
@@ -48,15 +55,20 @@ from crm.services import (
     create_school_reminder,
     create_school_task,
     record_commercial_activity,
+    send_commercial_quotation,
     reopen_opportunity,
     transition_opportunity_stage,
 )
 
 from .pagination import CRMPageNumberPagination
 from .serializers import (
+    AdoptionConfirmSerializer,
+    AdoptionSerializer,
     CampaignSerializer,
     CommercialActivityCreateSerializer,
     CommercialActivitySerializer,
+    CommercialQuotationCreateSerializer,
+    CommercialQuotationSerializer,
     CommercialTeamDetailSerializer,
     OpportunityCreateSerializer,
     OpportunityDetailSerializer,
@@ -1460,6 +1472,260 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         except OpportunityTransitionError as exc:
             _raise_service_validation_error(exc)
         return Response(OpportunityDetailSerializer(opportunity).data)
+
+    @action(detail=True, methods=["get", "post"], url_path="quotations")
+    def quotations(self, request, pk=None):
+        opportunity = self.get_object()
+
+        if request.method == "GET":
+            queryset = (
+                opportunity.quotations
+                .select_related(
+                    "created_by",
+                    "sent_by",
+                    "accepted_by",
+                )
+                .prefetch_related("items__product")
+                .order_by("-version")
+            )
+            return Response(
+                CommercialQuotationSerializer(
+                    queryset,
+                    many=True,
+                ).data
+            )
+
+        if not _user_can_manage_visible_opportunity(
+            request.user,
+            opportunity,
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para crear cotizaciones "
+                "en esta oportunidad."
+            )
+
+        serializer = CommercialQuotationCreateSerializer(
+            data=request.data
+        )
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            quotation = create_commercial_quotation(
+                opportunity=opportunity,
+                actor=request.user,
+                items=serializer.validated_data["items"],
+                notes=serializer.validated_data.get("notes", ""),
+            )
+        except CommercialQuotationError as exc:
+            _raise_service_validation_error(exc)
+
+        quotation = (
+            CommercialQuotation.objects
+            .select_related(
+                "created_by",
+                "sent_by",
+                "accepted_by",
+            )
+            .prefetch_related("items__product")
+            .get(pk=quotation.pk)
+        )
+
+        return Response(
+            CommercialQuotationSerializer(quotation).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=r"quotations/(?P<quotation_id>[^/.]+)/send",
+    )
+    def send_quotation(self, request, pk=None, quotation_id=None):
+        opportunity = self.get_object()
+
+        if not _user_can_manage_visible_opportunity(
+            request.user,
+            opportunity,
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para enviar cotizaciones "
+                "en esta oportunidad."
+            )
+
+        quotation = opportunity.quotations.filter(
+            pk=quotation_id
+        ).first()
+
+        if quotation is None:
+            raise serializers.ValidationError(
+                {
+                    "quotation": (
+                        "La cotización no pertenece a esta oportunidad."
+                    )
+                }
+            )
+
+        try:
+            quotation = send_commercial_quotation(
+                quotation=quotation,
+                actor=request.user,
+            )
+        except CommercialQuotationError as exc:
+            _raise_service_validation_error(exc)
+
+        quotation = (
+            CommercialQuotation.objects
+            .select_related(
+                "created_by",
+                "sent_by",
+                "accepted_by",
+            )
+            .prefetch_related("items__product")
+            .get(pk=quotation.pk)
+        )
+
+        return Response(
+            CommercialQuotationSerializer(quotation).data
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=r"quotations/(?P<quotation_id>[^/.]+)/accept",
+    )
+    def accept_quotation(self, request, pk=None, quotation_id=None):
+        opportunity = self.get_object()
+
+        if not _user_can_manage_visible_opportunity(
+            request.user,
+            opportunity,
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para aceptar cotizaciones "
+                "en esta oportunidad."
+            )
+
+        quotation = opportunity.quotations.filter(
+            pk=quotation_id
+        ).first()
+
+        if quotation is None:
+            raise serializers.ValidationError(
+                {
+                    "quotation": (
+                        "La cotización no pertenece a esta oportunidad."
+                    )
+                }
+            )
+
+        try:
+            quotation = accept_commercial_quotation(
+                quotation=quotation,
+                actor=request.user,
+            )
+        except CommercialQuotationError as exc:
+            _raise_service_validation_error(exc)
+
+        quotation = (
+            CommercialQuotation.objects
+            .select_related(
+                "created_by",
+                "sent_by",
+                "accepted_by",
+            )
+            .prefetch_related("items__product")
+            .get(pk=quotation.pk)
+        )
+
+        return Response(
+            CommercialQuotationSerializer(quotation).data
+        )
+
+    @action(detail=True, methods=["get", "post"], url_path="adoptions")
+    def adoptions(self, request, pk=None):
+        opportunity = self.get_object()
+
+        if request.method == "GET":
+            queryset = (
+                opportunity.adoptions
+                .select_related(
+                    "advisor",
+                    "confirmed_by",
+                    "authorized_contact",
+                )
+                .prefetch_related("items__product")
+                .order_by("-version")
+            )
+            return Response(
+                AdoptionSerializer(
+                    queryset,
+                    many=True,
+                ).data
+            )
+
+        if not _user_can_manage_visible_opportunity(
+            request.user,
+            opportunity,
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para confirmar adopciones "
+                "en esta oportunidad."
+            )
+
+        serializer = AdoptionConfirmSerializer(
+            data=request.data
+        )
+        serializer.is_valid(raise_exception=True)
+
+        quotation = serializer.validated_data["quotation"]
+
+        if quotation.opportunity_id != opportunity.id:
+            raise serializers.ValidationError(
+                {
+                    "quotation": (
+                        "La cotización no pertenece a esta oportunidad."
+                    )
+                }
+            )
+
+        contact = serializer.validated_data["authorized_contact"]
+
+        if contact.school_id != opportunity.school_id:
+            raise serializers.ValidationError(
+                {
+                    "authorized_contact": (
+                        "El contacto no pertenece al colegio "
+                        "de esta oportunidad."
+                    )
+                }
+            )
+
+        try:
+            adoption = confirm_adoption(
+                quotation=quotation,
+                authorized_contact=contact,
+                signed_at=serializer.validated_data["signed_at"],
+                actor=request.user,
+                notes=serializer.validated_data.get("notes", ""),
+            )
+        except AdoptionError as exc:
+            _raise_service_validation_error(exc)
+
+        adoption = (
+            Adoption.objects
+            .select_related(
+                "advisor",
+                "confirmed_by",
+                "authorized_contact",
+            )
+            .prefetch_related("items__product")
+            .get(pk=adoption.pk)
+        )
+
+        return Response(
+            AdoptionSerializer(adoption).data,
+            status=status.HTTP_201_CREATED,
+        )
 
     @action(detail=True, methods=["get"], url_path="history")
     def history(self, request, pk=None):
