@@ -1292,12 +1292,19 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         school = data["school"]
         if not visible_schools_queryset(request.user).filter(pk=school.pk).exists():
             raise PermissionDenied("No tienes acceso al colegio seleccionado.")
-        can_assign = usuario_es_administrador(request.user) or usuario_puede_asignar_oportunidades(request.user)
+        can_assign = (
+            usuario_es_administrador(request.user)
+            or usuario_puede_asignar_oportunidades(request.user)
+        )
         if not can_assign:
-            data["owner"] = request.user
-            data["team"] = school.team
+            data.pop("owner", None)
+            data.pop("team", None)
+
         try:
-            opportunity = create_opportunity(created_by=request.user, **data)
+            opportunity = create_opportunity(
+                created_by=request.user,
+                **data,
+            )
         except OpportunityTransitionError as exc:
             _raise_service_validation_error(exc)
         return Response(OpportunityDetailSerializer(opportunity).data, status=status.HTTP_201_CREATED)
