@@ -118,14 +118,17 @@ def _resolve_population_values(
     return resolved_section_count, resolved_student_count
 
 
-def resolve_projection_price(*, product, campaign):
+def _projection_price_for_year(
+    *,
+    product,
+    year,
+    campaign_label,
+):
     prices = ProductPrice.objects.filter(
         product=product,
-        year=campaign.year,
+        year=year,
         is_active=True,
     )
-
-    campaign_label = campaign.get_campaign_type_display()
 
     price = (
         prices
@@ -134,34 +137,71 @@ def resolve_projection_price(*, product, campaign):
         .first()
     )
 
-    if price is None:
-        candidates = list(
-            prices.order_by("-updated_at", "-id")[:2]
+    if price is not None:
+        return price
+
+    candidates = list(
+        prices.order_by("-updated_at", "-id")[:2]
+    )
+
+    if len(candidates) == 1:
+        return candidates[0]
+
+    if len(candidates) > 1:
+        raise CommercialProjectionError(
+            (
+                f"{product.name} tiene más de un precio activo "
+                f"para {year} y ninguno corresponde a "
+                f"{campaign_label}."
+            )
         )
 
-        if len(candidates) == 1:
-            price = candidates[0]
-        elif not candidates:
-            raise CommercialProjectionError(
-                (
-                    f"{product.name} no tiene precio activo para "
-                    f"{campaign.year}."
-                )
+    return None
+
+
+def resolve_projection_price(*, product, campaign):
+    campaign_label = campaign.get_campaign_type_display()
+
+    price = _projection_price_for_year(
+        product=product,
+        year=campaign.year,
+        campaign_label=campaign_label,
+    )
+
+    if price is None:
+        previous_year = (
+            ProductPrice.objects
+            .filter(
+                product=product,
+                year__lt=campaign.year,
+                is_active=True,
             )
-        else:
-            raise CommercialProjectionError(
-                (
-                    f"{product.name} tiene más de un precio activo "
-                    f"para {campaign.year} y ninguno corresponde a "
-                    f"{campaign_label}."
-                )
+            .order_by("-year")
+            .values_list("year", flat=True)
+            .first()
+        )
+
+        if previous_year is not None:
+            price = _projection_price_for_year(
+                product=product,
+                year=previous_year,
+                campaign_label=campaign_label,
             )
+
+    if price is None:
+        raise CommercialProjectionError(
+            (
+                f"{product.name} no tiene precio activo para "
+                f"{campaign.year} ni un precio anterior disponible "
+                "para usar como referencia."
+            )
+        )
 
     if price.price is None:
         raise CommercialProjectionError(
             (
                 f"{product.name} no tiene un precio numérico "
-                f"registrado para {campaign.year}."
+                f"registrado para {price.year}."
             )
         )
 
