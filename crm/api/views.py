@@ -113,6 +113,23 @@ def _user_can_manage_visible_opportunity(user, opportunity):
     return False
 
 
+def _single_visible_open_opportunity_for_school(user, school):
+    opportunities = list(
+        visible_opportunities_queryset(user)
+        .filter(
+            school=school,
+            stage__category=PipelineStage.Category.OPEN,
+        )
+        .select_related("stage")
+        .order_by("-updated_at", "-id")[:2]
+    )
+
+    if len(opportunities) == 1:
+        return opportunities[0]
+
+    return None
+
+
 class CRMSummaryAPIView(APIView):
     permission_classes = [EsUsuarioCRM]
 
@@ -875,6 +892,12 @@ class SchoolViewSet(viewsets.ModelViewSet):
         data = dict(serializer.validated_data)
         opportunity = data.pop("opportunity", None)
 
+        if opportunity is None:
+            opportunity = _single_visible_open_opportunity_for_school(
+                request.user,
+                school,
+            )
+
         if (
             opportunity is not None
             and not visible_opportunities_queryset(request.user)
@@ -958,6 +981,14 @@ class SchoolViewSet(viewsets.ModelViewSet):
         data = dict(serializer.validated_data)
         opportunity = data.get("opportunity")
 
+        if opportunity is None:
+            opportunity = _single_visible_open_opportunity_for_school(
+                request.user,
+                school,
+            )
+            if opportunity is not None:
+                data["opportunity"] = opportunity
+
         if (
             opportunity is not None
             and not visible_opportunities_queryset(request.user)
@@ -1020,6 +1051,14 @@ class SchoolViewSet(viewsets.ModelViewSet):
         data = dict(serializer.validated_data)
         opportunity = data.get("opportunity")
 
+        if opportunity is None:
+            opportunity = _single_visible_open_opportunity_for_school(
+                request.user,
+                school,
+            )
+            if opportunity is not None:
+                data["opportunity"] = opportunity
+
         if (
             opportunity is not None
             and not visible_opportunities_queryset(request.user)
@@ -1081,6 +1120,14 @@ class SchoolViewSet(viewsets.ModelViewSet):
 
         data = dict(serializer.validated_data)
         opportunity = data.get("opportunity")
+
+        if opportunity is None:
+            opportunity = _single_visible_open_opportunity_for_school(
+                request.user,
+                school,
+            )
+            if opportunity is not None:
+                data["opportunity"] = opportunity
 
         if (
             opportunity is not None
