@@ -140,6 +140,21 @@ class CRMActivityAndWorkItemTests(TestCase):
             occurred_at,
         )
 
+    def test_activity_rejects_future_occurred_at(self):
+        with self.assertRaises(CommercialActivityError):
+            record_commercial_activity(
+                opportunity=self.opportunity,
+                activity_type=CommercialActivity.ActivityType.PRESENTATION,
+                summary="Presentación futura",
+                result="La presentación aún no se ha realizado.",
+                performed_by=self.advisor,
+                created_by=self.advisor,
+                contact=self.contact,
+                occurred_at=timezone.now() + timedelta(days=1),
+            )
+
+        self.opportunity.refresh_from_db()
+        self.assertIsNone(self.opportunity.last_activity_at)
     def test_activity_can_be_registered_before_opportunity(self):
         activity = record_commercial_activity(
             school=self.school,
