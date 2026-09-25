@@ -11,6 +11,7 @@ from crm.models import (
     Pipeline,
     PipelineStage,
     School,
+    SchoolContact,
 )
 from crm.services import (
     OpportunityTransitionError,
@@ -113,16 +114,28 @@ class CRMOpportunityFlowTests(TestCase):
                     created_by=self.admin,
                 )
 
-    def test_create_opportunity_uses_initial_stage_and_creates_history(self):
-        opportunity = create_opportunity(
-            title="Adopción escolar 2027",
+    def test_create_opportunity_resolves_school_defaults_and_history(self):
+        contact = SchoolContact.objects.create(
             school=self.school,
-            campaign=self.campaign,
-            pipeline=self.pipeline,
+            full_name="Directora CRM",
+            position="Directora",
+            is_primary=True,
             created_by=self.admin,
         )
 
+        opportunity = create_opportunity(
+            school=self.school,
+            created_by=self.admin,
+        )
+
+        self.assertEqual(
+            opportunity.title,
+            "Campaña escolar 2027 - Colegio CRM",
+        )
+        self.assertEqual(opportunity.campaign, self.campaign)
+        self.assertEqual(opportunity.pipeline, self.pipeline)
         self.assertEqual(opportunity.stage, self.initial_stage)
+        self.assertEqual(opportunity.primary_contact, contact)
         self.assertEqual(opportunity.owner, self.advisor)
         self.assertEqual(opportunity.team, self.team)
         self.assertEqual(opportunity.stage_history.count(), 1)
@@ -135,16 +148,40 @@ class CRMOpportunityFlowTests(TestCase):
         self.assertIsNone(history.from_stage)
         self.assertEqual(history.to_stage, self.initial_stage)
 
-    def test_school_and_campaign_can_have_multiple_opportunities(self):
-        first = create_opportunity(
-            title="Campaña escolar 2027",
+    def test_open_duplicate_for_same_school_campaign_pipeline_is_rejected(
+        self,
+    ):
+        create_opportunity(
             school=self.school,
             campaign=self.campaign,
             pipeline=self.pipeline,
             created_by=self.admin,
         )
+
+        with self.assertRaises(OpportunityTransitionError):
+            create_opportunity(
+                school=self.school,
+                campaign=self.campaign,
+                pipeline=self.pipeline,
+                created_by=self.admin,
+            )
+
+    def test_new_opportunity_is_allowed_after_previous_one_is_closed(self):
+        first = create_opportunity(
+            school=self.school,
+            campaign=self.campaign,
+            pipeline=self.pipeline,
+            created_by=self.admin,
+        )
+
+        transition_opportunity_stage(
+            opportunity=first,
+            to_stage=self.lost_stage,
+            changed_by=self.advisor,
+            note="El colegio no continuará este año.",
+        )
+
         second = create_opportunity(
-            title="Plan lector especial 2027",
             school=self.school,
             campaign=self.campaign,
             pipeline=self.pipeline,
@@ -156,9 +193,11 @@ class CRMOpportunityFlowTests(TestCase):
             Opportunity.objects.filter(
                 school=self.school,
                 campaign=self.campaign,
+                pipeline=self.pipeline,
             ).count(),
             2,
         )
+        self.assertFalse(second.is_closed)
 
     def test_lost_transition_requires_reason_and_closes_opportunity(self):
         opportunity = create_opportunity(
