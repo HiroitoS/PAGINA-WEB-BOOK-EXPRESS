@@ -1519,7 +1519,10 @@ class OpportunityViewSet(viewsets.ModelViewSet):
 
         service_id = request.query_params.get("service")
         grade_id = request.query_params.get("grade")
-        search = (request.query_params.get("search") or "").strip()
+        product_search = (
+            request.query_params.get("product_search") or ""
+        ).strip()
+        editorial_id = request.query_params.get("editorial")
 
         if not service_id or not grade_id:
             raise serializers.ValidationError(
@@ -1558,7 +1561,7 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                 {"grade": "El grado seleccionado no está disponible."}
             )
 
-        products = (
+        base_products = (
             Product.objects
             .filter(
                 is_active=True,
@@ -1570,6 +1573,43 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                 Q(grade_id=grade.id)
                 | Q(grade__isnull=True),
             )
+        )
+
+        editorial_options = [
+            {
+                "id": item["provider_id"],
+                "name": item["provider__name"],
+            }
+            for item in (
+                base_products
+                .values("provider_id", "provider__name")
+                .order_by("provider__name", "provider_id")
+                .distinct()
+            )
+        ]
+
+        products = base_products
+
+        if editorial_id:
+            try:
+                editorial_id = int(editorial_id)
+            except (TypeError, ValueError) as exc:
+                raise serializers.ValidationError(
+                    {"editorial": "La editorial seleccionada no es válida."}
+                ) from exc
+
+            products = products.filter(provider_id=editorial_id)
+
+        if product_search:
+            products = products.filter(
+                Q(name__icontains=product_search)
+                | Q(provider__name__icontains=product_search)
+                | Q(area__name__icontains=product_search)
+                | Q(series__name__icontains=product_search)
+            )
+
+        products = (
+            products
             .select_related(
                 "provider",
                 "level",
@@ -1579,14 +1619,6 @@ class OpportunityViewSet(viewsets.ModelViewSet):
             )
             .order_by("provider__name", "name", "id")
         )
-
-        if search:
-            products = products.filter(
-                Q(name__icontains=search)
-                | Q(provider__name__icontains=search)
-                | Q(area__name__icontains=search)
-                | Q(series__name__icontains=search)
-            )
 
         choices = []
 
@@ -1663,6 +1695,7 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                     "name": opportunity.campaign.name,
                     "year": opportunity.campaign.year,
                 },
+                "editorials": editorial_options,
                 "results": choices,
             }
         )
