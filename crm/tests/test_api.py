@@ -1,4 +1,5 @@
 from datetime import timedelta
+from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
@@ -8,7 +9,7 @@ from django.utils import timezone
 
 from rest_framework.test import APIClient
 
-from catalog.models import Area, Grade, Level, Provider
+from catalog.models import Area, Grade, Level, Product, Provider
 from crm.models import (
     Campaign,
     CommercialTeam,
@@ -62,12 +63,198 @@ class CRMApiTests(TestCase):
         self.pipeline = Pipeline.objects.create(code="API-PIPE", name="Pipeline API", is_default=True, created_by=self.admin)
         self.initial_stage = PipelineStage.objects.create(pipeline=self.pipeline, code="por_contactar", name="Por contactar", order=10, category=PipelineStage.Category.OPEN, is_initial=True, created_by=self.admin)
         self.follow_up_stage = PipelineStage.objects.create(pipeline=self.pipeline, code="seguimiento", name="Seguimiento", order=20, category=PipelineStage.Category.OPEN, created_by=self.admin)
+        self.quotation_stage = PipelineStage.objects.create(pipeline=self.pipeline, code="cotizacion_enviada", name="Cotización enviada", order=40, category=PipelineStage.Category.OPEN, created_by=self.admin)
+        self.won_stage = PipelineStage.objects.create(pipeline=self.pipeline, code="cierre_ganado_adopcion", name="Cierre ganado (adopción)", order=80, category=PipelineStage.Category.WON, created_by=self.admin)
         self.lost_stage = PipelineStage.objects.create(pipeline=self.pipeline, code="no_concretada", name="No concretada", order=90, category=PipelineStage.Category.LOST, created_by=self.admin)
         self.opportunity = Opportunity.objects.create(title="Oportunidad API", school=self.school, campaign=self.campaign, pipeline=self.pipeline, stage=self.initial_stage, team=self.team, owner=self.advisor, created_by=self.admin)
         self.other_opportunity = Opportunity.objects.create(title="Otra oportunidad API", school=self.other_school, campaign=self.campaign, pipeline=self.pipeline, stage=self.initial_stage, team=self.other_team, owner=self.other_advisor, created_by=self.admin)
 
     def authenticate(self, user):
         self.client.force_authenticate(user=user)
+
+    def _create_quote_product(self):
+        provider = Provider.objects.create(
+            name="Editorial cotización API",
+            is_active=True,
+        )
+        level = Level.objects.create(
+            name="Primaria cotización API",
+            is_active=True,
+        )
+        grade = Grade.objects.create(
+            name="4to Primaria cotización API",
+            order=4,
+            is_active=True,
+        )
+        area = Area.objects.create(
+            name="Matemática cotización API",
+            is_active=True,
+        )
+        return Product.objects.create(
+            provider=provider,
+            name="Matemática 4 cotización API",
+            level=level,
+            grade=grade,
+            area=area,
+            is_active=True,
+        )
+
+    def _create_quotation_via_api(self):
+        product = self._create_quote_product()
+        response = self.client.post(
+            reverse(
+                "crm:opportunity-quotations",
+                args=[self.opportunity.id],
+            ),
+            {
+                "notes": "Propuesta comercial API.",
+                "items": [
+                    {
+                        "product": product.id,
+                        "quantity": 60,
+                        "pvp": "120.00",
+                        "supplier_cost": "70.00",
+                        "school_price": "90.00",
+                        "parent_price": "110.00",
+                        "school_commission": "5.00",
+                    }
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        return response
+
+    def test_advisor_can_create_and_list_opportunity_quotation(self):
+        self.authenticate(self.advisor)
+
+        create_response = self._create_quotation_via_api()
+
+        self.assertEqual(create_response.data["version"], 1)
+        self.assertEqual(create_response.data["status"], "draft")
+        self.assertEqual(len(create_response.data["items"]), 1)
+        self.assertEqual(
+            create_response.data["items"][0]["product_name_snapshot"],
+            "Matemática 4 cotización API",
+        )
+
+        list_response = self.client.get(
+            reverse(
+                "crm:opportunity-quotations",
+                args=[self.opportunity.id],
+            )
+        )
+
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(len(list_response.data), 1)
+        self.assertEqual(
+            list_response.data[0]["id"],
+            create_response.data["id"],
+        )
+
+    def test_quotation_api_send_and_accept_updates_opportunity(self):
+        self.authenticate(self.advisor)
+        create_response = self._create_quotation_via_api()
+        quotation_id = create_response.data["id"]
+
+        send_response = self.client.post(
+            reverse(
+                "crm:opportunity-send-quotation",
+                args=[self.opportunity.id, quotation_id],
+            ),
+            {},
+            format="json",
+        )
+
+        self.assertEqual(send_response.status_code, 200)
+        self.assertEqual(send_response.data["status"], "sent")
+
+        self.opportunity.refresh_from_db()
+        self.assertEqual(
+            self.opportunity.stage,
+            self.quotation_stage,
+        )
+
+        accept_response = self.client.post(
+            reverse(
+                "crm:opportunity-accept-quotation",
+                args=[self.opportunity.id, quotation_id],
+            ),
+            {},
+            format="json",
+        )
+
+        self.assertEqual(accept_response.status_code, 200)
+        self.assertEqual(
+            accept_response.data["status"],
+            "accepted",
+        )
+
+    def test_adoption_api_closes_opportunity_as_won(self):
+        contact = SchoolContact.objects.create(
+            school=self.school,
+            full_name="Directora adopción API",
+            position="Directora",
+            is_primary=True,
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+        create_response = self._create_quotation_via_api()
+        quotation_id = create_response.data["id"]
+
+        send_response = self.client.post(
+            reverse(
+                "crm:opportunity-send-quotation",
+                args=[self.opportunity.id, quotation_id],
+            ),
+            {},
+            format="json",
+        )
+        self.assertEqual(send_response.status_code, 200)
+
+        accept_response = self.client.post(
+            reverse(
+                "crm:opportunity-accept-quotation",
+                args=[self.opportunity.id, quotation_id],
+            ),
+            {},
+            format="json",
+        )
+        self.assertEqual(accept_response.status_code, 200)
+
+        adoption_response = self.client.post(
+            reverse(
+                "crm:opportunity-adoptions",
+                args=[self.opportunity.id],
+            ),
+            {
+                "quotation": quotation_id,
+                "authorized_contact": contact.id,
+                "signed_at": (
+                    timezone.now() - timedelta(minutes=5)
+                ).isoformat(),
+                "notes": "Adopción confirmada en prueba API.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(adoption_response.status_code, 201)
+        self.assertEqual(
+            adoption_response.data["authorized_contact"]["id"],
+            contact.id,
+        )
+        self.assertEqual(
+            len(adoption_response.data["items"]),
+            1,
+        )
+
+        self.opportunity.refresh_from_db()
+        self.assertEqual(
+            self.opportunity.stage,
+            self.won_stage,
+        )
+        self.assertIsNotNone(self.opportunity.closed_at)
 
     def test_user_without_crm_permission_is_denied(self):
         self.authenticate(self.no_access)
