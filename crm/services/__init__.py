@@ -18,6 +18,7 @@ from .planning import (
 from .projections import (
     CommercialProjectionError,
     create_commercial_projection_revision,
+    resolve_projection_price,
 )
 from .quotations import (
     CommercialQuotationError,
@@ -37,6 +38,7 @@ __all__ = [
     "confirm_adoption",
     "CommercialProjectionError",
     "create_commercial_projection_revision",
+    "resolve_projection_price",
     "CommercialQuotationError",
     "create_commercial_quotation",
     "send_commercial_quotation",
