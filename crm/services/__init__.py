@@ -15,6 +15,10 @@ from .planning import (
     create_school_reminder,
     create_school_task,
 )
+from .projections import (
+    CommercialProjectionError,
+    create_commercial_projection_revision,
+)
 from .quotations import (
     CommercialQuotationError,
     accept_commercial_quotation,
@@ -31,6 +35,8 @@ from .work_items import (
 __all__ = [
     "AdoptionError",
     "confirm_adoption",
+    "CommercialProjectionError",
+    "create_commercial_projection_revision",
     "CommercialQuotationError",
     "create_commercial_quotation",
     "send_commercial_quotation",
