@@ -347,6 +347,67 @@ class CRMCommercialProjectionTests(TestCase):
             response.data["results"][0]["price_year"],
             2027,
         )
+        self.assertFalse(
+            response.data["results"][0]["price_is_reference"],
+        )
+
+    def test_projection_products_api_uses_previous_year_as_reference(self):
+        previous_price_product = Product.objects.create(
+            provider=self.provider,
+            name="Inglés Inicial 4 Proyección",
+            level=self.level,
+            grade=self.grade,
+            area=self.area,
+            is_active=True,
+        )
+        ProductPrice.objects.create(
+            product=previous_price_product,
+            year=2026,
+            campaign="Campaña escolar",
+            price=Decimal("42.00"),
+            is_active=True,
+        )
+
+        self.client.force_authenticate(user=self.advisor)
+
+        response = self.client.get(
+            reverse(
+                "crm:opportunity-projection-products",
+                args=[self.opportunity.id],
+            ),
+            {
+                "service": self.service.id,
+                "grade": self.grade.id,
+                "product_search": "Inicial",
+                "editorial": self.provider.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        result = next(
+            item
+            for item in response.data["results"]
+            if item["id"] == previous_price_product.id
+        )
+        self.assertEqual(result["unit_price"], "42.00")
+        self.assertEqual(result["price_year"], 2026)
+        self.assertTrue(result["price_is_reference"])
+
+        projection = self._create_projection(
+            items=[
+                {
+                    "service": self.service,
+                    "grade": self.grade,
+                    "product": previous_price_product,
+                }
+            ],
+        )
+
+        item = projection.items.get(
+            product=previous_price_product,
+        )
+        self.assertEqual(item.price_year_snapshot, 2026)
+        self.assertEqual(item.unit_price, Decimal("42.00"))
 
     def test_projection_products_api_filters_catalog_without_filtering_opportunity(self):
         second_provider = Provider.objects.create(
