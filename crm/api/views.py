@@ -1606,6 +1606,8 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                 | Q(provider__name__icontains=product_search)
                 | Q(area__name__icontains=product_search)
                 | Q(series__name__icontains=product_search)
+                | Q(level__name__icontains=product_search)
+                | Q(grade__name__icontains=product_search)
             )
 
         products = (
@@ -1674,6 +1676,9 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                     "unit_price": str(price.price),
                     "price_year": price.year,
                     "price_campaign": price.campaign,
+                    "price_is_reference": (
+                        price.year != opportunity.campaign.year
+                    ),
                 }
             )
 
