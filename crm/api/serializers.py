@@ -807,14 +807,45 @@ class OpportunityDetailSerializer(OpportunityListSerializer):
 
 
 class OpportunityCreateSerializer(serializers.Serializer):
-    title = serializers.CharField(max_length=200)
-    school = serializers.PrimaryKeyRelatedField(queryset=School.objects.filter(is_active=True))
-    campaign = serializers.PrimaryKeyRelatedField(queryset=Campaign.objects.exclude(status=Campaign.Status.CLOSED))
-    pipeline = serializers.PrimaryKeyRelatedField(queryset=Pipeline.objects.filter(is_active=True))
-    primary_contact = serializers.PrimaryKeyRelatedField(queryset=SchoolContact.objects.filter(is_active=True), required=False, allow_null=True)
-    team = serializers.PrimaryKeyRelatedField(queryset=CommercialTeam.objects.filter(is_active=True), required=False, allow_null=True)
-    owner = serializers.PrimaryKeyRelatedField(queryset=User.objects.filter(is_active=True), required=False, allow_null=True)
-    notes = serializers.CharField(required=False, allow_blank=True, default="")
+    title = serializers.CharField(
+        max_length=200,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+    school = serializers.PrimaryKeyRelatedField(
+        queryset=School.objects.filter(is_active=True),
+    )
+    campaign = serializers.PrimaryKeyRelatedField(
+        queryset=Campaign.objects.exclude(
+            status=Campaign.Status.CLOSED,
+        ),
+        required=False,
+    )
+    pipeline = serializers.PrimaryKeyRelatedField(
+        queryset=Pipeline.objects.filter(is_active=True),
+        required=False,
+    )
+    primary_contact = serializers.PrimaryKeyRelatedField(
+        queryset=SchoolContact.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
+    team = serializers.PrimaryKeyRelatedField(
+        queryset=CommercialTeam.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
+    owner = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
+    notes = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+    )
 
 
 class OpportunityUpdateSerializer(serializers.Serializer):
