@@ -4,10 +4,14 @@ from rest_framework import serializers
 from django.utils import timezone
 from django.utils.text import slugify
 
-from catalog.models import Area, Grade, Level
+from catalog.models import Area, Grade, Level, Product
 from crm.models import (
+    Adoption,
+    AdoptionItem,
     Campaign,
     CommercialActivity,
+    CommercialQuotation,
+    CommercialQuotationItem,
     CommercialTeam,
     CommercialTeamMembership,
     CRMWorkItemLink,
@@ -964,6 +968,186 @@ class OpportunityStageChangeSerializer(serializers.Serializer):
 class OpportunityReopenSerializer(serializers.Serializer):
     stage = serializers.PrimaryKeyRelatedField(queryset=PipelineStage.objects.filter(is_active=True, category=PipelineStage.Category.OPEN))
     reason = serializers.CharField(allow_blank=False, trim_whitespace=True)
+
+
+class CommercialQuotationItemSerializer(serializers.ModelSerializer):
+    product = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CommercialQuotationItem
+        fields = (
+            "id",
+            "product",
+            "product_name_snapshot",
+            "provider_name_snapshot",
+            "level_name_snapshot",
+            "grade_name_snapshot",
+            "area_name_snapshot",
+            "quantity",
+            "pvp",
+            "supplier_cost",
+            "school_price",
+            "parent_price",
+            "school_commission",
+        )
+
+    def get_product(self, obj):
+        return {
+            "id": obj.product_id,
+            "name": obj.product.name,
+        }
+
+
+class CommercialQuotationSerializer(serializers.ModelSerializer):
+    status_display = serializers.CharField(
+        source="get_status_display",
+        read_only=True,
+    )
+    items = CommercialQuotationItemSerializer(
+        many=True,
+        read_only=True,
+    )
+    created_by = UserSummarySerializer(read_only=True)
+    sent_by = UserSummarySerializer(read_only=True)
+    accepted_by = UserSummarySerializer(read_only=True)
+
+    class Meta:
+        model = CommercialQuotation
+        fields = (
+            "id",
+            "version",
+            "status",
+            "status_display",
+            "school_name_snapshot",
+            "campaign_name_snapshot",
+            "notes",
+            "sent_at",
+            "sent_by",
+            "accepted_at",
+            "accepted_by",
+            "created_by",
+            "items",
+            "created_at",
+            "updated_at",
+        )
+
+
+class CommercialQuotationItemCreateSerializer(serializers.Serializer):
+    product = serializers.PrimaryKeyRelatedField(
+        queryset=Product.objects.filter(is_active=True),
+    )
+    quantity = serializers.IntegerField(min_value=1)
+    pvp = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        min_value=0,
+    )
+    supplier_cost = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        min_value=0,
+    )
+    school_price = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        min_value=0,
+    )
+    parent_price = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        min_value=0,
+    )
+    school_commission = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        min_value=0,
+        required=False,
+        default=0,
+    )
+
+
+class CommercialQuotationCreateSerializer(serializers.Serializer):
+    items = CommercialQuotationItemCreateSerializer(
+        many=True,
+        allow_empty=False,
+    )
+    notes = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+
+
+class AdoptionItemSerializer(serializers.ModelSerializer):
+    product = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AdoptionItem
+        fields = (
+            "id",
+            "product",
+            "product_name_snapshot",
+            "provider_name_snapshot",
+            "level_name_snapshot",
+            "grade_name_snapshot",
+            "area_name_snapshot",
+            "quantity",
+            "pvp",
+            "supplier_cost",
+            "school_price",
+            "parent_price",
+            "school_commission",
+            "reading_month",
+        )
+
+    def get_product(self, obj):
+        return {
+            "id": obj.product_id,
+            "name": obj.product.name,
+        }
+
+
+class AdoptionSerializer(serializers.ModelSerializer):
+    advisor = UserSummarySerializer(read_only=True)
+    confirmed_by = UserSummarySerializer(read_only=True)
+    authorized_contact = SchoolContactSerializer(read_only=True)
+    items = AdoptionItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Adoption
+        fields = (
+            "id",
+            "version",
+            "is_current",
+            "school_name_snapshot",
+            "campaign_name_snapshot",
+            "advisor",
+            "advisor_name_snapshot",
+            "authorized_contact",
+            "authorized_contact_name_snapshot",
+            "signed_at",
+            "confirmed_at",
+            "confirmed_by",
+            "notes",
+            "items",
+            "created_at",
+            "updated_at",
+        )
+
+
+class AdoptionConfirmSerializer(serializers.Serializer):
+    quotation = serializers.PrimaryKeyRelatedField(
+        queryset=CommercialQuotation.objects.all(),
+    )
+    authorized_contact = serializers.PrimaryKeyRelatedField(
+        queryset=SchoolContact.objects.filter(is_active=True),
+    )
+    signed_at = serializers.DateTimeField()
+    notes = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+    )
 
 
 class OpportunityStageHistorySerializer(serializers.ModelSerializer):
