@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
+from django.utils import timezone
 from django.utils.text import slugify
 
 from catalog.models import Area, Grade, Level
@@ -778,19 +779,120 @@ class OpportunityListSerializer(serializers.ModelSerializer):
     team = CommercialTeamSummarySerializer(read_only=True)
     owner = UserSummarySerializer(read_only=True)
     is_closed = serializers.BooleanField(read_only=True)
+    next_activity = serializers.SerializerMethodField()
 
     class Meta:
         model = Opportunity
         fields = (
             "id", "title", "school", "campaign", "stage", "team", "owner",
-            "last_activity_at", "closed_at", "is_closed", "updated_at",
+            "last_activity_at", "next_activity", "closed_at", "is_closed",
+            "updated_at",
         )
 
     def get_school(self, obj):
         return {"id": obj.school_id, "name": obj.school.name}
 
     def get_campaign(self, obj):
-        return {"id": obj.campaign_id, "code": obj.campaign.code, "name": obj.campaign.name, "year": obj.campaign.year}
+        return {
+            "id": obj.campaign_id,
+            "code": obj.campaign.code,
+            "name": obj.campaign.name,
+            "year": obj.campaign.year,
+        }
+
+    def get_next_activity(self, obj):
+        links = getattr(
+            obj,
+            "prefetched_next_activity_links",
+            None,
+        )
+
+        if links is None:
+            links = (
+                obj.work_item_links
+                .select_related("task", "event", "reminder")
+                .all()
+            )
+
+        now = timezone.now()
+        candidates = []
+
+        for link in links:
+            if link.task_id:
+                task = link.task
+
+                if task.status in {"completed", "cancelled"}:
+                    continue
+
+                future_dates = [
+                    value
+                    for value in (
+                        task.start_at,
+                        task.due_at,
+                        task.reminder_at,
+                    )
+                    if value is not None and value >= now
+                ]
+
+                if not future_dates:
+                    continue
+
+                candidates.append(
+                    {
+                        "type": "task",
+                        "type_display": "Tarea",
+                        "id": task.id,
+                        "title": task.title,
+                        "scheduled_at": min(future_dates),
+                        "status": task.status,
+                    }
+                )
+                continue
+
+            if link.event_id:
+                event = link.event
+
+                if event.start_at < now:
+                    continue
+
+                candidates.append(
+                    {
+                        "type": "event",
+                        "type_display": "Evento",
+                        "id": event.id,
+                        "title": event.title,
+                        "scheduled_at": event.start_at,
+                        "status": None,
+                    }
+                )
+                continue
+
+            reminder = link.reminder
+
+            if reminder.status in {"completed", "dismissed"}:
+                continue
+
+            if reminder.remind_at < now:
+                continue
+
+            candidates.append(
+                {
+                    "type": "reminder",
+                    "type_display": "Recordatorio",
+                    "id": reminder.id,
+                    "title": reminder.title,
+                    "scheduled_at": reminder.remind_at,
+                    "status": reminder.status,
+                }
+            )
+
+        if not candidates:
+            return None
+
+        return min(
+            candidates,
+            key=lambda candidate: candidate["scheduled_at"],
+        )
 
 
 class OpportunityDetailSerializer(OpportunityListSerializer):
