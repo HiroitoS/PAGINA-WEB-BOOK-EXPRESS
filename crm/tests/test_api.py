@@ -216,6 +216,56 @@ class CRMApiTests(TestCase):
             "task",
         )
 
+    def test_advisor_can_create_opportunity_from_school_defaults(self):
+        school = School.objects.create(
+            name="Colegio creación automática",
+            team=self.team,
+            owner=self.advisor,
+            created_by=self.admin,
+        )
+        contact = SchoolContact.objects.create(
+            school=school,
+            full_name="Directora creación automática",
+            position="Directora",
+            is_primary=True,
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+        response = self.client.post(
+            reverse("crm:opportunity-list"),
+            {"school": school.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            response.data["title"],
+            f"{self.campaign.name} - {school.name}",
+        )
+        self.assertEqual(response.data["campaign"]["id"], self.campaign.id)
+        self.assertEqual(response.data["pipeline"]["id"], self.pipeline.id)
+        self.assertEqual(
+            response.data["primary_contact"]["id"],
+            contact.id,
+        )
+        self.assertEqual(response.data["owner"]["id"], self.advisor.id)
+        self.assertEqual(response.data["team"]["id"], self.team.id)
+
+    def test_opportunity_api_rejects_open_duplicate(self):
+        self.authenticate(self.advisor)
+        response = self.client.post(
+            reverse("crm:opportunity-list"),
+            {"school": self.school.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(
+            "Ya existe una oportunidad abierta",
+            str(response.data),
+        )
+
     def test_advisor_can_move_own_opportunity_to_open_stage(self):
         self.authenticate(self.advisor)
         response = self.client.post(
