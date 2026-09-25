@@ -108,7 +108,7 @@ class CRMApiTests(TestCase):
         self.opportunity.refresh_from_db()
         self.assertIsNotNone(self.opportunity.last_activity_at)
 
-    def test_advisor_can_register_activity_directly_from_school_contact(self):
+    def test_school_contact_activity_auto_links_unique_open_opportunity(self):
         contact = SchoolContact.objects.create(
             school=self.school,
             full_name="Directora contacto CRM",
@@ -134,10 +134,53 @@ class CRMApiTests(TestCase):
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["school_id"], self.school.id)
-        self.assertIsNone(response.data["opportunity_id"])
+        self.assertEqual(
+            response.data["opportunity_id"],
+            self.opportunity.id,
+        )
         self.assertEqual(response.data["contact"]["id"], contact.id)
 
-    def test_advisor_can_create_school_task_linked_to_contact_without_opportunity(
+        self.opportunity.refresh_from_db()
+        self.assertIsNotNone(self.opportunity.last_activity_at)
+
+    def test_school_activity_does_not_guess_between_open_opportunities(self):
+        other_campaign = Campaign.objects.create(
+            code="API-2028",
+            name="Campaña API 2028",
+            year=2028,
+            status=Campaign.Status.PLANNING,
+            created_by=self.admin,
+        )
+        Opportunity.objects.create(
+            title="Oportunidad API 2028",
+            school=self.school,
+            campaign=other_campaign,
+            pipeline=self.pipeline,
+            stage=self.initial_stage,
+            team=self.team,
+            owner=self.advisor,
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+
+        response = self.client.post(
+            reverse(
+                "crm:school-activities",
+                args=[self.school.id],
+            ),
+            {
+                "activity_type": "call",
+                "summary": "Llamada general al colegio",
+                "result": "Se coordinó una nueva conversación.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertIsNone(response.data["opportunity_id"])
+
+    def test_school_task_auto_links_unique_open_opportunity(
         self,
     ):
         contact = SchoolContact.objects.create(
@@ -169,7 +212,7 @@ class CRMApiTests(TestCase):
             CRMWorkItemLink.objects.filter(
                 school=self.school,
                 contact=contact,
-                opportunity__isnull=True,
+                opportunity=self.opportunity,
                 task_id=response.data["id"],
             ).exists()
         )
@@ -214,6 +257,10 @@ class CRMApiTests(TestCase):
         self.assertEqual(
             response.data["results"][0]["type"],
             "task",
+        )
+        self.assertEqual(
+            response.data["results"][0]["opportunity_id"],
+            self.opportunity.id,
         )
 
     def test_advisor_can_create_opportunity_from_school_defaults(self):
