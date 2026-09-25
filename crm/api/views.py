@@ -1,5 +1,5 @@
 from django.db import transaction
-from django.db.models import Count, Q
+from django.db.models import Count, Prefetch, Q
 from django.utils import timezone
 
 from rest_framework import serializers, status, viewsets
@@ -13,6 +13,7 @@ from crm.models import (
     Campaign,
     CommercialTeam,
     CommercialTeamMembership,
+    CRMWorkItemLink,
     MarketEditorial,
     Pipeline,
     PipelineStage,
@@ -1286,8 +1287,59 @@ class OpportunityViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "patch", "head", "options"]
 
     def get_queryset(self):
-        queryset = visible_opportunities_queryset(self.request.user).select_related(
-            "school", "campaign", "pipeline", "stage", "primary_contact", "team", "owner", "created_by", "closed_by"
+        now = timezone.now()
+
+        next_activity_links = (
+            CRMWorkItemLink.objects
+            .filter(
+                (
+                    Q(
+                        task__isnull=False,
+                        task__status__in=[
+                            "pending",
+                            "in_progress",
+                            "waiting",
+                        ],
+                    )
+                    & (
+                        Q(task__start_at__gte=now)
+                        | Q(task__due_at__gte=now)
+                        | Q(task__reminder_at__gte=now)
+                    )
+                )
+                | Q(
+                    event__isnull=False,
+                    event__start_at__gte=now,
+                )
+                | Q(
+                    reminder__isnull=False,
+                    reminder__status__in=["pending", "seen"],
+                    reminder__remind_at__gte=now,
+                )
+            )
+            .select_related("task", "event", "reminder")
+        )
+
+        queryset = (
+            visible_opportunities_queryset(self.request.user)
+            .select_related(
+                "school",
+                "campaign",
+                "pipeline",
+                "stage",
+                "primary_contact",
+                "team",
+                "owner",
+                "created_by",
+                "closed_by",
+            )
+            .prefetch_related(
+                Prefetch(
+                    "work_item_links",
+                    queryset=next_activity_links,
+                    to_attr="prefetched_next_activity_links",
+                )
+            )
         )
         search = self.request.query_params.get("search", "").strip()
         school = self.request.query_params.get("school")
