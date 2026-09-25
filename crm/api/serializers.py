@@ -12,6 +12,9 @@ from crm.models import (
     CommercialActivity,
     CommercialQuotation,
     CommercialQuotationItem,
+    CommercialProjection,
+    CommercialProjectionGrade,
+    CommercialProjectionItem,
     CommercialTeam,
     CommercialTeamMembership,
     CRMWorkItemLink,
@@ -968,6 +971,245 @@ class OpportunityStageChangeSerializer(serializers.Serializer):
 class OpportunityReopenSerializer(serializers.Serializer):
     stage = serializers.PrimaryKeyRelatedField(queryset=PipelineStage.objects.filter(is_active=True, category=PipelineStage.Category.OPEN))
     reason = serializers.CharField(allow_blank=False, trim_whitespace=True)
+
+
+class CommercialProjectionGradeSerializer(serializers.ModelSerializer):
+    service = serializers.SerializerMethodField()
+    grade = GradeSummarySerializer(read_only=True)
+
+    class Meta:
+        model = CommercialProjectionGrade
+        fields = (
+            "id",
+            "service",
+            "grade",
+            "level_name_snapshot",
+            "grade_name_snapshot",
+            "section_count",
+            "student_count",
+        )
+
+    def get_service(self, obj):
+        return {
+            "id": obj.service_id,
+            "level": {
+                "id": obj.service.level_id,
+                "name": obj.service.level.name,
+            },
+        }
+
+
+class CommercialProjectionItemSerializer(serializers.ModelSerializer):
+    product = serializers.SerializerMethodField()
+    grade_line_id = serializers.IntegerField(read_only=True)
+    subtotal = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CommercialProjectionItem
+        fields = (
+            "id",
+            "grade_line_id",
+            "product",
+            "product_name_snapshot",
+            "provider_name_snapshot",
+            "level_name_snapshot",
+            "grade_name_snapshot",
+            "area_name_snapshot",
+            "quantity",
+            "unit_price",
+            "subtotal",
+            "price_year_snapshot",
+            "price_campaign_snapshot",
+        )
+
+    def get_product(self, obj):
+        return {
+            "id": obj.product_id,
+            "name": obj.product.name,
+            "provider": {
+                "id": obj.product.provider_id,
+                "name": obj.product.provider.name,
+            },
+        }
+
+    def get_subtotal(self, obj):
+        return f"{obj.subtotal:.2f}"
+
+
+class CommercialProjectionSerializer(serializers.ModelSerializer):
+    grades = CommercialProjectionGradeSerializer(
+        many=True,
+        read_only=True,
+    )
+    items = CommercialProjectionItemSerializer(
+        many=True,
+        read_only=True,
+    )
+    created_by = UserSummarySerializer(read_only=True)
+    total_students = serializers.SerializerMethodField()
+    total_amount = serializers.SerializerMethodField()
+    editorial_totals = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CommercialProjection
+        fields = (
+            "id",
+            "version",
+            "is_current",
+            "school_name_snapshot",
+            "campaign_name_snapshot",
+            "campaign_year_snapshot",
+            "notes",
+            "total_students",
+            "total_amount",
+            "editorial_totals",
+            "grades",
+            "items",
+            "created_by",
+            "created_at",
+            "updated_at",
+        )
+
+    def get_total_students(self, obj):
+        return sum(
+            grade.student_count
+            for grade in obj.grades.all()
+        )
+
+    def get_total_amount(self, obj):
+        total = sum(
+            (item.subtotal for item in obj.items.all()),
+            0,
+        )
+        return f"{total:.2f}"
+
+    def get_editorial_totals(self, obj):
+        totals = {}
+
+        for item in obj.items.all():
+            provider = item.provider_name_snapshot
+            totals[provider] = totals.get(provider, 0) + item.subtotal
+
+        return [
+            {
+                "editorial": provider,
+                "amount": f"{amount:.2f}",
+            }
+            for provider, amount in sorted(totals.items())
+        ]
+
+
+class CommercialProjectionGradeInputSerializer(serializers.Serializer):
+    service = serializers.PrimaryKeyRelatedField(
+        queryset=SchoolEducationalService.objects.filter(is_active=True),
+    )
+    grade = serializers.PrimaryKeyRelatedField(
+        queryset=Grade.objects.filter(is_active=True),
+    )
+    section_count = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        allow_null=True,
+    )
+    student_count = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        allow_null=True,
+    )
+
+
+class CommercialProjectionItemInputSerializer(serializers.Serializer):
+    service = serializers.PrimaryKeyRelatedField(
+        queryset=SchoolEducationalService.objects.filter(is_active=True),
+    )
+    grade = serializers.PrimaryKeyRelatedField(
+        queryset=Grade.objects.filter(is_active=True),
+    )
+    product = serializers.PrimaryKeyRelatedField(
+        queryset=Product.objects.filter(is_active=True),
+    )
+    quantity = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        allow_null=True,
+    )
+
+
+class CommercialProjectionCreateSerializer(serializers.Serializer):
+    grades = CommercialProjectionGradeInputSerializer(
+        many=True,
+        allow_empty=False,
+    )
+    items = CommercialProjectionItemInputSerializer(
+        many=True,
+        required=False,
+        default=list,
+    )
+    notes = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+
+    def validate(self, attrs):
+        grades = attrs["grades"]
+        items = attrs.get("items", [])
+
+        grade_keys = [
+            (grade["service"].id, grade["grade"].id)
+            for grade in grades
+        ]
+
+        if len(grade_keys) != len(set(grade_keys)):
+            raise serializers.ValidationError(
+                {
+                    "grades": (
+                        "No puedes registrar dos veces "
+                        "el mismo nivel y grado."
+                    )
+                }
+            )
+
+        item_keys = [
+            (
+                item["service"].id,
+                item["grade"].id,
+                item["product"].id,
+            )
+            for item in items
+        ]
+
+        if len(item_keys) != len(set(item_keys)):
+            raise serializers.ValidationError(
+                {
+                    "items": (
+                        "No puedes registrar dos veces el mismo "
+                        "producto en el mismo nivel y grado."
+                    )
+                }
+            )
+
+        unknown_grade = next(
+            (
+                item
+                for item in items
+                if (item["service"].id, item["grade"].id)
+                not in set(grade_keys)
+            ),
+            None,
+        )
+
+        if unknown_grade is not None:
+            raise serializers.ValidationError(
+                {
+                    "items": (
+                        "Cada producto debe pertenecer a un nivel "
+                        "y grado incluidos en la proyección."
+                    )
+                }
+            )
+
+        return attrs
 
 
 class CommercialQuotationItemSerializer(serializers.ModelSerializer):
