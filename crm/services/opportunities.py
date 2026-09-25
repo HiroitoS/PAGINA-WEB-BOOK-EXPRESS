@@ -168,10 +168,17 @@ def create_opportunity(
     owner=None,
     notes="",
 ):
+    # Bloqueamos únicamente la fila de School.
+    #
+    # team y owner son relaciones opcionales. En PostgreSQL, combinar
+    # select_for_update() con select_related() sobre ForeignKey nullable
+    # genera OUTER JOIN y provoca:
+    # "FOR UPDATE cannot be applied to the nullable side of an outer join".
+    #
+    # Las relaciones se cargarán de forma diferida cuando se consulten.
     locked_school = (
         School.objects
         .select_for_update()
-        .select_related("team", "owner")
         .get(pk=school.pk)
     )
 
