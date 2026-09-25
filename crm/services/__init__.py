@@ -1,3 +1,4 @@
+from .adoptions import AdoptionError, confirm_adoption
 from .activities import CommercialActivityError, record_commercial_activity
 from .opportunities import (
     OpportunityTransitionError,
@@ -22,6 +23,12 @@ from .work_items import (
 )
 
 __all__ = [
+    "AdoptionError",
+    "confirm_adoption",
+    "CommercialQuotationError",
+    "create_commercial_quotation",
+    "send_commercial_quotation",
+    "accept_commercial_quotation",
     "CommercialActivityError",
     "record_commercial_activity",
     "OpportunityTransitionError",
@@ -40,3 +47,10 @@ __all__ = [
     "link_work_item_to_school",
     "link_work_item_to_opportunity",
 ]
+
+from .quotations import (
+    CommercialQuotationError,
+    accept_commercial_quotation,
+    create_commercial_quotation,
+    send_commercial_quotation,
+)
