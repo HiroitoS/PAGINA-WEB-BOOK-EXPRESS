@@ -39,17 +39,20 @@ def confirm_adoption(
     locked_quotation = (
         CommercialQuotation.objects
         .select_for_update()
-        .select_related(
-            "opportunity__school",
-            "opportunity__campaign",
-            "opportunity__pipeline",
-            "opportunity__stage",
-            "opportunity__owner",
-        )
         .get(pk=quotation.pk)
     )
 
-    opportunity = locked_quotation.opportunity
+    opportunity = (
+        locked_quotation.opportunity.__class__.objects
+        .select_for_update()
+        .select_related(
+            "school",
+            "campaign",
+            "pipeline",
+            "stage",
+        )
+        .get(pk=locked_quotation.opportunity_id)
+    )
 
     if locked_quotation.status != CommercialQuotation.Status.ACCEPTED:
         raise AdoptionError(
