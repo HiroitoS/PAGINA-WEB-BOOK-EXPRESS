@@ -118,7 +118,7 @@ def _resolve_population_values(
     return resolved_section_count, resolved_student_count
 
 
-def _resolve_projection_price(*, product, campaign):
+def resolve_projection_price(*, product, campaign):
     prices = ProductPrice.objects.filter(
         product=product,
         year=campaign.year,
@@ -323,7 +323,7 @@ def create_commercial_projection_revision(
                 field_label="Cantidad proyectada",
             )
 
-        price = _resolve_projection_price(
+        price = resolve_projection_price(
             product=product,
             campaign=locked_opportunity.campaign,
         )
