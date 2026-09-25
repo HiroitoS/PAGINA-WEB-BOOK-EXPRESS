@@ -4,6 +4,11 @@ from .campaign import Campaign
 from .opportunity import Opportunity, OpportunityStageHistory
 from .pipeline import Pipeline, PipelineStage
 from .quotation import CommercialQuotation, CommercialQuotationItem
+from .projection import (
+    CommercialProjection,
+    CommercialProjectionGrade,
+    CommercialProjectionItem,
+)
 from .school import (
     School,
     SchoolContact,
@@ -41,6 +46,9 @@ __all__ = [
     "OpportunityStageHistory",
     "CommercialQuotation",
     "CommercialQuotationItem",
+    "CommercialProjection",
+    "CommercialProjectionGrade",
+    "CommercialProjectionItem",
     "CommercialActivity",
     "CRMWorkItemLink",
     "MarketEditorial",
