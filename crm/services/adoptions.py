@@ -7,6 +7,7 @@ from crm.models import (
     Adoption,
     AdoptionItem,
     CommercialQuotation,
+    Opportunity,
     PipelineStage,
 )
 
@@ -43,7 +44,7 @@ def confirm_adoption(
     )
 
     opportunity = (
-        locked_quotation.opportunity.__class__.objects
+        Opportunity.objects
         .select_for_update()
         .select_related(
             "school",
