@@ -79,6 +79,12 @@ def record_commercial_activity(
 
     activity_date = occurred_at or timezone.now()
 
+    if activity_date > timezone.now():
+        raise CommercialActivityError(
+            "La fecha de una actividad realizada no puede estar en el futuro. "
+            "Programa la acción futura en ToDo / Agenda."
+        )
+
     activity = CommercialActivity(
         school=resolved_school,
         opportunity=locked_opportunity,
