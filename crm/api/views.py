@@ -42,10 +42,12 @@ from crm.services import (
     AdoptionError,
     CRMPlanningError,
     CommercialActivityError,
+    CommercialProjectionError,
     CommercialQuotationError,
     OpportunityTransitionError,
     accept_commercial_quotation,
     confirm_adoption,
+    create_commercial_projection_revision,
     create_commercial_quotation,
     create_opportunity,
     create_opportunity_event,
@@ -67,6 +69,8 @@ from .serializers import (
     CampaignSerializer,
     CommercialActivityCreateSerializer,
     CommercialActivitySerializer,
+    CommercialProjectionCreateSerializer,
+    CommercialProjectionSerializer,
     CommercialQuotationCreateSerializer,
     CommercialQuotationSerializer,
     CommercialTeamDetailSerializer,
@@ -1472,6 +1476,130 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         except OpportunityTransitionError as exc:
             _raise_service_validation_error(exc)
         return Response(OpportunityDetailSerializer(opportunity).data)
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="projection-base",
+    )
+    def projection_base(self, request, pk=None):
+        opportunity = self.get_object()
+
+        services = (
+            opportunity.school.educational_services
+            .filter(is_active=True)
+            .select_related("level")
+            .prefetch_related(
+                "population_records__details__grade",
+            )
+            .order_by("level__name", "id")
+        )
+
+        return Response(
+            {
+                "campaign": CampaignSerializer(
+                    opportunity.campaign
+                ).data,
+                "services": SchoolEducationalServiceSerializer(
+                    services,
+                    many=True,
+                ).data,
+            }
+        )
+
+    @action(
+        detail=True,
+        methods=["get", "post"],
+        url_path="projection",
+    )
+    def projection(self, request, pk=None):
+        opportunity = self.get_object()
+
+        if request.method == "GET":
+            projection = (
+                opportunity.projections
+                .filter(is_current=True)
+                .select_related("created_by")
+                .prefetch_related(
+                    "grades__service__level",
+                    "grades__grade",
+                    "items__grade_line",
+                    "items__product__provider",
+                    "items__product__level",
+                    "items__product__grade",
+                    "items__product__area",
+                )
+                .first()
+            )
+
+            if projection is None:
+                return Response(None)
+
+            return Response(
+                CommercialProjectionSerializer(
+                    projection
+                ).data
+            )
+
+        if not _user_can_manage_visible_opportunity(
+            request.user,
+            opportunity,
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para modificar la "
+                "proyección de esta oportunidad."
+            )
+
+        serializer = CommercialProjectionCreateSerializer(
+            data=request.data
+        )
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            projection = create_commercial_projection_revision(
+                opportunity=opportunity,
+                actor=request.user,
+                grade_lines=serializer.validated_data["grades"],
+                items=serializer.validated_data.get("items", []),
+                notes=serializer.validated_data.get("notes", ""),
+            )
+        except CommercialProjectionError as exc:
+            _raise_service_validation_error(exc)
+
+        return Response(
+            CommercialProjectionSerializer(projection).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="projection-history",
+    )
+    def projection_history(self, request, pk=None):
+        opportunity = self.get_object()
+
+        queryset = (
+            opportunity.projections
+            .select_related("created_by")
+            .prefetch_related(
+                "grades__service__level",
+                "grades__grade",
+                "items__grade_line",
+                "items__product__provider",
+                "items__product__level",
+                "items__product__grade",
+                "items__product__area",
+            )
+            .order_by("-version")
+        )
+
+        return Response(
+            CommercialProjectionSerializer(
+                queryset,
+                many=True,
+            ).data
+        )
 
     @action(detail=True, methods=["get", "post"], url_path="quotations")
     def quotations(self, request, pk=None):
