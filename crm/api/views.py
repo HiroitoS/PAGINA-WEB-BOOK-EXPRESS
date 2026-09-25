@@ -9,6 +9,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.permissions import usuario_es_administrador
+from catalog.models import Grade, Product
 from crm.models import (
     Adoption,
     Campaign,
@@ -59,6 +60,7 @@ from crm.services import (
     record_commercial_activity,
     send_commercial_quotation,
     reopen_opportunity,
+    resolve_projection_price,
     transition_opportunity_stage,
 )
 
@@ -1504,6 +1506,164 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                     services,
                     many=True,
                 ).data,
+            }
+        )
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="projection-products",
+    )
+    def projection_products(self, request, pk=None):
+        opportunity = self.get_object()
+
+        service_id = request.query_params.get("service")
+        grade_id = request.query_params.get("grade")
+        search = (request.query_params.get("search") or "").strip()
+
+        if not service_id or not grade_id:
+            raise serializers.ValidationError(
+                {
+                    "detail": (
+                        "Debes indicar el nivel educativo y el grado "
+                        "para consultar productos."
+                    )
+                }
+            )
+
+        service = (
+            opportunity.school.educational_services
+            .filter(pk=service_id, is_active=True)
+            .select_related("level")
+            .first()
+        )
+
+        if service is None:
+            raise serializers.ValidationError(
+                {
+                    "service": (
+                        "El nivel educativo no pertenece al colegio "
+                        "de esta oportunidad."
+                    )
+                }
+            )
+
+        grade = Grade.objects.filter(
+            pk=grade_id,
+            is_active=True,
+        ).first()
+
+        if grade is None:
+            raise serializers.ValidationError(
+                {"grade": "El grado seleccionado no está disponible."}
+            )
+
+        products = (
+            Product.objects
+            .filter(
+                is_active=True,
+                provider__is_active=True,
+            )
+            .filter(
+                Q(level_id=service.level_id)
+                | Q(level__isnull=True),
+                Q(grade_id=grade.id)
+                | Q(grade__isnull=True),
+            )
+            .select_related(
+                "provider",
+                "level",
+                "grade",
+                "area",
+                "series",
+            )
+            .order_by("provider__name", "name", "id")
+        )
+
+        if search:
+            products = products.filter(
+                Q(name__icontains=search)
+                | Q(provider__name__icontains=search)
+                | Q(area__name__icontains=search)
+                | Q(series__name__icontains=search)
+            )
+
+        choices = []
+
+        for product in products[:150]:
+            try:
+                price = resolve_projection_price(
+                    product=product,
+                    campaign=opportunity.campaign,
+                )
+            except CommercialProjectionError:
+                continue
+
+            choices.append(
+                {
+                    "id": product.id,
+                    "name": product.name,
+                    "editorial": {
+                        "id": product.provider_id,
+                        "name": product.provider.name,
+                    },
+                    "level": (
+                        {
+                            "id": product.level_id,
+                            "name": product.level.name,
+                        }
+                        if product.level_id
+                        else None
+                    ),
+                    "grade": (
+                        {
+                            "id": product.grade_id,
+                            "name": product.grade.name,
+                        }
+                        if product.grade_id
+                        else None
+                    ),
+                    "area": (
+                        {
+                            "id": product.area_id,
+                            "name": product.area.name,
+                        }
+                        if product.area_id
+                        else None
+                    ),
+                    "series": (
+                        {
+                            "id": product.series_id,
+                            "name": product.series.name,
+                        }
+                        if product.series_id
+                        else None
+                    ),
+                    "unit_price": str(price.price),
+                    "price_year": price.year,
+                    "price_campaign": price.campaign,
+                }
+            )
+
+        return Response(
+            {
+                "service": {
+                    "id": service.id,
+                    "level": {
+                        "id": service.level_id,
+                        "name": service.level.name,
+                    },
+                },
+                "grade": {
+                    "id": grade.id,
+                    "name": grade.name,
+                },
+                "campaign": {
+                    "id": opportunity.campaign_id,
+                    "name": opportunity.campaign.name,
+                    "year": opportunity.campaign.year,
+                },
+                "results": choices,
             }
         )
 
