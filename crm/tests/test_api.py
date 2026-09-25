@@ -343,6 +343,63 @@ class CRMApiTests(TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertTrue(CRMWorkItemLink.objects.filter(opportunity=self.opportunity, task_id=response.data["id"]).exists())
 
+    def test_opportunity_list_exposes_nearest_next_activity(self):
+        self.authenticate(self.advisor)
+
+        later_at = timezone.now() + timedelta(days=3)
+        sooner_at = timezone.now() + timedelta(days=1)
+
+        task_response = self.client.post(
+            reverse(
+                "crm:opportunity-create-task",
+                args=[self.opportunity.id],
+            ),
+            {
+                "title": "Preparar propuesta futura",
+                "due_at": later_at.isoformat(),
+            },
+            format="json",
+        )
+        event_response = self.client.post(
+            reverse(
+                "crm:opportunity-create-event",
+                args=[self.opportunity.id],
+            ),
+            {
+                "title": "Reunión con dirección",
+                "start_at": sooner_at.isoformat(),
+            },
+            format="json",
+        )
+
+        self.assertEqual(task_response.status_code, 201)
+        self.assertEqual(event_response.status_code, 201)
+
+        response = self.client.get(
+            reverse("crm:opportunity-list"),
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        opportunity_data = next(
+            item
+            for item in response.data["results"]
+            if item["id"] == self.opportunity.id
+        )
+
+        self.assertEqual(
+            opportunity_data["next_activity"]["type"],
+            "event",
+        )
+        self.assertEqual(
+            opportunity_data["next_activity"]["title"],
+            "Reunión con dirección",
+        )
+        self.assertEqual(
+            opportunity_data["next_activity"]["id"],
+            event_response.data["id"],
+        )
+
     def test_school_detail_exposes_services_population_and_segment(self):
         level = Level.objects.create(
             name="Primaria CRM API",
