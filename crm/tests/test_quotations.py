@@ -20,6 +20,7 @@ from crm.services import (
     approve_commercial_quotation_discount,
     create_commercial_quotation_from_projection,
     send_commercial_quotation,
+    update_commercial_quotation_from_projection,
 )
 
 
@@ -313,3 +314,68 @@ class CRMQuotationFromProjectionTests(TestCase):
                     }
                 ],
             )
+
+    def test_draft_can_be_edited_without_creating_new_version(self):
+        quotation = create_commercial_quotation_from_projection(
+            opportunity=self.opportunity,
+            actor=self.advisor,
+        )
+
+        updated = update_commercial_quotation_from_projection(
+            quotation=quotation,
+            item_adjustments=[
+                {
+                    "projection_item": self.projection_item,
+                    "quantity": 15,
+                    "school_discount_percent": Decimal("25.00"),
+                    "parent_price": Decimal("95.00"),
+                    "school_commission": Decimal("5.00"),
+                }
+            ],
+            notes="Ajuste comercial de prueba.",
+        )
+
+        item = updated.items.get()
+
+        self.assertEqual(updated.pk, quotation.pk)
+        self.assertEqual(updated.version, 1)
+        self.assertEqual(
+            self.opportunity.quotations.count(),
+            1,
+        )
+        self.assertEqual(item.quantity, 15)
+        self.assertEqual(item.school_discount_percent, Decimal("25.00"))
+        self.assertEqual(item.school_price, Decimal("75.00"))
+        self.assertEqual(item.parent_price, Decimal("95.00"))
+        self.assertEqual(item.school_commission, Decimal("5.00"))
+        self.assertEqual(updated.notes, "Ajuste comercial de prueba.")
+        self.assertTrue(updated.requires_discount_approval)
+        self.assertEqual(
+            updated.discount_approval_status,
+            CommercialQuotation.DiscountApprovalStatus.PENDING,
+        )
+
+    def test_sent_quotation_cannot_be_edited(self):
+        quotation = create_commercial_quotation_from_projection(
+            opportunity=self.opportunity,
+            actor=self.advisor,
+        )
+        sent = send_commercial_quotation(
+            quotation=quotation,
+            actor=self.advisor,
+        )
+
+        with self.assertRaisesMessage(
+            CommercialQuotationError,
+            "Solo una cotización en borrador puede editarse.",
+        ):
+            update_commercial_quotation_from_projection(
+                quotation=sent,
+                item_adjustments=[
+                    {
+                        "projection_item": self.projection_item,
+                        "quantity": 10,
+                    }
+                ],
+            )
+
