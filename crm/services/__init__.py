@@ -23,7 +23,9 @@ from .projections import (
 from .quotations import (
     CommercialQuotationError,
     accept_commercial_quotation,
+    approve_commercial_quotation_discount,
     create_commercial_quotation,
+    create_commercial_quotation_from_projection,
     send_commercial_quotation,
 )
 from .work_items import (
@@ -41,6 +43,8 @@ __all__ = [
     "resolve_projection_price",
     "CommercialQuotationError",
     "create_commercial_quotation",
+    "create_commercial_quotation_from_projection",
+    "approve_commercial_quotation_discount",
     "send_commercial_quotation",
     "accept_commercial_quotation",
     "CommercialActivityError",
