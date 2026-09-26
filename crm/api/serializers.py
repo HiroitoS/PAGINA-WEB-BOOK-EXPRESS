@@ -1229,8 +1229,12 @@ class CommercialQuotationItemSerializer(serializers.ModelSerializer):
             "pvp",
             "supplier_cost",
             "school_price",
+            "school_discount_percent",
             "parent_price",
             "school_commission",
+            "price_year_snapshot",
+            "price_campaign_snapshot",
+            "uses_reference_price",
         )
 
     def get_product(self, obj):
@@ -1245,6 +1249,11 @@ class CommercialQuotationSerializer(serializers.ModelSerializer):
         source="get_status_display",
         read_only=True,
     )
+    discount_approval_status_display = serializers.CharField(
+        source="get_discount_approval_status_display",
+        read_only=True,
+    )
+    source_projection = serializers.SerializerMethodField()
     items = CommercialQuotationItemSerializer(
         many=True,
         read_only=True,
@@ -1252,6 +1261,7 @@ class CommercialQuotationSerializer(serializers.ModelSerializer):
     created_by = UserSummarySerializer(read_only=True)
     sent_by = UserSummarySerializer(read_only=True)
     accepted_by = UserSummarySerializer(read_only=True)
+    discount_approved_by = UserSummarySerializer(read_only=True)
 
     class Meta:
         model = CommercialQuotation
@@ -1260,9 +1270,16 @@ class CommercialQuotationSerializer(serializers.ModelSerializer):
             "version",
             "status",
             "status_display",
+            "source_projection",
             "school_name_snapshot",
             "campaign_name_snapshot",
             "notes",
+            "requires_discount_approval",
+            "discount_approval_status",
+            "discount_approval_status_display",
+            "discount_approved_at",
+            "discount_approved_by",
+            "discount_approval_note",
             "sent_at",
             "sent_by",
             "accepted_at",
@@ -1272,6 +1289,16 @@ class CommercialQuotationSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         )
+
+    def get_source_projection(self, obj):
+        if obj.source_projection_id is None:
+            return None
+
+        return {
+            "id": obj.source_projection_id,
+            "version": obj.source_projection.version,
+            "campaign_year": obj.source_projection.campaign_year_snapshot,
+        }
 
 
 class CommercialQuotationItemCreateSerializer(serializers.Serializer):
@@ -1314,6 +1341,61 @@ class CommercialQuotationCreateSerializer(serializers.Serializer):
         allow_empty=False,
     )
     notes = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+
+
+class CommercialQuotationProjectionItemAdjustmentSerializer(
+    serializers.Serializer
+):
+    projection_item = serializers.PrimaryKeyRelatedField(
+        queryset=CommercialProjectionItem.objects.all(),
+    )
+    quantity = serializers.IntegerField(
+        min_value=1,
+        required=False,
+    )
+    school_discount_percent = serializers.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        min_value=0,
+        max_value=100,
+        required=False,
+    )
+    parent_price = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        min_value=0,
+        required=False,
+    )
+    school_commission = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        min_value=0,
+        required=False,
+    )
+
+
+class CommercialQuotationFromProjectionSerializer(serializers.Serializer):
+    items = CommercialQuotationProjectionItemAdjustmentSerializer(
+        many=True,
+        required=False,
+        allow_empty=True,
+        default=list,
+    )
+    notes = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+
+
+class CommercialQuotationDiscountApprovalSerializer(
+    serializers.Serializer
+):
+    note = serializers.CharField(
         required=False,
         allow_blank=True,
         default="",
