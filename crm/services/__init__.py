@@ -27,6 +27,7 @@ from .quotations import (
     create_commercial_quotation,
     create_commercial_quotation_from_projection,
     send_commercial_quotation,
+    update_commercial_quotation_from_projection,
 )
 from .work_items import (
     CRMWorkItemLinkError,
@@ -44,6 +45,7 @@ __all__ = [
     "CommercialQuotationError",
     "create_commercial_quotation",
     "create_commercial_quotation_from_projection",
+    "update_commercial_quotation_from_projection",
     "approve_commercial_quotation_discount",
     "send_commercial_quotation",
     "accept_commercial_quotation",
