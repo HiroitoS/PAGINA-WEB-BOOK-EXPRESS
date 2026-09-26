@@ -8,43 +8,43 @@ PIPELINE_CODE = "BOOK-EXPRESS-COMMERCIAL"
 
 DEFAULT_STAGES = [
     {
-        "code": "por_contactar",
-        "name": "Por contactar",
+        "code": "proyeccion_ventas",
+        "name": "Proyección de ventas",
         "order": 10,
         "category": PipelineStage.Category.OPEN,
         "is_initial": True,
     },
     {
-        "code": "contactado",
-        "name": "Contactado",
+        "code": "cita_presentacion",
+        "name": "Cita / presentación",
         "order": 20,
         "category": PipelineStage.Category.OPEN,
         "is_initial": False,
     },
     {
-        "code": "evaluacion",
-        "name": "En evaluación",
+        "code": "decisor_influenciador",
+        "name": "Decisor e influenciador",
         "order": 30,
         "category": PipelineStage.Category.OPEN,
         "is_initial": False,
     },
     {
-        "code": "propuesta_negociacion",
-        "name": "Propuesta / negociación",
+        "code": "cotizacion_enviada",
+        "name": "Cotización enviada",
         "order": 40,
         "category": PipelineStage.Category.OPEN,
         "is_initial": False,
     },
     {
-        "code": "adopcion_confirmada",
-        "name": "Adopción confirmada",
+        "code": "cierre_ganado_adopcion",
+        "name": "Cierre ganado (adopción)",
         "order": 50,
         "category": PipelineStage.Category.WON,
         "is_initial": False,
     },
     {
-        "code": "no_concretada",
-        "name": "No concretada",
+        "code": "cierre_perdido",
+        "name": "Cierre perdido",
         "order": 60,
         "category": PipelineStage.Category.LOST,
         "is_initial": False,
@@ -60,10 +60,10 @@ class Command(BaseCommand):
         pipeline, created = Pipeline.objects.get_or_create(
             code=PIPELINE_CODE,
             defaults={
-                "name": "Proceso comercial Book Express",
+                "name": "Pipeline comercial Book Express",
                 "description": (
-                    "Pipeline base para el seguimiento de oportunidades "
-                    "comerciales de colegios."
+                    "Seguimiento de oportunidades comerciales por colegio "
+                    "y campaña, desde la proyección hasta el cierre."
                 ),
                 "is_active": True,
                 "is_default": False,
@@ -75,10 +75,10 @@ class Command(BaseCommand):
             is_default=True
         ).update(is_default=False)
 
-        pipeline.name = "Proceso comercial Book Express"
+        pipeline.name = "Pipeline comercial Book Express"
         pipeline.description = (
-            "Pipeline base para el seguimiento de oportunidades "
-            "comerciales de colegios."
+            "Seguimiento de oportunidades comerciales por colegio "
+            "y campaña, desde la proyección hasta el cierre."
         )
         pipeline.is_active = True
         pipeline.is_default = True
@@ -92,22 +92,35 @@ class Command(BaseCommand):
             ]
         )
 
-        # Primero liberamos la marca de etapa inicial para que una futura
-        # reconfiguración del pipeline no choque con la restricción única.
+        # Liberamos primero la marca inicial para no chocar con la
+        # restricción única mientras se sincroniza la configuración.
         pipeline.stages.filter(is_initial=True).update(is_initial=False)
 
+        # La configuración anterior ya utilizaba seis posiciones
+        # 10, 20, 30, 40, 50 y 60. Reutilizar la etapa existente por
+        # posición conserva sus PK y, por tanto, cualquier relación o
+        # historial ya registrado. Así evitamos duplicar etapas.
+        existing_by_order = {
+            stage.order: stage
+            for stage in pipeline.stages.all()
+        }
+
         for stage_data in DEFAULT_STAGES:
-            PipelineStage.objects.update_or_create(
-                pipeline=pipeline,
-                code=stage_data["code"],
-                defaults={
-                    "name": stage_data["name"],
-                    "order": stage_data["order"],
-                    "category": stage_data["category"],
-                    "is_initial": stage_data["is_initial"],
-                    "is_active": True,
-                },
-            )
+            stage = existing_by_order.get(stage_data["order"])
+
+            if stage is None:
+                stage = PipelineStage(
+                    pipeline=pipeline,
+                    order=stage_data["order"],
+                )
+
+            stage.code = stage_data["code"]
+            stage.name = stage_data["name"]
+            stage.category = stage_data["category"]
+            stage.is_initial = stage_data["is_initial"]
+            stage.is_active = True
+            stage.full_clean()
+            stage.save()
 
         action = "creado" if created else "actualizado"
         self.stdout.write(

@@ -1,6 +1,8 @@
 from django.conf import settings
+from django.core.validators import MinValueValidator
 from django.db import models
 from django.db.models import Q
+from django.utils.text import slugify
 
 from core.models import TimeStampedModel
 
@@ -15,6 +17,73 @@ class InformationSource(models.TextChoices):
     MANAGEMENT = "management", "Jefatura comercial"
     MANUAL = "manual", "Registro manual"
     OTHER = "other", "Otro"
+
+class MarketEditorial(TimeStampedModel):
+    """
+    Maestro CRM de editoriales identificadas en el mercado.
+
+    Puede representar:
+    - una editorial que Book Express comercializa;
+    - una editorial externa o competidora;
+    - una editorial detectada por un asesor y pendiente de validación.
+
+    No convierte automáticamente una editorial externa en proveedor
+    ni hace que aparezca en el catálogo público.
+    """
+
+    class VerificationStatus(models.TextChoices):
+        PENDING = "pending", "Pendiente de validación"
+        VERIFIED = "verified", "Validada"
+
+    name = models.CharField(
+        max_length=180,
+        verbose_name="Editorial",
+    )
+    normalized_name = models.CharField(
+        max_length=220,
+        unique=True,
+        editable=False,
+        verbose_name="Nombre normalizado",
+    )
+    catalog_provider = models.OneToOneField(
+        "catalog.Provider",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="crm_market_editorial",
+        verbose_name="Editorial vinculada al catálogo",
+    )
+    verification_status = models.CharField(
+        max_length=20,
+        choices=VerificationStatus.choices,
+        default=VerificationStatus.PENDING,
+        verbose_name="Estado de validación",
+    )
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name="Activa",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_crm_market_editorials",
+        verbose_name="Registrada por",
+    )
+
+    class Meta:
+        verbose_name = "Editorial del mercado"
+        verbose_name_plural = "Editoriales del mercado"
+        ordering = ["name"]
+
+    def save(self, *args, **kwargs):
+        self.name = " ".join((self.name or "").split())
+        self.normalized_name = slugify(self.name) or self.name.casefold()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.name
 
 
 class SchoolPopulationRecord(TimeStampedModel):
@@ -74,7 +143,7 @@ class SchoolPopulationRecord(TimeStampedModel):
         ]
         constraints = [
             models.UniqueConstraint(
-                fields=["service", "year"],
+                fields=["service"],
                 condition=Q(is_current=True),
                 name="crm_population_one_current",
             ),
@@ -84,6 +153,63 @@ class SchoolPopulationRecord(TimeStampedModel):
         return (
             f"{self.service} - "
             f"{self.year}: {self.student_count}"
+        )
+
+
+class SchoolPopulationDetail(TimeStampedModel):
+    """
+    Desglose vigente de un registro de población por grado.
+
+    El total del grado se deriva de secciones x alumnos por sección.
+    SchoolPopulationRecord mantiene el total consolidado e histórico.
+    """
+
+    population = models.ForeignKey(
+        SchoolPopulationRecord,
+        on_delete=models.CASCADE,
+        related_name="details",
+        verbose_name="Registro de población",
+    )
+    grade = models.ForeignKey(
+        "catalog.Grade",
+        on_delete=models.PROTECT,
+        related_name="crm_school_population_details",
+        verbose_name="Grado",
+    )
+    section_count = models.PositiveSmallIntegerField(
+        validators=[MinValueValidator(1)],
+        verbose_name="Número de secciones",
+    )
+    students_per_section = models.PositiveSmallIntegerField(
+        validators=[MinValueValidator(1)],
+        verbose_name="Alumnos por sección",
+    )
+
+    class Meta:
+        verbose_name = "Detalle de población por grado"
+        verbose_name_plural = "Detalles de población por grado"
+        ordering = ["grade__order", "grade__name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["population", "grade"],
+                name="crm_population_unique_grade",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["population", "grade"],
+                name="crm_population_grade_idx",
+            ),
+        ]
+
+    @property
+    def student_count(self):
+        return self.section_count * self.students_per_section
+
+    def __str__(self):
+        return (
+            f"{self.population.service} - "
+            f"{self.grade.name}: {self.student_count}"
         )
 
 
@@ -126,11 +252,26 @@ class SchoolEditorialUsage(TimeStampedModel):
         related_name="crm_school_editorial_usages",
         verbose_name="Área",
     )
+    product_name = models.CharField(
+        max_length=250,
+        blank=True,
+        verbose_name="Producto / serie observada",
+    )
+    editorial = models.ForeignKey(
+        MarketEditorial,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="school_usages",
+        verbose_name="Editorial",
+    )
     provider = models.ForeignKey(
         "catalog.Provider",
         on_delete=models.PROTECT,
+        null=True,
+        blank=True,
         related_name="crm_school_usages",
-        verbose_name="Editorial",
+        verbose_name="Editorial del catálogo",
     )
     status = models.CharField(
         max_length=20,
@@ -169,7 +310,7 @@ class SchoolEditorialUsage(TimeStampedModel):
             "school__name",
             "-year",
             "area__name",
-            "provider__name",
+            "editorial__name",
         ]
         indexes = [
             models.Index(
@@ -186,14 +327,25 @@ class SchoolEditorialUsage(TimeStampedModel):
             ),
         ]
 
-    def __str__(self):
-        area = self.area.name if self.area else "Área no especificada"
+        def __str__(self):
+            area_name = (
+                self.area.name
+                if self.area
+                else "Área no especificada"
+            )
 
-        return (
-            f"{self.school.name} - "
-            f"{self.provider.name} - "
-            f"{area} - {self.year}"
-        )
+            if self.editorial:
+                editorial_name = self.editorial.name
+            elif self.provider:
+                editorial_name = self.provider.name
+            else:
+                editorial_name = "Editorial no especificada"
+
+            return (
+                f"{self.school.name} - "
+                f"{editorial_name} - "
+                f"{area_name} - {self.year}"
+            )
 
 
 class SchoolCommercialProfile(TimeStampedModel):

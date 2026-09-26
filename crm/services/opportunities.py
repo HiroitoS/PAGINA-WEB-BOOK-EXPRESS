@@ -3,10 +3,13 @@ from django.db import transaction
 from django.utils import timezone
 
 from crm.models import (
+    Campaign,
     CommercialTeamMembership,
     Opportunity,
     OpportunityStageHistory,
+    Pipeline,
     PipelineStage,
+    School,
 )
 
 
@@ -53,23 +56,147 @@ def _validate_owner_for_team(*, owner, team):
         )
 
 
+def _resolve_campaign_for_creation(campaign=None):
+    if campaign is not None:
+        if campaign.status == Campaign.Status.CLOSED:
+            raise OpportunityTransitionError(
+                "No se puede crear una oportunidad en una campaña cerrada."
+            )
+
+        return campaign
+
+    campaigns = list(
+        Campaign.objects.filter(
+            campaign_type=Campaign.CampaignType.SCHOOL,
+            status=Campaign.Status.ACTIVE,
+        )
+        .order_by("-year", "id")[:2]
+    )
+
+    if not campaigns:
+        raise OpportunityTransitionError(
+            "No existe una campaña escolar activa para crear la oportunidad."
+        )
+
+    if len(campaigns) > 1:
+        raise OpportunityTransitionError(
+            "Existe más de una campaña escolar activa. "
+            "Debe regularizar las campañas antes de crear la oportunidad."
+        )
+
+    return campaigns[0]
+
+
+def _resolve_pipeline_for_creation(pipeline=None):
+    if pipeline is not None:
+        if not pipeline.is_active:
+            raise OpportunityTransitionError(
+                "No se puede utilizar un pipeline inactivo."
+            )
+
+        return pipeline
+
+    default_pipeline = (
+        Pipeline.objects.filter(
+            is_default=True,
+            is_active=True,
+        )
+        .order_by("id")
+        .first()
+    )
+
+    if default_pipeline is None:
+        raise OpportunityTransitionError(
+            "No existe un pipeline comercial predeterminado activo."
+        )
+
+    return default_pipeline
+
+
+def _resolve_primary_contact(*, school, primary_contact=None):
+    if primary_contact is not None:
+        _validate_contact_for_school(
+            school=school,
+            contact=primary_contact,
+        )
+        return primary_contact
+
+    return (
+        school.contacts.filter(
+            is_active=True,
+            is_primary=True,
+        )
+        .order_by("id")
+        .first()
+    )
+
+
+def _validate_open_duplicate(*, school, campaign, pipeline):
+    existing_opportunity = (
+        Opportunity.objects.filter(
+            school=school,
+            campaign=campaign,
+            pipeline=pipeline,
+            stage__category=PipelineStage.Category.OPEN,
+        )
+        .select_related("stage")
+        .order_by("-updated_at", "-id")
+        .first()
+    )
+
+    if existing_opportunity is None:
+        return
+
+    raise OpportunityTransitionError(
+        "Ya existe una oportunidad abierta para este colegio, "
+        "campaña y pipeline. "
+        f"Etapa actual: {existing_opportunity.stage.name}."
+    )
+
+
 @transaction.atomic
 def create_opportunity(
     *,
-    title,
     school,
-    campaign,
-    pipeline,
     created_by,
+    title="",
+    campaign=None,
+    pipeline=None,
     stage=None,
     primary_contact=None,
     team=None,
     owner=None,
     notes="",
 ):
+    # Bloqueamos únicamente la fila de School.
+    #
+    # team y owner son relaciones opcionales. En PostgreSQL, combinar
+    # select_for_update() con select_related() sobre ForeignKey nullable
+    # genera OUTER JOIN y provoca:
+    # "FOR UPDATE cannot be applied to the nullable side of an outer join".
+    #
+    # Las relaciones se cargarán de forma diferida cuando se consulten.
+    locked_school = (
+        School.objects
+        .select_for_update()
+        .get(pk=school.pk)
+    )
+
+    if not locked_school.is_active:
+        raise OpportunityTransitionError(
+            "No se puede crear una oportunidad para un colegio inactivo."
+        )
+
+    resolved_campaign = _resolve_campaign_for_creation(
+        campaign=campaign,
+    )
+    resolved_pipeline = _resolve_pipeline_for_creation(
+        pipeline=pipeline,
+    )
+
     if stage is None:
         try:
-            stage = pipeline.stages.get(
+            stage = resolved_pipeline.stages.get(
                 is_initial=True,
                 is_active=True,
             )
@@ -83,32 +210,51 @@ def create_opportunity(
             ) from exc
 
     _validate_stage_for_pipeline(
-        pipeline=pipeline,
+        pipeline=resolved_pipeline,
         stage=stage,
     )
-    _validate_contact_for_school(
-        school=school,
-        contact=primary_contact,
-    )
 
-    resolved_team = team if team is not None else school.team
-    resolved_owner = owner if owner is not None else school.owner
+    resolved_primary_contact = _resolve_primary_contact(
+        school=locked_school,
+        primary_contact=primary_contact,
+    )
+    resolved_team = (
+        team
+        if team is not None
+        else locked_school.team
+    )
+    resolved_owner = (
+        owner
+        if owner is not None
+        else locked_school.owner
+    )
 
     _validate_owner_for_team(
         owner=resolved_owner,
         team=resolved_team,
     )
+    _validate_open_duplicate(
+        school=locked_school,
+        campaign=resolved_campaign,
+        pipeline=resolved_pipeline,
+    )
+
+    cleaned_title = (title or "").strip()
+    if not cleaned_title:
+        cleaned_title = (
+            f"{resolved_campaign.name} - {locked_school.name}"
+        )
 
     opportunity = Opportunity(
-        title=title,
-        school=school,
-        campaign=campaign,
-        pipeline=pipeline,
+        title=cleaned_title,
+        school=locked_school,
+        campaign=resolved_campaign,
+        pipeline=resolved_pipeline,
         stage=stage,
-        primary_contact=primary_contact,
+        primary_contact=resolved_primary_contact,
         team=resolved_team,
         owner=resolved_owner,
-        notes=notes,
+        notes=(notes or "").strip(),
         created_by=created_by,
     )
     opportunity.full_clean()

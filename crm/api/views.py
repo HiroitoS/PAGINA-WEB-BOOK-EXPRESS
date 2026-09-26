@@ -1,4 +1,5 @@
-from django.db.models import Count, Q
+from django.db import transaction
+from django.db.models import Count, Prefetch, Q
 from django.utils import timezone
 
 from rest_framework import serializers, status, viewsets
@@ -8,7 +9,19 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.permissions import usuario_es_administrador
-from crm.models import CommercialTeam, CommercialTeamMembership, Pipeline, PipelineStage, School
+from catalog.models import Grade, Product
+from crm.models import (
+    Adoption,
+    Campaign,
+    CommercialQuotation,
+    CommercialTeam,
+    CommercialTeamMembership,
+    CRMWorkItemLink,
+    MarketEditorial,
+    Pipeline,
+    PipelineStage,
+    School,
+)
 from crm.permissions import (
     EsUsuarioCRM,
     usuario_puede_asignar_colegios,
@@ -22,27 +35,50 @@ from crm.selectors import (
     visible_opportunities_queryset,
     visible_school_contacts_queryset,
     visible_schools_queryset,
+    work_items_for_contact,
     work_items_for_opportunity,
+    work_items_for_school,
 )
 from crm.services import (
+    AdoptionError,
     CRMPlanningError,
     CommercialActivityError,
+    CommercialProjectionError,
+    CommercialQuotationError,
     OpportunityTransitionError,
+    accept_commercial_quotation,
+    approve_commercial_quotation_discount,
+    confirm_adoption,
+    create_commercial_projection_revision,
+    create_commercial_quotation,
+    create_commercial_quotation_from_projection,
     create_opportunity,
     create_opportunity_event,
     create_opportunity_reminder,
     create_opportunity_task,
+    create_school_event,
+    create_school_reminder,
+    create_school_task,
     record_commercial_activity,
+    send_commercial_quotation,
     reopen_opportunity,
+    resolve_projection_price,
     transition_opportunity_stage,
 )
-from crm.models import Campaign
 
 from .pagination import CRMPageNumberPagination
 from .serializers import (
+    AdoptionConfirmSerializer,
+    AdoptionSerializer,
     CampaignSerializer,
     CommercialActivityCreateSerializer,
     CommercialActivitySerializer,
+    CommercialProjectionCreateSerializer,
+    CommercialProjectionSerializer,
+    CommercialQuotationCreateSerializer,
+    CommercialQuotationDiscountApprovalSerializer,
+    CommercialQuotationFromProjectionSerializer,
+    CommercialQuotationSerializer,
     CommercialTeamDetailSerializer,
     OpportunityCreateSerializer,
     OpportunityDetailSerializer,
@@ -55,11 +91,24 @@ from .serializers import (
     OpportunityTaskCreateSerializer,
     OpportunityUpdateSerializer,
     PipelineSerializer,
+    SchoolCommercialActivityCreateSerializer,
+    SchoolContactCRMSerializer,
     SchoolContactSerializer,
     SchoolDetailSerializer,
+    SchoolEducationalServiceSerializer,
+    SchoolEducationalServiceWriteSerializer,
+    SchoolEventCreateSerializer,
     SchoolListSerializer,
+    SchoolPopulationRecordSerializer,
+    SchoolPopulationRecordWriteSerializer,
+    SchoolReminderCreateSerializer,
+    SchoolTaskCreateSerializer,
     SchoolWriteSerializer,
     WorkItemLinkSerializer,
+    SchoolEditorialUsageSerializer,
+    SchoolEditorialUsageWriteSerializer,
+    MarketEditorialCreateSerializer,
+    MarketEditorialSerializer,
 )
 
 
@@ -85,6 +134,23 @@ def _user_can_manage_visible_opportunity(user, opportunity):
             role=CommercialTeamMembership.Role.SUPERVISOR,
         ).exists()
     return False
+
+
+def _single_visible_open_opportunity_for_school(user, school):
+    opportunities = list(
+        visible_opportunities_queryset(user)
+        .filter(
+            school=school,
+            stage__category=PipelineStage.Category.OPEN,
+        )
+        .select_related("stage")
+        .order_by("-updated_at", "-id")[:2]
+    )
+
+    if len(opportunities) == 1:
+        return opportunities[0]
+
+    return None
 
 
 class CRMSummaryAPIView(APIView):
@@ -145,6 +211,226 @@ class CommercialTeamViewSet(viewsets.ReadOnlyModelViewSet):
         return queryset.filter(memberships__user=user, memberships__is_active=True).distinct().order_by("name")
 
 
+class SchoolContactViewSet(viewsets.ModelViewSet):
+    permission_classes = [EsUsuarioCRM]
+    pagination_class = CRMPageNumberPagination
+    serializer_class = SchoolContactCRMSerializer
+    http_method_names = ["get", "patch", "head", "options"]
+
+    def get_queryset(self):
+        queryset = (
+            visible_school_contacts_queryset(self.request.user)
+            .select_related("school")
+        )
+
+        search = self.request.query_params.get("search", "").strip()
+        school = self.request.query_params.get("school")
+        decision_role = self.request.query_params.get(
+            "decision_role",
+            "",
+        ).strip()
+        is_active = self.request.query_params.get("is_active")
+
+        if search:
+            queryset = queryset.filter(
+                Q(full_name__icontains=search)
+                | Q(position__icontains=search)
+                | Q(email__icontains=search)
+                | Q(phone__icontains=search)
+                | Q(whatsapp__icontains=search)
+                | Q(school__name__icontains=search)
+            )
+
+        if school:
+            queryset = queryset.filter(school_id=school)
+
+        if decision_role:
+            queryset = queryset.filter(decision_role=decision_role)
+
+        if is_active == "true":
+            queryset = queryset.filter(is_active=True)
+        elif is_active == "false":
+            queryset = queryset.filter(is_active=False)
+
+        return queryset.order_by(
+            "school__name",
+            "-is_primary",
+            "full_name",
+            "id",
+        )
+
+    def partial_update(self, request, *args, **kwargs):
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para modificar contactos."
+            )
+
+        contact = self.get_object()
+        serializer = self.get_serializer(
+            contact,
+            data=request.data,
+            partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+
+        is_active = serializer.validated_data.get(
+            "is_active",
+            contact.is_active,
+        )
+        is_primary = (
+            serializer.validated_data.get(
+                "is_primary",
+                contact.is_primary,
+            )
+            if is_active
+            else False
+        )
+
+        with transaction.atomic():
+            if is_primary:
+                contact.school.contacts.exclude(
+                    pk=contact.pk,
+                ).filter(
+                    is_primary=True,
+                ).update(
+                    is_primary=False,
+                )
+
+            contact = serializer.save(
+                is_primary=is_primary,
+            )
+
+        return Response(
+            self.get_serializer(contact).data
+        )
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="activities",
+        url_name="activities",
+    )
+    def activities(self, request, pk=None):
+        contact = self.get_object()
+
+        queryset = (
+            visible_commercial_activities_queryset(request.user)
+            .filter(contact=contact)
+            .select_related(
+                "contact",
+                "opportunity",
+                "performed_by",
+                "created_by",
+            )
+            .order_by("-occurred_at", "-id")
+        )
+
+        page = self.paginate_queryset(queryset)
+
+        if page is not None:
+            return self.get_paginated_response(
+                CommercialActivitySerializer(
+                    page,
+                    many=True,
+                ).data
+            )
+
+        return Response(
+            CommercialActivitySerializer(
+                queryset,
+                many=True,
+            ).data
+        )
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="work-items",
+        url_name="work-items",
+    )
+    def work_items(self, request, pk=None):
+        contact = self.get_object()
+        queryset = work_items_for_contact(contact)
+
+        page = self.paginate_queryset(queryset)
+
+        if page is not None:
+            return self.get_paginated_response(
+                WorkItemLinkSerializer(
+                    page,
+                    many=True,
+                ).data
+            )
+
+        return Response(
+            WorkItemLinkSerializer(
+                queryset,
+                many=True,
+            ).data
+        )
+
+
+class MarketEditorialViewSet(viewsets.ModelViewSet):
+    permission_classes = [EsUsuarioCRM]
+    pagination_class = None
+    http_method_names = [
+        "get",
+        "post",
+        "head",
+        "options",
+    ]
+
+    def get_queryset(self):
+        queryset = (
+            MarketEditorial.objects
+            .filter(is_active=True)
+            .select_related("catalog_provider")
+        )
+
+        search = self.request.query_params.get(
+            "search",
+            "",
+        ).strip()
+
+        if search:
+            queryset = queryset.filter(
+                name__icontains=search,
+            )
+
+        return queryset.order_by("name", "id")
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return MarketEditorialCreateSerializer
+
+        return MarketEditorialSerializer
+
+    def create(self, request, *args, **kwargs):
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para registrar editoriales."
+            )
+
+        serializer = self.get_serializer(
+            data=request.data,
+        )
+        serializer.is_valid(
+            raise_exception=True,
+        )
+
+        editorial = serializer.save(
+            created_by=request.user,
+            verification_status=(
+                MarketEditorial.VerificationStatus.PENDING
+            ),
+            is_active=True,
+        )
+
+        return Response(
+            MarketEditorialSerializer(editorial).data,
+            status=status.HTTP_201_CREATED,
+        )
+
 class SchoolViewSet(viewsets.ModelViewSet):
     permission_classes = [EsUsuarioCRM]
     pagination_class = CRMPageNumberPagination
@@ -158,11 +444,13 @@ class SchoolViewSet(viewsets.ModelViewSet):
                 "levels",
                 "educational_services__level",
                 "educational_services__population_records",
+                "educational_services__population_records__details__grade",
             )
         )
         if self.action == "retrieve":
             queryset = queryset.prefetch_related(
                 "contacts",
+                "editorial_usages__editorial",
                 "editorial_usages__provider",
                 "editorial_usages__area",
                 "editorial_usages__service__level",
@@ -256,30 +544,824 @@ class SchoolViewSet(viewsets.ModelViewSet):
             school.levels.set(levels)
         return Response(SchoolDetailSerializer(school).data)
 
-    @action(detail=True, methods=["get", "post"], url_path="contacts")
+    @action(
+        detail=True,
+        methods=["get", "post"],
+        url_path="educational-services",
+        url_name="educational-services",
+    )
+    def educational_services(self, request, pk=None):
+        school = self.get_object()
+
+        if request.method == "GET":
+            services = (
+                school.educational_services
+                .select_related("level")
+                .prefetch_related(
+                    "population_records",
+                    "population_records__details__grade",
+                )
+                .order_by("level__name", "id")
+            )
+
+            return Response(
+                SchoolEducationalServiceSerializer(
+                    services,
+                    many=True,
+                ).data
+            )
+
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para registrar niveles educativos."
+            )
+
+        serializer = SchoolEducationalServiceWriteSerializer(
+            data=request.data,
+            context={"school": school},
+        )
+        serializer.is_valid(raise_exception=True)
+
+        service = serializer.save(
+            school=school,
+            created_by=request.user,
+        )
+
+        return Response(
+            SchoolEducationalServiceSerializer(service).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["patch"],
+        url_path=r"educational-services/(?P<service_id>[^/.]+)",
+        url_name="educational-service-detail",
+    )
+    def educational_service_detail(
+        self,
+        request,
+        pk=None,
+        service_id=None,
+    ):
+        school = self.get_object()
+
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para modificar niveles educativos."
+            )
+
+        service = (
+            school.educational_services
+            .select_related("level")
+            .filter(pk=service_id)
+            .first()
+        )
+
+        if service is None:
+            return Response(
+                {
+                    "detail": (
+                        "El nivel educativo no pertenece "
+                        "a este colegio."
+                    )
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = SchoolEducationalServiceWriteSerializer(
+            service,
+            data=request.data,
+            partial=True,
+            context={"school": school},
+        )
+        serializer.is_valid(raise_exception=True)
+
+        service = serializer.save()
+
+        return Response(
+            SchoolEducationalServiceSerializer(service).data
+        )
+
+    @action(
+        detail=True,
+        methods=["get", "post"],
+        url_path=r"educational-services/(?P<service_id>[^/.]+)/population",
+        url_name="educational-service-population",
+    )
+    def educational_service_population(
+        self,
+        request,
+        pk=None,
+        service_id=None,
+    ):
+        school = self.get_object()
+
+        service = (
+            school.educational_services
+            .select_related("level")
+            .filter(pk=service_id)
+            .first()
+        )
+
+        if service is None:
+            return Response(
+                {
+                    "detail": (
+                        "El nivel educativo no pertenece "
+                        "a este colegio."
+                    )
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if request.method == "GET":
+            records = (
+                service.population_records
+                .prefetch_related("details__grade")
+                .order_by(
+                    "-is_current",
+                    "-year",
+                    "-created_at",
+                )
+            )
+
+            return Response(
+                SchoolPopulationRecordSerializer(
+                    records,
+                    many=True,
+                ).data
+            )
+
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para registrar población."
+            )
+
+        serializer = SchoolPopulationRecordWriteSerializer(
+            data=request.data,
+        )
+        serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            service.population_records.filter(
+                is_current=True,
+            ).update(
+                is_current=False,
+            )
+
+            population = serializer.save(
+                service=service,
+                is_current=True,
+                recorded_by=request.user,
+            )
+
+        return Response(
+            SchoolPopulationRecordSerializer(population).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["get", "post"],
+        url_path="contacts",
+    )
     def contacts(self, request, pk=None):
         school = self.get_object()
+
         if request.method == "GET":
-            contacts = visible_school_contacts_queryset(request.user).filter(school=school).order_by("-is_primary", "full_name")
-            return Response(SchoolContactSerializer(contacts, many=True).data)
+            contacts = (
+                visible_school_contacts_queryset(request.user)
+                .filter(school=school)
+                .order_by("-is_primary", "-is_active", "full_name")
+            )
+
+            return Response(
+                SchoolContactSerializer(
+                    contacts,
+                    many=True,
+                ).data
+            )
+
         if not usuario_puede_gestionar_colegios(request.user):
-            raise PermissionDenied("No tienes permiso para registrar contactos.")
-        serializer = SchoolContactSerializer(data=request.data)
+            raise PermissionDenied(
+                "No tienes permiso para registrar contactos."
+            )
+
+        serializer = SchoolContactSerializer(
+            data=request.data,
+        )
         serializer.is_valid(raise_exception=True)
-        if serializer.validated_data.get("is_primary"):
-            school.contacts.filter(is_primary=True).update(is_primary=False)
-        contact = serializer.save(school=school, created_by=request.user)
-        return Response(SchoolContactSerializer(contact).data, status=status.HTTP_201_CREATED)
 
+        is_active = serializer.validated_data.get(
+            "is_active",
+            True,
+        )
+        is_primary = (
+            serializer.validated_data.get(
+                "is_primary",
+                False,
+            )
+            if is_active
+            else False
+        )
 
+        with transaction.atomic():
+            if is_primary:
+                school.contacts.filter(
+                    is_primary=True,
+                ).update(
+                    is_primary=False,
+                )
+
+            contact = serializer.save(
+                school=school,
+                created_by=request.user,
+                is_primary=is_primary,
+            )
+
+        return Response(
+            SchoolContactSerializer(contact).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["patch"],
+        url_path=r"contacts/(?P<contact_id>[^/.]+)",
+        url_name="contact-detail",
+    )
+    def contact_detail(
+        self,
+        request,
+        pk=None,
+        contact_id=None,
+    ):
+        school = self.get_object()
+
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para modificar contactos."
+            )
+
+        contact = (
+            visible_school_contacts_queryset(request.user)
+            .filter(
+                school=school,
+                pk=contact_id,
+            )
+            .first()
+        )
+
+        if contact is None:
+            return Response(
+                {
+                    "detail": (
+                        "El contacto no pertenece "
+                        "a este colegio."
+                    )
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = SchoolContactSerializer(
+            contact,
+            data=request.data,
+            partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+
+        is_active = serializer.validated_data.get(
+            "is_active",
+            contact.is_active,
+        )
+
+        is_primary = (
+            serializer.validated_data.get(
+                "is_primary",
+                contact.is_primary,
+            )
+            if is_active
+            else False
+        )
+
+        with transaction.atomic():
+            if is_primary:
+                school.contacts.exclude(
+                    pk=contact.pk,
+                ).filter(
+                    is_primary=True,
+                ).update(
+                    is_primary=False,
+                )
+
+            contact = serializer.save(
+                is_primary=is_primary,
+            )
+
+        return Response(
+            SchoolContactSerializer(contact).data
+        )
+
+    @action(
+        detail=True,
+        methods=["get", "post"],
+        url_path="activities",
+        url_name="activities",
+    )
+    def school_activities(self, request, pk=None):
+        school = self.get_object()
+
+        if request.method == "GET":
+            queryset = (
+                visible_commercial_activities_queryset(request.user)
+                .filter(school=school)
+                .select_related(
+                    "contact",
+                    "opportunity",
+                    "performed_by",
+                    "created_by",
+                )
+                .order_by("-occurred_at", "-id")
+            )
+
+            page = self.paginate_queryset(queryset)
+
+            if page is not None:
+                return self.get_paginated_response(
+                    CommercialActivitySerializer(
+                        page,
+                        many=True,
+                    ).data
+                )
+
+            return Response(
+                CommercialActivitySerializer(
+                    queryset,
+                    many=True,
+                ).data
+            )
+
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para registrar actividad comercial."
+            )
+
+        serializer = SchoolCommercialActivityCreateSerializer(
+            data=request.data,
+        )
+        serializer.is_valid(raise_exception=True)
+
+        data = dict(serializer.validated_data)
+        opportunity = data.pop("opportunity", None)
+
+        if opportunity is None:
+            opportunity = _single_visible_open_opportunity_for_school(
+                request.user,
+                school,
+            )
+
+        if (
+            opportunity is not None
+            and not visible_opportunities_queryset(request.user)
+            .filter(
+                pk=opportunity.pk,
+                school=school,
+            )
+            .exists()
+        ):
+            raise serializers.ValidationError(
+                {
+                    "opportunity": (
+                        "La oportunidad no pertenece al colegio "
+                        "o no está dentro de tu alcance comercial."
+                    )
+                }
+            )
+
+        try:
+            activity = record_commercial_activity(
+                school=school,
+                opportunity=opportunity,
+                performed_by=request.user,
+                created_by=request.user,
+                **data,
+            )
+        except CommercialActivityError as exc:
+            _raise_service_validation_error(exc)
+
+        return Response(
+            CommercialActivitySerializer(activity).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="work-items",
+        url_name="work-items",
+    )
+    def school_work_items(self, request, pk=None):
+        school = self.get_object()
+        queryset = work_items_for_school(school)
+
+        page = self.paginate_queryset(queryset)
+
+        if page is not None:
+            return self.get_paginated_response(
+                WorkItemLinkSerializer(
+                    page,
+                    many=True,
+                ).data
+            )
+
+        return Response(
+            WorkItemLinkSerializer(
+                queryset,
+                many=True,
+            ).data
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="tasks",
+        url_name="create-task",
+    )
+    def create_school_task(self, request, pk=None):
+        school = self.get_object()
+
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para programar tareas comerciales."
+            )
+
+        serializer = SchoolTaskCreateSerializer(
+            data=request.data,
+        )
+        serializer.is_valid(raise_exception=True)
+
+        data = dict(serializer.validated_data)
+        opportunity = data.get("opportunity")
+
+        if opportunity is None:
+            opportunity = _single_visible_open_opportunity_for_school(
+                request.user,
+                school,
+            )
+            if opportunity is not None:
+                data["opportunity"] = opportunity
+
+        if (
+            opportunity is not None
+            and not visible_opportunities_queryset(request.user)
+            .filter(
+                pk=opportunity.pk,
+                school=school,
+            )
+            .exists()
+        ):
+            raise serializers.ValidationError(
+                {
+                    "opportunity": (
+                        "La oportunidad no pertenece al colegio "
+                        "o no está dentro de tu alcance comercial."
+                    )
+                }
+            )
+
+        try:
+            task = create_school_task(
+                school=school,
+                actor=request.user,
+                **data,
+            )
+        except CRMPlanningError as exc:
+            _raise_service_validation_error(exc)
+
+        return Response(
+            {
+                "id": task.id,
+                "title": task.title,
+                "status": task.status,
+                "priority": task.priority,
+                "assigned_to_id": task.assigned_to_id,
+                "due_at": task.due_at,
+                "reminder_at": task.reminder_at,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="events",
+        url_name="create-event",
+    )
+    def create_school_event(self, request, pk=None):
+        school = self.get_object()
+
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para programar eventos comerciales."
+            )
+
+        serializer = SchoolEventCreateSerializer(
+            data=request.data,
+        )
+        serializer.is_valid(raise_exception=True)
+
+        data = dict(serializer.validated_data)
+        opportunity = data.get("opportunity")
+
+        if opportunity is None:
+            opportunity = _single_visible_open_opportunity_for_school(
+                request.user,
+                school,
+            )
+            if opportunity is not None:
+                data["opportunity"] = opportunity
+
+        if (
+            opportunity is not None
+            and not visible_opportunities_queryset(request.user)
+            .filter(
+                pk=opportunity.pk,
+                school=school,
+            )
+            .exists()
+        ):
+            raise serializers.ValidationError(
+                {
+                    "opportunity": (
+                        "La oportunidad no pertenece al colegio "
+                        "o no está dentro de tu alcance comercial."
+                    )
+                }
+            )
+
+        try:
+            event = create_school_event(
+                school=school,
+                actor=request.user,
+                **data,
+            )
+        except CRMPlanningError as exc:
+            _raise_service_validation_error(exc)
+
+        return Response(
+            {
+                "id": event.id,
+                "title": event.title,
+                "event_type": event.event_type,
+                "assigned_to_id": event.assigned_to_id,
+                "start_at": event.start_at,
+                "end_at": event.end_at,
+                "location": event.location,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="reminders",
+        url_name="create-reminder",
+    )
+    def create_school_reminder(self, request, pk=None):
+        school = self.get_object()
+
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para programar recordatorios comerciales."
+            )
+
+        serializer = SchoolReminderCreateSerializer(
+            data=request.data,
+        )
+        serializer.is_valid(raise_exception=True)
+
+        data = dict(serializer.validated_data)
+        opportunity = data.get("opportunity")
+
+        if opportunity is None:
+            opportunity = _single_visible_open_opportunity_for_school(
+                request.user,
+                school,
+            )
+            if opportunity is not None:
+                data["opportunity"] = opportunity
+
+        if (
+            opportunity is not None
+            and not visible_opportunities_queryset(request.user)
+            .filter(
+                pk=opportunity.pk,
+                school=school,
+            )
+            .exists()
+        ):
+            raise serializers.ValidationError(
+                {
+                    "opportunity": (
+                        "La oportunidad no pertenece al colegio "
+                        "o no está dentro de tu alcance comercial."
+                    )
+                }
+            )
+
+        try:
+            reminder = create_school_reminder(
+                school=school,
+                actor=request.user,
+                **data,
+            )
+        except CRMPlanningError as exc:
+            _raise_service_validation_error(exc)
+
+        return Response(
+            {
+                "id": reminder.id,
+                "title": reminder.title,
+                "status": reminder.status,
+                "user_id": reminder.user_id,
+                "remind_at": reminder.remind_at,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["get", "post"],
+        url_path="editorial-usages",
+        url_name="editorial-usages",
+    )
+    def editorial_usages(self, request, pk=None):
+        school = self.get_object()
+
+        if request.method == "GET":
+            usages = (
+                school.editorial_usages
+                .select_related(
+                    "editorial",
+                    "editorial__catalog_provider",
+                    "provider",
+                    "area",
+                    "service__level",
+                )
+                .order_by(
+                    "-year",
+                    "editorial__name",
+                    "area__name",
+                )
+            )
+
+            return Response(
+                SchoolEditorialUsageSerializer(
+                    usages,
+                    many=True,
+                ).data
+            )
+
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para registrar editoriales."
+            )
+
+        serializer = SchoolEditorialUsageWriteSerializer(
+            data=request.data,
+            context={"school": school},
+        )
+        serializer.is_valid(raise_exception=True)
+
+        usage = serializer.save(
+            school=school,
+            recorded_by=request.user,
+        )
+
+        return Response(
+            SchoolEditorialUsageSerializer(usage).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["patch"],
+        url_path=r"editorial-usages/(?P<usage_id>[^/.]+)",
+        url_name="editorial-usage-detail",
+    )
+    def editorial_usage_detail(
+        self,
+        request,
+        pk=None,
+        usage_id=None,
+    ):
+        school = self.get_object()
+
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para modificar editoriales."
+            )
+
+        usage = (
+            school.editorial_usages
+            .select_related(
+                "editorial",
+                "editorial__catalog_provider",
+                "provider",
+                "area",
+                "service__level",
+            )
+            .filter(pk=usage_id)
+            .first()
+        )
+
+        if usage is None:
+            return Response(
+                {
+                    "detail": (
+                        "La información editorial "
+                        "no pertenece a este colegio."
+                    )
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = SchoolEditorialUsageWriteSerializer(
+            usage,
+            data=request.data,
+            partial=True,
+            context={"school": school},
+        )
+        serializer.is_valid(raise_exception=True)
+
+        usage = serializer.save(
+            recorded_by=request.user,
+        )
+
+        return Response(
+            SchoolEditorialUsageSerializer(usage).data
+        )
+    
 class OpportunityViewSet(viewsets.ModelViewSet):
     permission_classes = [EsUsuarioCRM]
     pagination_class = CRMPageNumberPagination
     http_method_names = ["get", "post", "patch", "head", "options"]
 
     def get_queryset(self):
-        queryset = visible_opportunities_queryset(self.request.user).select_related(
-            "school", "campaign", "pipeline", "stage", "primary_contact", "team", "owner", "created_by", "closed_by"
+        now = timezone.now()
+
+        next_activity_links = (
+            CRMWorkItemLink.objects
+            .filter(
+                (
+                    Q(
+                        task__isnull=False,
+                        task__status__in=[
+                            "pending",
+                            "in_progress",
+                            "waiting",
+                        ],
+                    )
+                    & (
+                        Q(task__start_at__gte=now)
+                        | Q(task__due_at__gte=now)
+                        | Q(task__reminder_at__gte=now)
+                    )
+                )
+                | Q(
+                    event__isnull=False,
+                    event__start_at__gte=now,
+                )
+                | Q(
+                    reminder__isnull=False,
+                    reminder__status__in=["pending", "seen"],
+                    reminder__remind_at__gte=now,
+                )
+            )
+            .select_related("task", "event", "reminder")
+        )
+
+        queryset = (
+            visible_opportunities_queryset(self.request.user)
+            .select_related(
+                "school",
+                "campaign",
+                "pipeline",
+                "stage",
+                "primary_contact",
+                "team",
+                "owner",
+                "created_by",
+                "closed_by",
+            )
+            .prefetch_related(
+                Prefetch(
+                    "work_item_links",
+                    queryset=next_activity_links,
+                    to_attr="prefetched_next_activity_links",
+                )
+            )
         )
         search = self.request.query_params.get("search", "").strip()
         school = self.request.query_params.get("school")
@@ -331,12 +1413,19 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         school = data["school"]
         if not visible_schools_queryset(request.user).filter(pk=school.pk).exists():
             raise PermissionDenied("No tienes acceso al colegio seleccionado.")
-        can_assign = usuario_es_administrador(request.user) or usuario_puede_asignar_oportunidades(request.user)
+        can_assign = (
+            usuario_es_administrador(request.user)
+            or usuario_puede_asignar_oportunidades(request.user)
+        )
         if not can_assign:
-            data["owner"] = request.user
-            data["team"] = school.team
+            data.pop("owner", None)
+            data.pop("team", None)
+
         try:
-            opportunity = create_opportunity(created_by=request.user, **data)
+            opportunity = create_opportunity(
+                created_by=request.user,
+                **data,
+            )
         except OpportunityTransitionError as exc:
             _raise_service_validation_error(exc)
         return Response(OpportunityDetailSerializer(opportunity).data, status=status.HTTP_201_CREATED)
@@ -393,6 +1482,707 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         except OpportunityTransitionError as exc:
             _raise_service_validation_error(exc)
         return Response(OpportunityDetailSerializer(opportunity).data)
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="projection-base",
+    )
+    def projection_base(self, request, pk=None):
+        opportunity = self.get_object()
+
+        services = (
+            opportunity.school.educational_services
+            .filter(is_active=True)
+            .select_related("level")
+            .prefetch_related(
+                "population_records__details__grade",
+            )
+            .order_by("level__name", "id")
+        )
+
+        return Response(
+            {
+                "campaign": CampaignSerializer(
+                    opportunity.campaign
+                ).data,
+                "services": SchoolEducationalServiceSerializer(
+                    services,
+                    many=True,
+                ).data,
+            }
+        )
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="projection-products",
+    )
+    def projection_products(self, request, pk=None):
+        opportunity = self.get_object()
+
+        service_id = request.query_params.get("service")
+        grade_id = request.query_params.get("grade")
+        product_search = (
+            request.query_params.get("product_search") or ""
+        ).strip()
+        editorial_id = request.query_params.get("editorial")
+
+        if not service_id or not grade_id:
+            raise serializers.ValidationError(
+                {
+                    "detail": (
+                        "Debes indicar el nivel educativo y el grado "
+                        "para consultar productos."
+                    )
+                }
+            )
+
+        service = (
+            opportunity.school.educational_services
+            .filter(pk=service_id, is_active=True)
+            .select_related("level")
+            .first()
+        )
+
+        if service is None:
+            raise serializers.ValidationError(
+                {
+                    "service": (
+                        "El nivel educativo no pertenece al colegio "
+                        "de esta oportunidad."
+                    )
+                }
+            )
+
+        grade = Grade.objects.filter(
+            pk=grade_id,
+            is_active=True,
+        ).first()
+
+        if grade is None:
+            raise serializers.ValidationError(
+                {"grade": "El grado seleccionado no está disponible."}
+            )
+
+        base_products = (
+            Product.objects
+            .filter(
+                is_active=True,
+                provider__is_active=True,
+            )
+            .filter(
+                Q(level_id=service.level_id)
+                | Q(level__isnull=True),
+                Q(grade_id=grade.id)
+                | Q(grade__isnull=True),
+            )
+        )
+
+        editorial_options = [
+            {
+                "id": item["provider_id"],
+                "name": item["provider__name"],
+            }
+            for item in (
+                base_products
+                .values("provider_id", "provider__name")
+                .order_by("provider__name", "provider_id")
+                .distinct()
+            )
+        ]
+
+        products = base_products
+
+        if editorial_id:
+            try:
+                editorial_id = int(editorial_id)
+            except (TypeError, ValueError) as exc:
+                raise serializers.ValidationError(
+                    {"editorial": "La editorial seleccionada no es válida."}
+                ) from exc
+
+            products = products.filter(provider_id=editorial_id)
+
+        if product_search:
+            products = products.filter(
+                Q(name__icontains=product_search)
+                | Q(provider__name__icontains=product_search)
+                | Q(area__name__icontains=product_search)
+                | Q(series__name__icontains=product_search)
+                | Q(level__name__icontains=product_search)
+                | Q(grade__name__icontains=product_search)
+            )
+
+        products = (
+            products
+            .select_related(
+                "provider",
+                "level",
+                "grade",
+                "area",
+                "series",
+            )
+            .order_by("provider__name", "name", "id")
+        )
+
+        choices = []
+
+        for product in products[:150]:
+            try:
+                price = resolve_projection_price(
+                    product=product,
+                    campaign=opportunity.campaign,
+                )
+            except CommercialProjectionError:
+                continue
+
+            choices.append(
+                {
+                    "id": product.id,
+                    "name": product.name,
+                    "editorial": {
+                        "id": product.provider_id,
+                        "name": product.provider.name,
+                    },
+                    "level": (
+                        {
+                            "id": product.level_id,
+                            "name": product.level.name,
+                        }
+                        if product.level_id
+                        else None
+                    ),
+                    "grade": (
+                        {
+                            "id": product.grade_id,
+                            "name": product.grade.name,
+                        }
+                        if product.grade_id
+                        else None
+                    ),
+                    "area": (
+                        {
+                            "id": product.area_id,
+                            "name": product.area.name,
+                        }
+                        if product.area_id
+                        else None
+                    ),
+                    "series": (
+                        {
+                            "id": product.series_id,
+                            "name": product.series.name,
+                        }
+                        if product.series_id
+                        else None
+                    ),
+                    "unit_price": str(price.price),
+                    "price_year": price.year,
+                    "price_campaign": price.campaign,
+                    "price_is_reference": (
+                        price.year != opportunity.campaign.year
+                    ),
+                }
+            )
+
+        return Response(
+            {
+                "service": {
+                    "id": service.id,
+                    "level": {
+                        "id": service.level_id,
+                        "name": service.level.name,
+                    },
+                },
+                "grade": {
+                    "id": grade.id,
+                    "name": grade.name,
+                },
+                "campaign": {
+                    "id": opportunity.campaign_id,
+                    "name": opportunity.campaign.name,
+                    "year": opportunity.campaign.year,
+                },
+                "editorials": editorial_options,
+                "results": choices,
+            }
+        )
+
+    @action(
+        detail=True,
+        methods=["get", "post"],
+        url_path="projection",
+    )
+    def projection(self, request, pk=None):
+        opportunity = self.get_object()
+
+        if request.method == "GET":
+            projection = (
+                opportunity.projections
+                .filter(is_current=True)
+                .select_related("created_by")
+                .prefetch_related(
+                    "grades__service__level",
+                    "grades__grade",
+                    "items__grade_line",
+                    "items__product__provider",
+                    "items__product__level",
+                    "items__product__grade",
+                    "items__product__area",
+                )
+                .first()
+            )
+
+            if projection is None:
+                return Response(None)
+
+            return Response(
+                CommercialProjectionSerializer(
+                    projection
+                ).data
+            )
+
+        if not _user_can_manage_visible_opportunity(
+            request.user,
+            opportunity,
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para modificar la "
+                "proyección de esta oportunidad."
+            )
+
+        serializer = CommercialProjectionCreateSerializer(
+            data=request.data
+        )
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            projection = create_commercial_projection_revision(
+                opportunity=opportunity,
+                actor=request.user,
+                grade_lines=serializer.validated_data["grades"],
+                items=serializer.validated_data.get("items", []),
+                notes=serializer.validated_data.get("notes", ""),
+            )
+        except CommercialProjectionError as exc:
+            _raise_service_validation_error(exc)
+
+        return Response(
+            CommercialProjectionSerializer(projection).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="projection-history",
+    )
+    def projection_history(self, request, pk=None):
+        opportunity = self.get_object()
+
+        queryset = (
+            opportunity.projections
+            .select_related("created_by")
+            .prefetch_related(
+                "grades__service__level",
+                "grades__grade",
+                "items__grade_line",
+                "items__product__provider",
+                "items__product__level",
+                "items__product__grade",
+                "items__product__area",
+            )
+            .order_by("-version")
+        )
+
+        return Response(
+            CommercialProjectionSerializer(
+                queryset,
+                many=True,
+            ).data
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="quotations/from-projection",
+    )
+    def quotation_from_projection(self, request, pk=None):
+        opportunity = self.get_object()
+
+        if not _user_can_manage_visible_opportunity(
+            request.user,
+            opportunity,
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para crear cotizaciones "
+                "en esta oportunidad."
+            )
+
+        serializer = CommercialQuotationFromProjectionSerializer(
+            data=request.data
+        )
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            quotation = create_commercial_quotation_from_projection(
+                opportunity=opportunity,
+                actor=request.user,
+                item_adjustments=serializer.validated_data.get(
+                    "items",
+                    [],
+                ),
+                notes=serializer.validated_data.get("notes", ""),
+            )
+        except CommercialQuotationError as exc:
+            _raise_service_validation_error(exc)
+
+        quotation = (
+            CommercialQuotation.objects
+            .select_related(
+                "source_projection",
+                "created_by",
+                "sent_by",
+                "accepted_by",
+                "discount_approved_by",
+            )
+            .prefetch_related("items__product")
+            .get(pk=quotation.pk)
+        )
+
+        return Response(
+            CommercialQuotationSerializer(quotation).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=True, methods=["get", "post"], url_path="quotations")
+    def quotations(self, request, pk=None):
+        opportunity = self.get_object()
+
+        if request.method == "GET":
+            queryset = (
+                opportunity.quotations
+                .select_related(
+                    "source_projection",
+                    "created_by",
+                    "sent_by",
+                    "accepted_by",
+                    "discount_approved_by",
+                )
+                .prefetch_related("items__product")
+                .order_by("-version")
+            )
+            return Response(
+                CommercialQuotationSerializer(
+                    queryset,
+                    many=True,
+                ).data
+            )
+
+        if not _user_can_manage_visible_opportunity(
+            request.user,
+            opportunity,
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para crear cotizaciones "
+                "en esta oportunidad."
+            )
+
+        serializer = CommercialQuotationCreateSerializer(
+            data=request.data
+        )
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            quotation = create_commercial_quotation(
+                opportunity=opportunity,
+                actor=request.user,
+                items=serializer.validated_data["items"],
+                notes=serializer.validated_data.get("notes", ""),
+            )
+        except CommercialQuotationError as exc:
+            _raise_service_validation_error(exc)
+
+        quotation = (
+            CommercialQuotation.objects
+            .select_related(
+                "source_projection",
+                "created_by",
+                "sent_by",
+                "accepted_by",
+                "discount_approved_by",
+            )
+            .prefetch_related("items__product")
+            .get(pk=quotation.pk)
+        )
+
+        return Response(
+            CommercialQuotationSerializer(quotation).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=r"quotations/(?P<quotation_id>[^/.]+)/send",
+    )
+    def send_quotation(self, request, pk=None, quotation_id=None):
+        opportunity = self.get_object()
+
+        if not _user_can_manage_visible_opportunity(
+            request.user,
+            opportunity,
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para enviar cotizaciones "
+                "en esta oportunidad."
+            )
+
+        quotation = opportunity.quotations.filter(
+            pk=quotation_id
+        ).first()
+
+        if quotation is None:
+            raise serializers.ValidationError(
+                {
+                    "quotation": (
+                        "La cotización no pertenece a esta oportunidad."
+                    )
+                }
+            )
+
+        try:
+            quotation = send_commercial_quotation(
+                quotation=quotation,
+                actor=request.user,
+            )
+        except CommercialQuotationError as exc:
+            _raise_service_validation_error(exc)
+
+        quotation = (
+            CommercialQuotation.objects
+            .select_related(
+                "source_projection",
+                "created_by",
+                "sent_by",
+                "accepted_by",
+                "discount_approved_by",
+            )
+            .prefetch_related("items__product")
+            .get(pk=quotation.pk)
+        )
+
+        return Response(
+            CommercialQuotationSerializer(quotation).data
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=r"quotations/(?P<quotation_id>[^/.]+)/approve-discount",
+    )
+    def approve_quotation_discount(
+        self,
+        request,
+        pk=None,
+        quotation_id=None,
+    ):
+        opportunity = self.get_object()
+
+        if not (
+            usuario_es_administrador(request.user)
+            or usuario_puede_supervisar_crm(request.user)
+        ):
+            raise PermissionDenied(
+                "Solo un supervisor comercial puede aprobar "
+                "descuentos superiores al estándar."
+            )
+
+        quotation = opportunity.quotations.filter(
+            pk=quotation_id
+        ).first()
+
+        if quotation is None:
+            raise serializers.ValidationError(
+                {
+                    "quotation": (
+                        "La cotización no pertenece a esta oportunidad."
+                    )
+                }
+            )
+
+        serializer = CommercialQuotationDiscountApprovalSerializer(
+            data=request.data
+        )
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            quotation = approve_commercial_quotation_discount(
+                quotation=quotation,
+                actor=request.user,
+                note=serializer.validated_data.get("note", ""),
+            )
+        except CommercialQuotationError as exc:
+            _raise_service_validation_error(exc)
+
+        quotation = (
+            CommercialQuotation.objects
+            .select_related(
+                "source_projection",
+                "created_by",
+                "sent_by",
+                "accepted_by",
+                "discount_approved_by",
+            )
+            .prefetch_related("items__product")
+            .get(pk=quotation.pk)
+        )
+
+        return Response(
+            CommercialQuotationSerializer(quotation).data
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=r"quotations/(?P<quotation_id>[^/.]+)/accept",
+    )
+    def accept_quotation(self, request, pk=None, quotation_id=None):
+        opportunity = self.get_object()
+
+        if not _user_can_manage_visible_opportunity(
+            request.user,
+            opportunity,
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para aceptar cotizaciones "
+                "en esta oportunidad."
+            )
+
+        quotation = opportunity.quotations.filter(
+            pk=quotation_id
+        ).first()
+
+        if quotation is None:
+            raise serializers.ValidationError(
+                {
+                    "quotation": (
+                        "La cotización no pertenece a esta oportunidad."
+                    )
+                }
+            )
+
+        try:
+            quotation = accept_commercial_quotation(
+                quotation=quotation,
+                actor=request.user,
+            )
+        except CommercialQuotationError as exc:
+            _raise_service_validation_error(exc)
+
+        quotation = (
+            CommercialQuotation.objects
+            .select_related(
+                "source_projection",
+                "created_by",
+                "sent_by",
+                "accepted_by",
+                "discount_approved_by",
+            )
+            .prefetch_related("items__product")
+            .get(pk=quotation.pk)
+        )
+
+        return Response(
+            CommercialQuotationSerializer(quotation).data
+        )
+
+    @action(detail=True, methods=["get", "post"], url_path="adoptions")
+    def adoptions(self, request, pk=None):
+        opportunity = self.get_object()
+
+        if request.method == "GET":
+            queryset = (
+                opportunity.adoptions
+                .select_related(
+                    "advisor",
+                    "confirmed_by",
+                    "authorized_contact",
+                )
+                .prefetch_related("items__product")
+                .order_by("-version")
+            )
+            return Response(
+                AdoptionSerializer(
+                    queryset,
+                    many=True,
+                ).data
+            )
+
+        if not _user_can_manage_visible_opportunity(
+            request.user,
+            opportunity,
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para confirmar adopciones "
+                "en esta oportunidad."
+            )
+
+        serializer = AdoptionConfirmSerializer(
+            data=request.data
+        )
+        serializer.is_valid(raise_exception=True)
+
+        quotation = serializer.validated_data["quotation"]
+
+        if quotation.opportunity_id != opportunity.id:
+            raise serializers.ValidationError(
+                {
+                    "quotation": (
+                        "La cotización no pertenece a esta oportunidad."
+                    )
+                }
+            )
+
+        contact = serializer.validated_data["authorized_contact"]
+
+        if contact.school_id != opportunity.school_id:
+            raise serializers.ValidationError(
+                {
+                    "authorized_contact": (
+                        "El contacto no pertenece al colegio "
+                        "de esta oportunidad."
+                    )
+                }
+            )
+
+        try:
+            adoption = confirm_adoption(
+                quotation=quotation,
+                authorized_contact=contact,
+                signed_at=serializer.validated_data["signed_at"],
+                actor=request.user,
+                notes=serializer.validated_data.get("notes", ""),
+            )
+        except AdoptionError as exc:
+            _raise_service_validation_error(exc)
+
+        adoption = (
+            Adoption.objects
+            .select_related(
+                "advisor",
+                "confirmed_by",
+                "authorized_contact",
+            )
+            .prefetch_related("items__product")
+            .get(pk=adoption.pk)
+        )
+
+        return Response(
+            AdoptionSerializer(adoption).data,
+            status=status.HTTP_201_CREATED,
+        )
 
     @action(detail=True, methods=["get"], url_path="history")
     def history(self, request, pk=None):

@@ -1,10 +1,20 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
-from catalog.models import Level
+from django.utils import timezone
+from django.utils.text import slugify
+
+from catalog.models import Area, Grade, Level, Product
 from crm.models import (
+    Adoption,
+    AdoptionItem,
     Campaign,
     CommercialActivity,
+    CommercialQuotation,
+    CommercialQuotationItem,
+    CommercialProjection,
+    CommercialProjectionGrade,
+    CommercialProjectionItem,
     CommercialTeam,
     CommercialTeamMembership,
     CRMWorkItemLink,
@@ -18,6 +28,8 @@ from crm.models import (
     SchoolEditorialUsage,
     SchoolEducationalService,
     SchoolPopulationRecord,
+    SchoolPopulationDetail,
+    MarketEditorial,
 )
 from workspaces.models import CalendarEvent, Task, WorkspaceGroup
 
@@ -40,6 +52,12 @@ class LevelSummarySerializer(serializers.ModelSerializer):
     class Meta:
         model = Level
         fields = ("id", "name")
+
+
+class GradeSummarySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Grade
+        fields = ("id", "name", "order")
 
 
 class CommercialTeamSummarySerializer(serializers.ModelSerializer):
@@ -101,18 +119,81 @@ class CommercialTeamDetailSerializer(serializers.ModelSerializer):
 
 
 class SchoolContactSerializer(serializers.ModelSerializer):
+    decision_role_display = serializers.CharField(
+        source="get_decision_role_display",
+        read_only=True,
+    )
+
     class Meta:
         model = SchoolContact
         fields = (
-            "id", "full_name", "position", "phone", "whatsapp", "email",
-            "is_primary", "is_active", "notes", "created_at", "updated_at",
+            "id",
+            "full_name",
+            "position",
+            "decision_role",
+            "decision_role_display",
+            "relationship_level",
+            "phone",
+            "whatsapp",
+            "email",
+            "is_primary",
+            "is_active",
+            "notes",
+            "created_at",
+            "updated_at",
         )
         read_only_fields = ("id", "created_at", "updated_at")
+
+
+class SchoolContactCRMSerializer(SchoolContactSerializer):
+    school = serializers.SerializerMethodField()
+
+    class Meta(SchoolContactSerializer.Meta):
+        fields = SchoolContactSerializer.Meta.fields + ("school",)
+
+    def get_school(self, obj):
+        return {
+            "id": obj.school_id,
+            "name": obj.school.name,
+        }
+
+
+class SchoolPopulationDetailSerializer(serializers.ModelSerializer):
+    grade = GradeSummarySerializer(read_only=True)
+    student_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = SchoolPopulationDetail
+        fields = (
+            "id",
+            "grade",
+            "section_count",
+            "students_per_section",
+            "student_count",
+        )
+
+
+class SchoolPopulationDetailWriteSerializer(serializers.ModelSerializer):
+    grade = serializers.PrimaryKeyRelatedField(
+        queryset=Grade.objects.filter(is_active=True),
+    )
+
+    class Meta:
+        model = SchoolPopulationDetail
+        fields = (
+            "grade",
+            "section_count",
+            "students_per_section",
+        )
 
 
 class SchoolPopulationRecordSerializer(serializers.ModelSerializer):
     source_display = serializers.CharField(
         source="get_source_display",
+        read_only=True,
+    )
+    details = SchoolPopulationDetailSerializer(
+        many=True,
         read_only=True,
     )
 
@@ -126,9 +207,87 @@ class SchoolPopulationRecordSerializer(serializers.ModelSerializer):
             "source_display",
             "source_detail",
             "is_current",
+            "details",
             "created_at",
             "updated_at",
         )
+
+
+class SchoolPopulationRecordWriteSerializer(serializers.ModelSerializer):
+    student_count = serializers.IntegerField(
+        min_value=0,
+        required=False,
+    )
+    details = SchoolPopulationDetailWriteSerializer(
+        many=True,
+        required=False,
+    )
+
+    class Meta:
+        model = SchoolPopulationRecord
+        fields = (
+            "year",
+            "student_count",
+            "source",
+            "source_detail",
+            "details",
+        )
+
+    def validate(self, attrs):
+        details = attrs.get("details")
+        student_count = attrs.get("student_count")
+
+        if details:
+            grade_ids = [detail["grade"].id for detail in details]
+
+            if len(grade_ids) != len(set(grade_ids)):
+                raise serializers.ValidationError(
+                    {
+                        "details": (
+                            "No puedes registrar dos veces el mismo grado "
+                            "en un nivel."
+                        )
+                    }
+                )
+
+            attrs["student_count"] = sum(
+                detail["section_count"]
+                * detail["students_per_section"]
+                for detail in details
+            )
+        elif student_count is None:
+            raise serializers.ValidationError(
+                {
+                    "student_count": (
+                        "Registra la cantidad de alumnos o el detalle "
+                        "de población por grado."
+                    )
+                }
+            )
+
+        return attrs
+
+    def create(self, validated_data):
+        details = validated_data.pop("details", [])
+        population = SchoolPopulationRecord.objects.create(
+            **validated_data,
+        )
+
+        SchoolPopulationDetail.objects.bulk_create(
+            [
+                SchoolPopulationDetail(
+                    population=population,
+                    grade=detail["grade"],
+                    section_count=detail["section_count"],
+                    students_per_section=detail[
+                        "students_per_section"
+                    ],
+                )
+                for detail in details
+            ]
+        )
+
+        return population
 
 
 class SchoolEducationalServiceSerializer(serializers.ModelSerializer):
@@ -161,6 +320,117 @@ class SchoolEducationalServiceSerializer(serializers.ModelSerializer):
 
         return SchoolPopulationRecordSerializer(record).data
 
+class SchoolEducationalServiceWriteSerializer(serializers.ModelSerializer):
+    level = serializers.PrimaryKeyRelatedField(
+        queryset=Level.objects.filter(is_active=True),
+    )
+
+    class Meta:
+        model = SchoolEducationalService
+        fields = (
+            "level",
+            "modular_code",
+            "modality",
+            "is_active",
+        )
+
+    def validate_modular_code(self, value):
+        modular_code = (value or "").strip()
+
+        if not modular_code:
+            return None
+
+        queryset = SchoolEducationalService.objects.filter(
+            modular_code=modular_code,
+        )
+
+        if self.instance is not None:
+            queryset = queryset.exclude(pk=self.instance.pk)
+
+        if queryset.exists():
+            raise serializers.ValidationError(
+                "Este código modular ya está registrado."
+            )
+
+        return modular_code
+
+    def validate(self, attrs):
+        school = self.context.get("school")
+        level = attrs.get("level")
+
+        if school is not None and level is not None:
+            queryset = SchoolEducationalService.objects.filter(
+                school=school,
+                level=level,
+            )
+
+            if self.instance is not None:
+                queryset = queryset.exclude(pk=self.instance.pk)
+
+            if queryset.exists():
+                raise serializers.ValidationError(
+                    {
+                        "level": (
+                            "Este nivel educativo ya está registrado "
+                            "en el colegio."
+                        )
+                    }
+                )
+
+        return attrs
+
+
+class MarketEditorialSerializer(serializers.ModelSerializer):
+    verification_status_display = serializers.CharField(
+        source="get_verification_status_display",
+        read_only=True,
+    )
+    catalog_provider = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MarketEditorial
+        fields = (
+            "id",
+            "name",
+            "catalog_provider",
+            "verification_status",
+            "verification_status_display",
+            "is_active",
+        )
+
+    def get_catalog_provider(self, obj):
+        if obj.catalog_provider_id is None:
+            return None
+
+        return {
+            "id": obj.catalog_provider_id,
+            "name": obj.catalog_provider.name,
+        }
+
+
+class MarketEditorialCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MarketEditorial
+        fields = ("name",)
+
+    def validate_name(self, value):
+        name = " ".join((value or "").split())
+
+        if not name:
+            raise serializers.ValidationError(
+                "Ingresa el nombre de la editorial."
+            )
+
+        normalized_name = slugify(name) or name.casefold()
+
+        if MarketEditorial.objects.filter(
+            normalized_name=normalized_name,
+        ).exists():
+            raise serializers.ValidationError(
+                "Esta editorial ya está registrada."
+            )
+
+        return name
 
 class SchoolEditorialUsageSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(
@@ -173,6 +443,7 @@ class SchoolEditorialUsageSerializer(serializers.ModelSerializer):
     )
     service = serializers.SerializerMethodField()
     area = serializers.SerializerMethodField()
+    editorial = serializers.SerializerMethodField()
     provider = serializers.SerializerMethodField()
 
     class Meta:
@@ -182,6 +453,8 @@ class SchoolEditorialUsageSerializer(serializers.ModelSerializer):
             "year",
             "service",
             "area",
+            "product_name",
+            "editorial",
             "provider",
             "status",
             "status_display",
@@ -212,12 +485,132 @@ class SchoolEditorialUsageSerializer(serializers.ModelSerializer):
             "name": obj.area.name,
         }
 
+    def get_editorial(self, obj):
+        if obj.editorial_id is None:
+            return None
+
+        return {
+            "id": obj.editorial_id,
+            "name": obj.editorial.name,
+            "verification_status": obj.editorial.verification_status,
+            "verification_status_display": (
+                obj.editorial.get_verification_status_display()
+            ),
+            "is_catalog_editorial": (
+                obj.editorial.catalog_provider_id is not None
+            ),
+        }
+
     def get_provider(self, obj):
+        if obj.provider_id is None:
+            return None
+
         return {
             "id": obj.provider_id,
             "name": obj.provider.name,
         }
 
+
+class SchoolEditorialUsageWriteSerializer(serializers.ModelSerializer):
+    service = serializers.PrimaryKeyRelatedField(
+        queryset=SchoolEducationalService.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    area = serializers.PrimaryKeyRelatedField(
+        queryset=Area.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
+    editorial = serializers.PrimaryKeyRelatedField(
+        queryset=MarketEditorial.objects.filter(is_active=True),
+    )
+
+    class Meta:
+        model = SchoolEditorialUsage
+        fields = (
+            "year",
+            "service",
+            "area",
+            "product_name",
+            "editorial",
+            "status",
+            "source",
+            "observed_on",
+            "notes",
+        )
+
+    def validate(self, attrs):
+        school = self.context.get("school")
+
+        service = attrs.get(
+            "service",
+            getattr(self.instance, "service", None),
+        )
+
+        if service is not None and service.school_id != school.id:
+            raise serializers.ValidationError(
+                {
+                    "service": (
+                        "El nivel educativo seleccionado "
+                        "no pertenece a este colegio."
+                    )
+                }
+            )
+
+        year = attrs.get(
+            "year",
+            getattr(self.instance, "year", None),
+        )
+
+        area = attrs.get(
+            "area",
+            getattr(self.instance, "area", None),
+        )
+
+        editorial = attrs.get(
+            "editorial",
+            getattr(self.instance, "editorial", None),
+        )
+
+        if editorial is None:
+            raise serializers.ValidationError(
+                {
+                    "editorial": "Selecciona una editorial."
+                }
+            )
+
+        product_name = " ".join(
+            (
+                attrs.get(
+                    "product_name",
+                    getattr(self.instance, "product_name", ""),
+                )
+                or ""
+            ).split()
+        )
+
+        attrs["product_name"] = product_name
+        attrs["provider"] = editorial.catalog_provider
+
+        queryset = SchoolEditorialUsage.objects.filter(
+            school=school,
+            year=year,
+            service=service,
+            area=area,
+            editorial=editorial,
+            product_name__iexact=product_name,
+        )
+
+        if self.instance is not None:
+            queryset = queryset.exclude(pk=self.instance.pk)
+
+        if queryset.exists():
+            raise serializers.ValidationError(
+                "Esta información editorial ya está registrada."
+            )
+
+        return attrs
 
 class SchoolCommercialProfileSerializer(serializers.ModelSerializer):
     campaign = CampaignSerializer(read_only=True)
@@ -393,19 +786,120 @@ class OpportunityListSerializer(serializers.ModelSerializer):
     team = CommercialTeamSummarySerializer(read_only=True)
     owner = UserSummarySerializer(read_only=True)
     is_closed = serializers.BooleanField(read_only=True)
+    next_activity = serializers.SerializerMethodField()
 
     class Meta:
         model = Opportunity
         fields = (
             "id", "title", "school", "campaign", "stage", "team", "owner",
-            "last_activity_at", "closed_at", "is_closed", "updated_at",
+            "last_activity_at", "next_activity", "closed_at", "is_closed",
+            "updated_at",
         )
 
     def get_school(self, obj):
         return {"id": obj.school_id, "name": obj.school.name}
 
     def get_campaign(self, obj):
-        return {"id": obj.campaign_id, "code": obj.campaign.code, "name": obj.campaign.name, "year": obj.campaign.year}
+        return {
+            "id": obj.campaign_id,
+            "code": obj.campaign.code,
+            "name": obj.campaign.name,
+            "year": obj.campaign.year,
+        }
+
+    def get_next_activity(self, obj):
+        links = getattr(
+            obj,
+            "prefetched_next_activity_links",
+            None,
+        )
+
+        if links is None:
+            links = (
+                obj.work_item_links
+                .select_related("task", "event", "reminder")
+                .all()
+            )
+
+        now = timezone.now()
+        candidates = []
+
+        for link in links:
+            if link.task_id:
+                task = link.task
+
+                if task.status in {"completed", "cancelled"}:
+                    continue
+
+                future_dates = [
+                    value
+                    for value in (
+                        task.start_at,
+                        task.due_at,
+                        task.reminder_at,
+                    )
+                    if value is not None and value >= now
+                ]
+
+                if not future_dates:
+                    continue
+
+                candidates.append(
+                    {
+                        "type": "task",
+                        "type_display": "Tarea",
+                        "id": task.id,
+                        "title": task.title,
+                        "scheduled_at": min(future_dates),
+                        "status": task.status,
+                    }
+                )
+                continue
+
+            if link.event_id:
+                event = link.event
+
+                if event.start_at < now:
+                    continue
+
+                candidates.append(
+                    {
+                        "type": "event",
+                        "type_display": "Evento",
+                        "id": event.id,
+                        "title": event.title,
+                        "scheduled_at": event.start_at,
+                        "status": None,
+                    }
+                )
+                continue
+
+            reminder = link.reminder
+
+            if reminder.status in {"completed", "dismissed"}:
+                continue
+
+            if reminder.remind_at < now:
+                continue
+
+            candidates.append(
+                {
+                    "type": "reminder",
+                    "type_display": "Recordatorio",
+                    "id": reminder.id,
+                    "title": reminder.title,
+                    "scheduled_at": reminder.remind_at,
+                    "status": reminder.status,
+                }
+            )
+
+        if not candidates:
+            return None
+
+        return min(
+            candidates,
+            key=lambda candidate: candidate["scheduled_at"],
+        )
 
 
 class OpportunityDetailSerializer(OpportunityListSerializer):
@@ -422,14 +916,45 @@ class OpportunityDetailSerializer(OpportunityListSerializer):
 
 
 class OpportunityCreateSerializer(serializers.Serializer):
-    title = serializers.CharField(max_length=200)
-    school = serializers.PrimaryKeyRelatedField(queryset=School.objects.filter(is_active=True))
-    campaign = serializers.PrimaryKeyRelatedField(queryset=Campaign.objects.exclude(status=Campaign.Status.CLOSED))
-    pipeline = serializers.PrimaryKeyRelatedField(queryset=Pipeline.objects.filter(is_active=True))
-    primary_contact = serializers.PrimaryKeyRelatedField(queryset=SchoolContact.objects.filter(is_active=True), required=False, allow_null=True)
-    team = serializers.PrimaryKeyRelatedField(queryset=CommercialTeam.objects.filter(is_active=True), required=False, allow_null=True)
-    owner = serializers.PrimaryKeyRelatedField(queryset=User.objects.filter(is_active=True), required=False, allow_null=True)
-    notes = serializers.CharField(required=False, allow_blank=True, default="")
+    title = serializers.CharField(
+        max_length=200,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+    school = serializers.PrimaryKeyRelatedField(
+        queryset=School.objects.filter(is_active=True),
+    )
+    campaign = serializers.PrimaryKeyRelatedField(
+        queryset=Campaign.objects.exclude(
+            status=Campaign.Status.CLOSED,
+        ),
+        required=False,
+    )
+    pipeline = serializers.PrimaryKeyRelatedField(
+        queryset=Pipeline.objects.filter(is_active=True),
+        required=False,
+    )
+    primary_contact = serializers.PrimaryKeyRelatedField(
+        queryset=SchoolContact.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
+    team = serializers.PrimaryKeyRelatedField(
+        queryset=CommercialTeam.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
+    owner = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
+    notes = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+    )
 
 
 class OpportunityUpdateSerializer(serializers.Serializer):
@@ -446,6 +971,507 @@ class OpportunityStageChangeSerializer(serializers.Serializer):
 class OpportunityReopenSerializer(serializers.Serializer):
     stage = serializers.PrimaryKeyRelatedField(queryset=PipelineStage.objects.filter(is_active=True, category=PipelineStage.Category.OPEN))
     reason = serializers.CharField(allow_blank=False, trim_whitespace=True)
+
+
+class CommercialProjectionGradeSerializer(serializers.ModelSerializer):
+    service = serializers.SerializerMethodField()
+    grade = GradeSummarySerializer(read_only=True)
+
+    class Meta:
+        model = CommercialProjectionGrade
+        fields = (
+            "id",
+            "service",
+            "grade",
+            "level_name_snapshot",
+            "grade_name_snapshot",
+            "section_count",
+            "student_count",
+        )
+
+    def get_service(self, obj):
+        return {
+            "id": obj.service_id,
+            "level": {
+                "id": obj.service.level_id,
+                "name": obj.service.level.name,
+            },
+        }
+
+
+class CommercialProjectionItemSerializer(serializers.ModelSerializer):
+    product = serializers.SerializerMethodField()
+    grade_line_id = serializers.IntegerField(read_only=True)
+    subtotal = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CommercialProjectionItem
+        fields = (
+            "id",
+            "grade_line_id",
+            "product",
+            "product_name_snapshot",
+            "provider_name_snapshot",
+            "level_name_snapshot",
+            "grade_name_snapshot",
+            "area_name_snapshot",
+            "quantity",
+            "unit_price",
+            "subtotal",
+            "price_year_snapshot",
+            "price_campaign_snapshot",
+        )
+
+    def get_product(self, obj):
+        return {
+            "id": obj.product_id,
+            "name": obj.product.name,
+            "provider": {
+                "id": obj.product.provider_id,
+                "name": obj.product.provider.name,
+            },
+        }
+
+    def get_subtotal(self, obj):
+        return f"{obj.subtotal:.2f}"
+
+
+class CommercialProjectionSerializer(serializers.ModelSerializer):
+    grades = CommercialProjectionGradeSerializer(
+        many=True,
+        read_only=True,
+    )
+    items = CommercialProjectionItemSerializer(
+        many=True,
+        read_only=True,
+    )
+    created_by = UserSummarySerializer(read_only=True)
+    total_students = serializers.SerializerMethodField()
+    total_amount = serializers.SerializerMethodField()
+    editorial_totals = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CommercialProjection
+        fields = (
+            "id",
+            "version",
+            "is_current",
+            "school_name_snapshot",
+            "campaign_name_snapshot",
+            "campaign_year_snapshot",
+            "notes",
+            "total_students",
+            "total_amount",
+            "editorial_totals",
+            "grades",
+            "items",
+            "created_by",
+            "created_at",
+            "updated_at",
+        )
+
+    def get_total_students(self, obj):
+        return sum(
+            grade.student_count
+            for grade in obj.grades.all()
+        )
+
+    def get_total_amount(self, obj):
+        total = sum(
+            (item.subtotal for item in obj.items.all()),
+            0,
+        )
+        return f"{total:.2f}"
+
+    def get_editorial_totals(self, obj):
+        totals = {}
+
+        for item in obj.items.all():
+            provider = item.provider_name_snapshot
+            totals[provider] = totals.get(provider, 0) + item.subtotal
+
+        return [
+            {
+                "editorial": provider,
+                "amount": f"{amount:.2f}",
+            }
+            for provider, amount in sorted(totals.items())
+        ]
+
+
+class CommercialProjectionGradeInputSerializer(serializers.Serializer):
+    service = serializers.PrimaryKeyRelatedField(
+        queryset=SchoolEducationalService.objects.filter(is_active=True),
+    )
+    grade = serializers.PrimaryKeyRelatedField(
+        queryset=Grade.objects.filter(is_active=True),
+    )
+    section_count = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        allow_null=True,
+    )
+    student_count = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        allow_null=True,
+    )
+
+
+class CommercialProjectionItemInputSerializer(serializers.Serializer):
+    service = serializers.PrimaryKeyRelatedField(
+        queryset=SchoolEducationalService.objects.filter(is_active=True),
+    )
+    grade = serializers.PrimaryKeyRelatedField(
+        queryset=Grade.objects.filter(is_active=True),
+    )
+    product = serializers.PrimaryKeyRelatedField(
+        queryset=Product.objects.filter(is_active=True),
+    )
+    quantity = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        allow_null=True,
+    )
+
+
+class CommercialProjectionCreateSerializer(serializers.Serializer):
+    grades = CommercialProjectionGradeInputSerializer(
+        many=True,
+        allow_empty=False,
+    )
+    items = CommercialProjectionItemInputSerializer(
+        many=True,
+        required=False,
+        default=list,
+    )
+    notes = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+
+    def validate(self, attrs):
+        grades = attrs["grades"]
+        items = attrs.get("items", [])
+
+        grade_keys = [
+            (grade["service"].id, grade["grade"].id)
+            for grade in grades
+        ]
+
+        if len(grade_keys) != len(set(grade_keys)):
+            raise serializers.ValidationError(
+                {
+                    "grades": (
+                        "No puedes registrar dos veces "
+                        "el mismo nivel y grado."
+                    )
+                }
+            )
+
+        item_keys = [
+            (
+                item["service"].id,
+                item["grade"].id,
+                item["product"].id,
+            )
+            for item in items
+        ]
+
+        if len(item_keys) != len(set(item_keys)):
+            raise serializers.ValidationError(
+                {
+                    "items": (
+                        "No puedes registrar dos veces el mismo "
+                        "producto en el mismo nivel y grado."
+                    )
+                }
+            )
+
+        unknown_grade = next(
+            (
+                item
+                for item in items
+                if (item["service"].id, item["grade"].id)
+                not in set(grade_keys)
+            ),
+            None,
+        )
+
+        if unknown_grade is not None:
+            raise serializers.ValidationError(
+                {
+                    "items": (
+                        "Cada producto debe pertenecer a un nivel "
+                        "y grado incluidos en la proyección."
+                    )
+                }
+            )
+
+        return attrs
+
+
+class CommercialQuotationItemSerializer(serializers.ModelSerializer):
+    product = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CommercialQuotationItem
+        fields = (
+            "id",
+            "product",
+            "product_name_snapshot",
+            "provider_name_snapshot",
+            "level_name_snapshot",
+            "grade_name_snapshot",
+            "area_name_snapshot",
+            "quantity",
+            "pvp",
+            "supplier_cost",
+            "school_price",
+            "school_discount_percent",
+            "parent_price",
+            "school_commission",
+            "price_year_snapshot",
+            "price_campaign_snapshot",
+            "uses_reference_price",
+        )
+
+    def get_product(self, obj):
+        return {
+            "id": obj.product_id,
+            "name": obj.product.name,
+        }
+
+
+class CommercialQuotationSerializer(serializers.ModelSerializer):
+    status_display = serializers.CharField(
+        source="get_status_display",
+        read_only=True,
+    )
+    discount_approval_status_display = serializers.CharField(
+        source="get_discount_approval_status_display",
+        read_only=True,
+    )
+    source_projection = serializers.SerializerMethodField()
+    items = CommercialQuotationItemSerializer(
+        many=True,
+        read_only=True,
+    )
+    created_by = UserSummarySerializer(read_only=True)
+    sent_by = UserSummarySerializer(read_only=True)
+    accepted_by = UserSummarySerializer(read_only=True)
+    discount_approved_by = UserSummarySerializer(read_only=True)
+
+    class Meta:
+        model = CommercialQuotation
+        fields = (
+            "id",
+            "version",
+            "status",
+            "status_display",
+            "source_projection",
+            "school_name_snapshot",
+            "campaign_name_snapshot",
+            "notes",
+            "requires_discount_approval",
+            "discount_approval_status",
+            "discount_approval_status_display",
+            "discount_approved_at",
+            "discount_approved_by",
+            "discount_approval_note",
+            "sent_at",
+            "sent_by",
+            "accepted_at",
+            "accepted_by",
+            "created_by",
+            "items",
+            "created_at",
+            "updated_at",
+        )
+
+    def get_source_projection(self, obj):
+        if obj.source_projection_id is None:
+            return None
+
+        return {
+            "id": obj.source_projection_id,
+            "version": obj.source_projection.version,
+            "campaign_year": obj.source_projection.campaign_year_snapshot,
+        }
+
+
+class CommercialQuotationItemCreateSerializer(serializers.Serializer):
+    product = serializers.PrimaryKeyRelatedField(
+        queryset=Product.objects.filter(is_active=True),
+    )
+    quantity = serializers.IntegerField(min_value=1)
+    pvp = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        min_value=0,
+    )
+    supplier_cost = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        min_value=0,
+    )
+    school_price = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        min_value=0,
+    )
+    parent_price = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        min_value=0,
+    )
+    school_commission = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        min_value=0,
+        required=False,
+        default=0,
+    )
+
+
+class CommercialQuotationCreateSerializer(serializers.Serializer):
+    items = CommercialQuotationItemCreateSerializer(
+        many=True,
+        allow_empty=False,
+    )
+    notes = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+
+
+class CommercialQuotationProjectionItemAdjustmentSerializer(
+    serializers.Serializer
+):
+    projection_item = serializers.PrimaryKeyRelatedField(
+        queryset=CommercialProjectionItem.objects.all(),
+    )
+    quantity = serializers.IntegerField(
+        min_value=1,
+        required=False,
+    )
+    school_discount_percent = serializers.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        min_value=0,
+        max_value=100,
+        required=False,
+    )
+    parent_price = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        min_value=0,
+        required=False,
+    )
+    school_commission = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        min_value=0,
+        required=False,
+    )
+
+
+class CommercialQuotationFromProjectionSerializer(serializers.Serializer):
+    items = CommercialQuotationProjectionItemAdjustmentSerializer(
+        many=True,
+        required=False,
+        allow_empty=True,
+        default=list,
+    )
+    notes = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+
+
+class CommercialQuotationDiscountApprovalSerializer(
+    serializers.Serializer
+):
+    note = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+
+
+class AdoptionItemSerializer(serializers.ModelSerializer):
+    product = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AdoptionItem
+        fields = (
+            "id",
+            "product",
+            "product_name_snapshot",
+            "provider_name_snapshot",
+            "level_name_snapshot",
+            "grade_name_snapshot",
+            "area_name_snapshot",
+            "quantity",
+            "pvp",
+            "supplier_cost",
+            "school_price",
+            "parent_price",
+            "school_commission",
+            "reading_month",
+        )
+
+    def get_product(self, obj):
+        return {
+            "id": obj.product_id,
+            "name": obj.product.name,
+        }
+
+
+class AdoptionSerializer(serializers.ModelSerializer):
+    advisor = UserSummarySerializer(read_only=True)
+    confirmed_by = UserSummarySerializer(read_only=True)
+    authorized_contact = SchoolContactSerializer(read_only=True)
+    items = AdoptionItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Adoption
+        fields = (
+            "id",
+            "version",
+            "is_current",
+            "school_name_snapshot",
+            "campaign_name_snapshot",
+            "advisor",
+            "advisor_name_snapshot",
+            "authorized_contact",
+            "authorized_contact_name_snapshot",
+            "signed_at",
+            "confirmed_at",
+            "confirmed_by",
+            "notes",
+            "items",
+            "created_at",
+            "updated_at",
+        )
+
+
+class AdoptionConfirmSerializer(serializers.Serializer):
+    quotation = serializers.PrimaryKeyRelatedField(
+        queryset=CommercialQuotation.objects.all(),
+    )
+    authorized_contact = serializers.PrimaryKeyRelatedField(
+        queryset=SchoolContact.objects.filter(is_active=True),
+    )
+    signed_at = serializers.DateTimeField()
+    notes = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+    )
 
 
 class OpportunityStageHistorySerializer(serializers.ModelSerializer):
@@ -470,7 +1496,8 @@ class CommercialActivitySerializer(serializers.ModelSerializer):
     class Meta:
         model = CommercialActivity
         fields = (
-            "id", "activity_type", "activity_type_display", "summary", "result",
+            "id", "school_id", "opportunity_id",
+            "activity_type", "activity_type_display", "summary", "result",
             "contact", "performed_by", "occurred_at", "is_important", "created_at",
         )
 
@@ -520,13 +1547,86 @@ class OpportunityReminderCreateSerializer(serializers.Serializer):
     event = serializers.PrimaryKeyRelatedField(queryset=CalendarEvent.objects.all(), required=False, allow_null=True)
 
 
+class SchoolCommercialActivityCreateSerializer(
+    CommercialActivityCreateSerializer
+):
+    opportunity = serializers.PrimaryKeyRelatedField(
+        queryset=Opportunity.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+
+
+class SchoolTaskCreateSerializer(OpportunityTaskCreateSerializer):
+    contact = serializers.PrimaryKeyRelatedField(
+        queryset=SchoolContact.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
+    opportunity = serializers.PrimaryKeyRelatedField(
+        queryset=Opportunity.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    origin_activity = serializers.PrimaryKeyRelatedField(
+        queryset=CommercialActivity.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+
+
+class SchoolEventCreateSerializer(OpportunityEventCreateSerializer):
+    contact = serializers.PrimaryKeyRelatedField(
+        queryset=SchoolContact.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
+    opportunity = serializers.PrimaryKeyRelatedField(
+        queryset=Opportunity.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    origin_activity = serializers.PrimaryKeyRelatedField(
+        queryset=CommercialActivity.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+
+
+class SchoolReminderCreateSerializer(OpportunityReminderCreateSerializer):
+    contact = serializers.PrimaryKeyRelatedField(
+        queryset=SchoolContact.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
+    opportunity = serializers.PrimaryKeyRelatedField(
+        queryset=Opportunity.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    origin_activity = serializers.PrimaryKeyRelatedField(
+        queryset=CommercialActivity.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+
+
 class WorkItemLinkSerializer(serializers.ModelSerializer):
     type = serializers.CharField(source="work_item_type", read_only=True)
     item = serializers.SerializerMethodField()
 
     class Meta:
         model = CRMWorkItemLink
-        fields = ("id", "type", "item", "origin_activity_id", "created_at")
+        fields = (
+            "id",
+            "school_id",
+            "contact_id",
+            "opportunity_id",
+            "type",
+            "item",
+            "origin_activity_id",
+            "created_at",
+        )
 
     def get_item(self, obj):
         if obj.task_id:
