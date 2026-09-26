@@ -18,11 +18,24 @@ class CommercialQuotation(TimeStampedModel):
         REJECTED = "rejected", "Rechazada"
         SUPERSEDED = "superseded", "Reemplazada"
 
+    class DiscountApprovalStatus(models.TextChoices):
+        NOT_REQUIRED = "not_required", "No requerida"
+        PENDING = "pending", "Pendiente"
+        APPROVED = "approved", "Aprobada"
+
     opportunity = models.ForeignKey(
         Opportunity,
         on_delete=models.PROTECT,
         related_name="quotations",
         verbose_name="Oportunidad",
+    )
+    source_projection = models.ForeignKey(
+        "CommercialProjection",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="quotations",
+        verbose_name="Proyección de origen",
     )
     version = models.PositiveSmallIntegerField(
         verbose_name="Versión",
@@ -45,6 +58,34 @@ class CommercialQuotation(TimeStampedModel):
     notes = models.TextField(
         blank=True,
         verbose_name="Observaciones",
+    )
+    requires_discount_approval = models.BooleanField(
+        default=False,
+        verbose_name="Requiere aprobación de descuento",
+    )
+    discount_approval_status = models.CharField(
+        max_length=20,
+        choices=DiscountApprovalStatus.choices,
+        default=DiscountApprovalStatus.NOT_REQUIRED,
+        db_index=True,
+        verbose_name="Estado de aprobación de descuento",
+    )
+    discount_approved_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Fecha de aprobación de descuento",
+    )
+    discount_approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="approved_crm_quotation_discounts",
+        verbose_name="Descuento aprobado por",
+    )
+    discount_approval_note = models.TextField(
+        blank=True,
+        verbose_name="Observación de aprobación",
     )
     sent_at = models.DateTimeField(
         null=True,
@@ -163,6 +204,15 @@ class CommercialQuotationItem(TimeStampedModel):
         validators=[MinValueValidator(Decimal("0.00"))],
         verbose_name="Precio colegio",
     )
+    school_discount_percent = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        validators=[
+            MinValueValidator(Decimal("0.00")),
+        ],
+        verbose_name="Descuento colegio (%)",
+    )
     parent_price = models.DecimalField(
         max_digits=12,
         decimal_places=2,
@@ -175,6 +225,20 @@ class CommercialQuotationItem(TimeStampedModel):
         default=Decimal("0.00"),
         validators=[MinValueValidator(Decimal("0.00"))],
         verbose_name="Comisión colegio",
+    )
+    price_year_snapshot = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        verbose_name="Año del precio usado",
+    )
+    price_campaign_snapshot = models.CharField(
+        max_length=100,
+        blank=True,
+        verbose_name="Campaña del precio usado",
+    )
+    uses_reference_price = models.BooleanField(
+        default=False,
+        verbose_name="Usa precio referencial anterior",
     )
 
     class Meta:
