@@ -61,6 +61,7 @@ from crm.services import (
     create_school_task,
     record_commercial_activity,
     send_commercial_quotation,
+    update_commercial_quotation_from_projection,
     reopen_opportunity,
     resolve_projection_price,
     transition_opportunity_stage,
@@ -1920,6 +1921,75 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         return Response(
             CommercialQuotationSerializer(quotation).data,
             status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["patch"],
+        url_path=r"quotations/(?P<quotation_id>[^/.]+)/draft",
+    )
+    def update_quotation_draft(
+        self,
+        request,
+        pk=None,
+        quotation_id=None,
+    ):
+        opportunity = self.get_object()
+
+        if not _user_can_manage_visible_opportunity(
+            request.user,
+            opportunity,
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para editar cotizaciones "
+                "en esta oportunidad."
+            )
+
+        quotation = opportunity.quotations.filter(
+            pk=quotation_id
+        ).first()
+
+        if quotation is None:
+            raise serializers.ValidationError(
+                {
+                    "quotation": (
+                        "La cotización no pertenece a esta oportunidad."
+                    )
+                }
+            )
+
+        serializer = CommercialQuotationFromProjectionSerializer(
+            data=request.data
+        )
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            quotation = update_commercial_quotation_from_projection(
+                quotation=quotation,
+                item_adjustments=serializer.validated_data.get(
+                    "items",
+                    [],
+                ),
+                notes=serializer.validated_data.get("notes", ""),
+            )
+        except CommercialQuotationError as exc:
+            _raise_service_validation_error(exc)
+
+        quotation = (
+            CommercialQuotation.objects
+            .select_related(
+                "source_projection",
+                "created_by",
+                "sent_by",
+                "accepted_by",
+                "discount_approved_by",
+            )
+            .prefetch_related("items__product")
+            .get(pk=quotation.pk)
+        )
+
+        return Response(
+            CommercialQuotationSerializer(quotation).data
         )
 
     @action(
