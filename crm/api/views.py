@@ -47,9 +47,11 @@ from crm.services import (
     CommercialQuotationError,
     OpportunityTransitionError,
     accept_commercial_quotation,
+    approve_commercial_quotation_discount,
     confirm_adoption,
     create_commercial_projection_revision,
     create_commercial_quotation,
+    create_commercial_quotation_from_projection,
     create_opportunity,
     create_opportunity_event,
     create_opportunity_reminder,
@@ -74,6 +76,8 @@ from .serializers import (
     CommercialProjectionCreateSerializer,
     CommercialProjectionSerializer,
     CommercialQuotationCreateSerializer,
+    CommercialQuotationDiscountApprovalSerializer,
+    CommercialQuotationFromProjectionSerializer,
     CommercialQuotationSerializer,
     CommercialTeamDetailSerializer,
     OpportunityCreateSerializer,
@@ -1799,6 +1803,59 @@ class OpportunityViewSet(viewsets.ModelViewSet):
             ).data
         )
 
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="quotations/from-projection",
+    )
+    def quotation_from_projection(self, request, pk=None):
+        opportunity = self.get_object()
+
+        if not _user_can_manage_visible_opportunity(
+            request.user,
+            opportunity,
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para crear cotizaciones "
+                "en esta oportunidad."
+            )
+
+        serializer = CommercialQuotationFromProjectionSerializer(
+            data=request.data
+        )
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            quotation = create_commercial_quotation_from_projection(
+                opportunity=opportunity,
+                actor=request.user,
+                item_adjustments=serializer.validated_data.get(
+                    "items",
+                    [],
+                ),
+                notes=serializer.validated_data.get("notes", ""),
+            )
+        except CommercialQuotationError as exc:
+            _raise_service_validation_error(exc)
+
+        quotation = (
+            CommercialQuotation.objects
+            .select_related(
+                "source_projection",
+                "created_by",
+                "sent_by",
+                "accepted_by",
+                "discount_approved_by",
+            )
+            .prefetch_related("items__product")
+            .get(pk=quotation.pk)
+        )
+
+        return Response(
+            CommercialQuotationSerializer(quotation).data,
+            status=status.HTTP_201_CREATED,
+        )
+
     @action(detail=True, methods=["get", "post"], url_path="quotations")
     def quotations(self, request, pk=None):
         opportunity = self.get_object()
@@ -1807,9 +1864,11 @@ class OpportunityViewSet(viewsets.ModelViewSet):
             queryset = (
                 opportunity.quotations
                 .select_related(
+                    "source_projection",
                     "created_by",
                     "sent_by",
                     "accepted_by",
+                    "discount_approved_by",
                 )
                 .prefetch_related("items__product")
                 .order_by("-version")
@@ -1848,9 +1907,11 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         quotation = (
             CommercialQuotation.objects
             .select_related(
+                "source_projection",
                 "created_by",
                 "sent_by",
                 "accepted_by",
+                "discount_approved_by",
             )
             .prefetch_related("items__product")
             .get(pk=quotation.pk)
@@ -1905,6 +1966,72 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                 "created_by",
                 "sent_by",
                 "accepted_by",
+            )
+            .prefetch_related("items__product")
+            .get(pk=quotation.pk)
+        )
+
+        return Response(
+            CommercialQuotationSerializer(quotation).data
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=r"quotations/(?P<quotation_id>[^/.]+)/approve-discount",
+    )
+    def approve_quotation_discount(
+        self,
+        request,
+        pk=None,
+        quotation_id=None,
+    ):
+        opportunity = self.get_object()
+
+        if not (
+            usuario_es_administrador(request.user)
+            or usuario_puede_supervisar_crm(request.user)
+        ):
+            raise PermissionDenied(
+                "Solo un supervisor comercial puede aprobar "
+                "descuentos superiores al estándar."
+            )
+
+        quotation = opportunity.quotations.filter(
+            pk=quotation_id
+        ).first()
+
+        if quotation is None:
+            raise serializers.ValidationError(
+                {
+                    "quotation": (
+                        "La cotización no pertenece a esta oportunidad."
+                    )
+                }
+            )
+
+        serializer = CommercialQuotationDiscountApprovalSerializer(
+            data=request.data
+        )
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            quotation = approve_commercial_quotation_discount(
+                quotation=quotation,
+                actor=request.user,
+                note=serializer.validated_data.get("note", ""),
+            )
+        except CommercialQuotationError as exc:
+            _raise_service_validation_error(exc)
+
+        quotation = (
+            CommercialQuotation.objects
+            .select_related(
+                "source_projection",
+                "created_by",
+                "sent_by",
+                "accepted_by",
+                "discount_approved_by",
             )
             .prefetch_related("items__product")
             .get(pk=quotation.pk)
