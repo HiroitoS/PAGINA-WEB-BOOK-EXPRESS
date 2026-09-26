@@ -1963,9 +1963,11 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         quotation = (
             CommercialQuotation.objects
             .select_related(
+                "source_projection",
                 "created_by",
                 "sent_by",
                 "accepted_by",
+                "discount_approved_by",
             )
             .prefetch_related("items__product")
             .get(pk=quotation.pk)
@@ -2082,9 +2084,11 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         quotation = (
             CommercialQuotation.objects
             .select_related(
+                "source_projection",
                 "created_by",
                 "sent_by",
                 "accepted_by",
+                "discount_approved_by",
             )
             .prefetch_related("items__product")
             .get(pk=quotation.pk)
