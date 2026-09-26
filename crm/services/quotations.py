@@ -326,10 +326,7 @@ def update_commercial_quotation_from_projection(
     locked_quotation = (
         CommercialQuotation.objects
         .select_for_update()
-        .select_related(
-            "opportunity__campaign",
-            "source_projection",
-        )
+        .select_related("opportunity__campaign")
         .get(pk=quotation.pk)
     )
 
