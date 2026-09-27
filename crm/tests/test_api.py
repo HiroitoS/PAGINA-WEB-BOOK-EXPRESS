@@ -328,6 +328,69 @@ class CRMApiTests(TestCase):
         self.opportunity.refresh_from_db()
         self.assertIsNotNone(self.opportunity.last_activity_at)
 
+    def test_marking_school_primary_contact_fills_empty_open_opportunity(self):
+        contact = SchoolContact.objects.create(
+            school=self.school,
+            full_name="Director principal CRM",
+            position="Director",
+            created_by=self.admin,
+        )
+
+        self.assertIsNone(self.opportunity.primary_contact)
+
+        self.authenticate(self.advisor)
+        response = self.client.patch(
+            reverse("crm:contact-detail", args=[contact.id]),
+            {
+                "is_primary": True,
+                "decision_role": "decision_maker",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["is_primary"])
+
+        self.opportunity.refresh_from_db()
+        self.assertEqual(
+            self.opportunity.primary_contact_id,
+            contact.id,
+        )
+
+    def test_primary_contact_sync_does_not_overwrite_existing_opportunity_contact(
+        self,
+    ):
+        existing_contact = SchoolContact.objects.create(
+            school=self.school,
+            full_name="Directora oportunidad CRM",
+            position="Directora",
+            created_by=self.admin,
+        )
+        self.opportunity.primary_contact = existing_contact
+        self.opportunity.save(update_fields=["primary_contact", "updated_at"])
+
+        new_primary = SchoolContact.objects.create(
+            school=self.school,
+            full_name="Nuevo contacto principal CRM",
+            position="Promotor",
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.advisor)
+        response = self.client.patch(
+            reverse("crm:contact-detail", args=[new_primary.id]),
+            {"is_primary": True},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.opportunity.refresh_from_db()
+        self.assertEqual(
+            self.opportunity.primary_contact_id,
+            existing_contact.id,
+        )
+
     def test_school_activity_does_not_guess_between_open_opportunities(self):
         other_campaign = Campaign.objects.create(
             code="API-2028",
