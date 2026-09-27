@@ -154,6 +154,19 @@ def _single_visible_open_opportunity_for_school(user, school):
     return None
 
 
+def _fill_empty_primary_contact_on_open_opportunities(*, school, contact):
+    if not contact.is_active or not contact.is_primary:
+        return
+
+    school.opportunities.filter(
+        stage__category=PipelineStage.Category.OPEN,
+        primary_contact__isnull=True,
+    ).update(
+        primary_contact=contact,
+        updated_at=timezone.now(),
+    )
+
+
 class CRMSummaryAPIView(APIView):
     permission_classes = [EsUsuarioCRM]
 
@@ -299,6 +312,11 @@ class SchoolContactViewSet(viewsets.ModelViewSet):
 
             contact = serializer.save(
                 is_primary=is_primary,
+            )
+
+            _fill_empty_primary_contact_on_open_opportunities(
+                school=contact.school,
+                contact=contact,
             )
 
         return Response(
@@ -781,6 +799,11 @@ class SchoolViewSet(viewsets.ModelViewSet):
                 is_primary=is_primary,
             )
 
+            _fill_empty_primary_contact_on_open_opportunities(
+                school=school,
+                contact=contact,
+            )
+
         return Response(
             SchoolContactSerializer(contact).data,
             status=status.HTTP_201_CREATED,
@@ -858,6 +881,11 @@ class SchoolViewSet(viewsets.ModelViewSet):
 
             contact = serializer.save(
                 is_primary=is_primary,
+            )
+
+            _fill_empty_primary_contact_on_open_opportunities(
+                school=school,
+                contact=contact,
             )
 
         return Response(
