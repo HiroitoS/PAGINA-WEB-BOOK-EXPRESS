@@ -3,10 +3,9 @@ from django.test import TestCase
 
 from crm.management.commands.sync_crm_pipeline import (
     DEFAULT_STAGES,
-    LEGACY_ORDER_BY_CODE,
     PIPELINE_CODE,
 )
-from crm.models import Pipeline, PipelineStage
+from crm.models import Campaign, Pipeline, PipelineStage, School
 
 
 class SyncCRMPipelineCommandTests(TestCase):
@@ -25,7 +24,7 @@ class SyncCRMPipelineCommandTests(TestCase):
             )
         )
 
-        self.assertEqual(len(stages), 7)
+        self.assertEqual(len(stages), 6)
         self.assertTrue(pipeline.is_default)
         self.assertTrue(pipeline.is_active)
 
@@ -42,7 +41,7 @@ class SyncCRMPipelineCommandTests(TestCase):
         ]
         self.assertEqual(stages, expected)
 
-    def test_sync_preserves_existing_stage_ids_and_adds_accepted_stage(self):
+    def test_sync_reuses_legacy_stage_ids_instead_of_duplicating(self):
         pipeline = Pipeline.objects.create(
             code=PIPELINE_CODE,
             name="Proceso comercial Book Express",
@@ -50,27 +49,9 @@ class SyncCRMPipelineCommandTests(TestCase):
         )
 
         legacy_stages = [
-            (
-                "por_contactar",
-                "Por contactar",
-                10,
-                PipelineStage.Category.OPEN,
-                True,
-            ),
-            (
-                "contactado",
-                "Contactado",
-                20,
-                PipelineStage.Category.OPEN,
-                False,
-            ),
-            (
-                "evaluacion",
-                "En evaluación",
-                30,
-                PipelineStage.Category.OPEN,
-                False,
-            ),
+            ("por_contactar", "Por contactar", 10, PipelineStage.Category.OPEN, True),
+            ("contactado", "Contactado", 20, PipelineStage.Category.OPEN, False),
+            ("evaluacion", "En evaluación", 30, PipelineStage.Category.OPEN, False),
             (
                 "propuesta_negociacion",
                 "Propuesta / negociación",
@@ -110,60 +91,95 @@ class SyncCRMPipelineCommandTests(TestCase):
         call_command("sync_crm_pipeline")
 
         stages = pipeline.stages.order_by("order")
-        self.assertEqual(stages.count(), 7)
+        self.assertEqual(stages.count(), 6)
 
         for expected in DEFAULT_STAGES:
-            stage = stages.get(code=expected["code"])
-
-            legacy_order = LEGACY_ORDER_BY_CODE.get(
-                expected["code"]
-            )
-            if legacy_order is not None:
-                self.assertEqual(
-                    stage.id,
-                    original_ids[legacy_order],
-                )
-            else:
-                self.assertNotIn(
-                    stage.id,
-                    original_ids.values(),
-                )
-
+            stage = stages.get(order=expected["order"])
+            self.assertEqual(stage.id, original_ids[expected["order"]])
+            self.assertEqual(stage.code, expected["code"])
             self.assertEqual(stage.name, expected["name"])
-            self.assertEqual(stage.order, expected["order"])
             self.assertEqual(stage.category, expected["category"])
-            self.assertEqual(
-                stage.is_initial,
-                expected["is_initial"],
-            )
+            self.assertEqual(stage.is_initial, expected["is_initial"])
             self.assertTrue(stage.is_active)
 
-    def test_sync_keeps_current_canonical_won_and_lost_ids(self):
+    def test_sync_deactivates_accidental_accepted_stage_and_recovers_opportunity(self):
+        pipeline = Pipeline.objects.create(
+            code=PIPELINE_CODE,
+            name="Pipeline con etapa accidental",
+            is_active=True,
+        )
+
+        stage_specs = [
+            ("proyeccion_ventas", "Proyección de ventas", 10, PipelineStage.Category.OPEN, True),
+            ("cita_presentacion", "Cita / presentación", 20, PipelineStage.Category.OPEN, False),
+            ("decisor_influenciador", "Decisor e influenciador", 30, PipelineStage.Category.OPEN, False),
+            ("cotizacion_enviada", "Cotización enviada", 40, PipelineStage.Category.OPEN, False),
+            ("cotizacion_aceptada", "Cotización aceptada / pendiente de adopción", 50, PipelineStage.Category.OPEN, False),
+            ("cierre_ganado_adopcion", "Cierre ganado (adopción)", 60, PipelineStage.Category.WON, False),
+            ("cierre_perdido", "Cierre perdido", 70, PipelineStage.Category.LOST, False),
+        ]
+
+        stages = {}
+        for code, name, order, category, is_initial in stage_specs:
+            stages[code] = PipelineStage.objects.create(
+                pipeline=pipeline,
+                code=code,
+                name=name,
+                order=order,
+                category=category,
+                is_initial=is_initial,
+                is_active=True,
+            )
+
+        school = School.objects.create(name="Colegio Pipeline")
+        campaign = Campaign.objects.create(
+            code="PIPE-2027",
+            name="Campaña 2027",
+            year=2027,
+            campaign_type=Campaign.CampaignType.SCHOOL,
+            status=Campaign.Status.ACTIVE,
+        )
+        opportunity = school.opportunities.create(
+            title="Oportunidad Pipeline",
+            campaign=campaign,
+            pipeline=pipeline,
+            stage=stages["cotizacion_aceptada"],
+        )
+
+        won_id = stages["cierre_ganado_adopcion"].id
+        lost_id = stages["cierre_perdido"].id
+
         call_command("sync_crm_pipeline")
 
-        pipeline = Pipeline.objects.get(code=PIPELINE_CODE)
-        won = pipeline.stages.get(code="cierre_ganado_adopcion")
-        lost = pipeline.stages.get(code="cierre_perdido")
-        won_id = won.id
-        lost_id = lost.id
+        opportunity.refresh_from_db()
+        stages["cotizacion_aceptada"].refresh_from_db()
 
-        call_command("sync_crm_pipeline")
+        active_stages = pipeline.stages.filter(is_active=True).order_by("order")
 
-        pipeline.refresh_from_db()
-
+        self.assertEqual(active_stages.count(), 6)
+        self.assertFalse(stages["cotizacion_aceptada"].is_active)
         self.assertEqual(
-            pipeline.stages.get(
-                code="cierre_ganado_adopcion"
-            ).id,
+            opportunity.stage.code,
+            "cotizacion_enviada",
+        )
+        self.assertEqual(
+            pipeline.stages.get(code="cierre_ganado_adopcion").id,
             won_id,
+        )
+        self.assertEqual(
+            pipeline.stages.get(code="cierre_ganado_adopcion").order,
+            50,
         )
         self.assertEqual(
             pipeline.stages.get(code="cierre_perdido").id,
             lost_id,
         )
         self.assertEqual(
-            pipeline.stages.get(
-                code="cotizacion_aceptada"
-            ).order,
-            50,
+            pipeline.stages.get(code="cierre_perdido").order,
+            60,
         )
+        self.assertEqual(
+            pipeline.stages.get(code="cita_presentacion").name,
+            "Cita",
+        )
+

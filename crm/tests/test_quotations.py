@@ -75,14 +75,6 @@ class CRMQuotationFromProjectionTests(TestCase):
             category=PipelineStage.Category.OPEN,
             created_by=self.admin,
         )
-        self.accepted_stage = PipelineStage.objects.create(
-            pipeline=self.pipeline,
-            code="cotizacion_aceptada",
-            name="Cotización aceptada / pendiente de adopción",
-            order=50,
-            category=PipelineStage.Category.OPEN,
-            created_by=self.admin,
-        )
         self.opportunity = self.school.opportunities.create(
             title="Campaña 2027 - Colegio Cotización",
             campaign=self.campaign,
@@ -386,7 +378,38 @@ class CRMQuotationFromProjectionTests(TestCase):
         item = quotation.items.get()
         self.assertEqual(item.quantity, 20)
 
-    def test_acceptance_moves_opportunity_to_pending_adoption_stage(self):
+    def test_sending_twice_is_idempotent(self):
+        quotation = create_commercial_quotation_from_projection(
+            opportunity=self.opportunity,
+            actor=self.advisor,
+        )
+
+        first = send_commercial_quotation(
+            quotation=quotation,
+            actor=self.advisor,
+        )
+        first_sent_at = first.sent_at
+        history_count = self.opportunity.stage_history.count()
+
+        second = send_commercial_quotation(
+            quotation=first,
+            actor=self.advisor,
+        )
+
+        self.opportunity.refresh_from_db()
+
+        self.assertEqual(second.status, CommercialQuotation.Status.SENT)
+        self.assertEqual(second.sent_at, first_sent_at)
+        self.assertEqual(
+            self.opportunity.stage,
+            self.quotation_stage,
+        )
+        self.assertEqual(
+            self.opportunity.stage_history.count(),
+            history_count,
+        )
+
+    def test_acceptance_keeps_opportunity_in_quotation_stage(self):
         quotation = create_commercial_quotation_from_projection(
             opportunity=self.opportunity,
             actor=self.advisor,
@@ -395,20 +418,36 @@ class CRMQuotationFromProjectionTests(TestCase):
             quotation=quotation,
             actor=self.advisor,
         )
+        history_count = self.opportunity.stage_history.count()
+
         accepted = accept_commercial_quotation(
             quotation=sent,
+            actor=self.advisor,
+        )
+        first_accepted_at = accepted.accepted_at
+
+        accepted_again = accept_commercial_quotation(
+            quotation=accepted,
             actor=self.advisor,
         )
 
         self.opportunity.refresh_from_db()
 
         self.assertEqual(
-            accepted.status,
+            accepted_again.status,
             CommercialQuotation.Status.ACCEPTED,
         )
         self.assertEqual(
+            accepted_again.accepted_at,
+            first_accepted_at,
+        )
+        self.assertEqual(
             self.opportunity.stage,
-            self.accepted_stage,
+            self.quotation_stage,
+        )
+        self.assertEqual(
+            self.opportunity.stage_history.count(),
+            history_count,
         )
 
     def test_sent_quotation_cannot_be_edited(self):

@@ -1,5 +1,6 @@
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.utils import timezone
 
 from crm.models import Pipeline, PipelineStage
 
@@ -16,7 +17,7 @@ DEFAULT_STAGES = [
     },
     {
         "code": "cita_presentacion",
-        "name": "Cita / presentación",
+        "name": "Cita",
         "order": 20,
         "category": PipelineStage.Category.OPEN,
         "is_initial": False,
@@ -36,23 +37,16 @@ DEFAULT_STAGES = [
         "is_initial": False,
     },
     {
-        "code": "cotizacion_aceptada",
-        "name": "Cotización aceptada / pendiente de adopción",
-        "order": 50,
-        "category": PipelineStage.Category.OPEN,
-        "is_initial": False,
-    },
-    {
         "code": "cierre_ganado_adopcion",
         "name": "Cierre ganado (adopción)",
-        "order": 60,
+        "order": 50,
         "category": PipelineStage.Category.WON,
         "is_initial": False,
     },
     {
         "code": "cierre_perdido",
         "name": "Cierre perdido",
-        "order": 70,
+        "order": 60,
         "category": PipelineStage.Category.LOST,
         "is_initial": False,
     },
@@ -121,9 +115,6 @@ class Command(BaseCommand):
             for stage in existing_stages
         }
 
-        # Liberamos temporalmente los órdenes existentes para poder insertar
-        # una nueva etapa intermedia sin cambiar los PK de las etapas ya
-        # relacionadas con oportunidades e historial.
         used_orders = {
             stage.order
             for stage in existing_stages
@@ -145,6 +136,7 @@ class Command(BaseCommand):
             temporary_order += 1
 
         used_stage_ids = set()
+        canonical_by_code = {}
 
         for stage_data in DEFAULT_STAGES:
             stage = existing_by_code.get(stage_data["code"])
@@ -161,6 +153,7 @@ class Command(BaseCommand):
 
                 if (
                     legacy_stage is not None
+                    and legacy_stage.code != "cotizacion_aceptada"
                     and legacy_stage.pk not in used_stage_ids
                 ):
                     stage = legacy_stage
@@ -178,7 +171,37 @@ class Command(BaseCommand):
             stage.is_active = True
             stage.full_clean()
             stage.save()
+
             used_stage_ids.add(stage.pk)
+            canonical_by_code[stage.code] = stage
+
+        quotation_stage = canonical_by_code["cotizacion_enviada"]
+        accepted_stage = existing_by_code.get("cotizacion_aceptada")
+
+        if (
+            accepted_stage is not None
+            and accepted_stage.pk not in used_stage_ids
+        ):
+            pipeline.opportunities.filter(
+                stage=accepted_stage,
+            ).update(
+                stage=quotation_stage,
+                updated_at=timezone.now(),
+            )
+
+        for stage in existing_stages:
+            if stage.pk in used_stage_ids:
+                continue
+
+            stage.is_initial = False
+            stage.is_active = False
+            stage.save(
+                update_fields=[
+                    "is_initial",
+                    "is_active",
+                    "updated_at",
+                ]
+            )
 
         action = "creado" if created else "actualizado"
         self.stdout.write(
