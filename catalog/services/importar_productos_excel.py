@@ -213,10 +213,18 @@ def buscar_producto_existente(data):
     return producto
 
 
-def leer_datos_excel(ruta_archivo):
+def leer_datos_excel(ruta_archivo, anio_catalogo=None):
     workbook = load_workbook(ruta_archivo, data_only=True)
 
-    if "Catalogo_Maestro_2026" in workbook.sheetnames:
+    hoja_esperada = (
+        f"Catalogo_Maestro_{anio_catalogo}"
+        if anio_catalogo
+        else None
+    )
+
+    if hoja_esperada and hoja_esperada in workbook.sheetnames:
+        sheet = workbook[hoja_esperada]
+    elif "Catalogo_Maestro_2026" in workbook.sheetnames and not anio_catalogo:
         sheet = workbook["Catalogo_Maestro_2026"]
     else:
         sheet = workbook.active
@@ -269,7 +277,10 @@ def crear_vista_previa_productos(archivo, anio_catalogo):
         estado="PENDIENTE",
     )
 
-    filas = leer_datos_excel(carga.archivo.path)
+    filas = leer_datos_excel(
+        carga.archivo.path,
+        anio_catalogo=anio_catalogo,
+    )
 
     claves_excel = set()
 
@@ -285,6 +296,21 @@ def crear_vista_previa_productos(archivo, anio_catalogo):
             data["anio_catalogo"] = anio_catalogo
 
         errores = validar_fila(data)
+
+        try:
+            anio_fila = int(data.get("anio_catalogo"))
+            anio_seleccionado = int(anio_catalogo)
+
+            if anio_fila != anio_seleccionado:
+                errores.append(
+                    (
+                        f"El anio_catalogo de la fila ({anio_fila}) "
+                        f"no coincide con el año seleccionado "
+                        f"({anio_seleccionado})."
+                    )
+                )
+        except (TypeError, ValueError):
+            pass
 
         clave = construir_clave_producto(data)
 
