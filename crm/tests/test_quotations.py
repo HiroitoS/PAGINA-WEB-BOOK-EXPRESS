@@ -326,7 +326,6 @@ class CRMQuotationFromProjectionTests(TestCase):
             item_adjustments=[
                 {
                     "projection_item": self.projection_item,
-                    "quantity": 15,
                     "school_discount_percent": Decimal("25.00"),
                     "parent_price": Decimal("95.00"),
                     "school_commission": Decimal("5.00"),
@@ -343,7 +342,7 @@ class CRMQuotationFromProjectionTests(TestCase):
             self.opportunity.quotations.count(),
             1,
         )
-        self.assertEqual(item.quantity, 15)
+        self.assertEqual(item.quantity, 20)
         self.assertEqual(item.school_discount_percent, Decimal("25.00"))
         self.assertEqual(item.school_price, Decimal("75.00"))
         self.assertEqual(item.parent_price, Decimal("95.00"))
@@ -354,6 +353,29 @@ class CRMQuotationFromProjectionTests(TestCase):
             updated.discount_approval_status,
             CommercialQuotation.DiscountApprovalStatus.PENDING,
         )
+
+    def test_quantity_must_be_changed_in_projection_not_quotation(self):
+        quotation = create_commercial_quotation_from_projection(
+            opportunity=self.opportunity,
+            actor=self.advisor,
+        )
+
+        with self.assertRaisesMessage(
+            CommercialQuotationError,
+            "proviene de la proyección",
+        ):
+            update_commercial_quotation_from_projection(
+                quotation=quotation,
+                item_adjustments=[
+                    {
+                        "projection_item": self.projection_item,
+                        "quantity": 15,
+                    }
+                ],
+            )
+
+        item = quotation.items.get()
+        self.assertEqual(item.quantity, 20)
 
     def test_sent_quotation_cannot_be_edited(self):
         quotation = create_commercial_quotation_from_projection(
