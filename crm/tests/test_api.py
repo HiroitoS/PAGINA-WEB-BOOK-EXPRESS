@@ -62,6 +62,7 @@ class CRMApiTests(TestCase):
         self.initial_stage = PipelineStage.objects.create(pipeline=self.pipeline, code="por_contactar", name="Por contactar", order=10, category=PipelineStage.Category.OPEN, is_initial=True, created_by=self.admin)
         self.follow_up_stage = PipelineStage.objects.create(pipeline=self.pipeline, code="seguimiento", name="Seguimiento", order=20, category=PipelineStage.Category.OPEN, created_by=self.admin)
         self.quotation_stage = PipelineStage.objects.create(pipeline=self.pipeline, code="cotizacion_enviada", name="Cotización enviada", order=40, category=PipelineStage.Category.OPEN, created_by=self.admin)
+        self.accepted_stage = PipelineStage.objects.create(pipeline=self.pipeline, code="cotizacion_aceptada", name="Cotización aceptada / pendiente de adopción", order=50, category=PipelineStage.Category.OPEN, created_by=self.admin)
         self.won_stage = PipelineStage.objects.create(pipeline=self.pipeline, code="cierre_ganado_adopcion", name="Cierre ganado (adopción)", order=80, category=PipelineStage.Category.WON, created_by=self.admin)
         self.lost_stage = PipelineStage.objects.create(pipeline=self.pipeline, code="no_concretada", name="No concretada", order=90, category=PipelineStage.Category.LOST, created_by=self.admin)
         self.opportunity = Opportunity.objects.create(title="Oportunidad API", school=self.school, campaign=self.campaign, pipeline=self.pipeline, stage=self.initial_stage, team=self.team, owner=self.advisor, created_by=self.admin)
@@ -186,6 +187,12 @@ class CRMApiTests(TestCase):
         self.assertEqual(
             accept_response.data["status"],
             "accepted",
+        )
+
+        self.opportunity.refresh_from_db()
+        self.assertEqual(
+            self.opportunity.stage,
+            self.accepted_stage,
         )
 
     def test_adoption_api_closes_opportunity_as_won(self):
