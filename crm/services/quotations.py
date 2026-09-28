@@ -66,6 +66,30 @@ def _discount_value(value):
     return discount
 
 
+def _quantity_from_projection(*, projection_item, payload):
+    projected_quantity = int(projection_item.quantity)
+
+    if "quantity" not in payload:
+        return projected_quantity
+
+    try:
+        requested_quantity = int(payload.get("quantity"))
+    except (TypeError, ValueError) as exc:
+        raise CommercialQuotationError(
+            "La cantidad debe ser un número entero."
+        ) from exc
+
+    if requested_quantity != projected_quantity:
+        raise CommercialQuotationError(
+            (
+                "La cantidad de la cotización proviene de la proyección. "
+                "Modifica la proyección y genera una nueva cotización."
+            )
+        )
+
+    return projected_quantity
+
+
 def _cost_price_for_projection_item(*, projection_item):
     prices = ProductPrice.objects.filter(
         product=projection_item.product,
@@ -194,19 +218,10 @@ def create_commercial_quotation_from_projection(
     for projection_item in projection_items:
         payload = adjustments.get(projection_item.pk, {})
 
-        try:
-            quantity = int(
-                payload.get("quantity", projection_item.quantity)
-            )
-        except (TypeError, ValueError) as exc:
-            raise CommercialQuotationError(
-                "La cantidad debe ser un número entero."
-            ) from exc
-
-        if quantity < 1:
-            raise CommercialQuotationError(
-                "La cantidad debe ser mayor que cero."
-            )
+        quantity = _quantity_from_projection(
+            projection_item=projection_item,
+            payload=payload,
+        )
 
         discount = _discount_value(
             payload.get(
@@ -395,19 +410,10 @@ def update_commercial_quotation_from_projection(
     for projection_item in projection_items:
         payload = adjustments.get(projection_item.pk, {})
 
-        try:
-            quantity = int(
-                payload.get("quantity", projection_item.quantity)
-            )
-        except (TypeError, ValueError) as exc:
-            raise CommercialQuotationError(
-                "La cantidad debe ser un número entero."
-            ) from exc
-
-        if quantity < 1:
-            raise CommercialQuotationError(
-                "La cantidad debe ser mayor que cero."
-            )
+        quantity = _quantity_from_projection(
+            projection_item=projection_item,
+            payload=payload,
+        )
 
         discount = _discount_value(
             payload.get(
