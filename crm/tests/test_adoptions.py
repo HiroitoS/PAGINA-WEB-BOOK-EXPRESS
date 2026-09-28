@@ -105,11 +105,19 @@ class CRMAdoptionFlowTests(TestCase):
             category=PipelineStage.Category.OPEN,
             created_by=self.admin,
         )
+        self.accepted_stage = PipelineStage.objects.create(
+            pipeline=self.pipeline,
+            code="cotizacion_aceptada",
+            name="Cotización aceptada / pendiente de adopción",
+            order=50,
+            category=PipelineStage.Category.OPEN,
+            created_by=self.admin,
+        )
         self.won_stage = PipelineStage.objects.create(
             pipeline=self.pipeline,
             code="cierre_ganado_adopcion",
             name="Cierre ganado (adopción)",
-            order=50,
+            order=60,
             category=PipelineStage.Category.WON,
             created_by=self.admin,
         )
@@ -117,7 +125,7 @@ class CRMAdoptionFlowTests(TestCase):
             pipeline=self.pipeline,
             code="cierre_perdido",
             name="Cierre perdido",
-            order=60,
+            order=70,
             category=PipelineStage.Category.LOST,
             created_by=self.admin,
         )
@@ -347,7 +355,7 @@ class CRMAdoptionFlowTests(TestCase):
 
         self.assertEqual(
             self.opportunity.stage,
-            self.quotation_stage,
+            self.accepted_stage,
         )
         self.assertFalse(
             Adoption.objects.filter(
