@@ -36,20 +36,36 @@ DEFAULT_STAGES = [
         "is_initial": False,
     },
     {
+        "code": "cotizacion_aceptada",
+        "name": "Cotización aceptada / pendiente de adopción",
+        "order": 50,
+        "category": PipelineStage.Category.OPEN,
+        "is_initial": False,
+    },
+    {
         "code": "cierre_ganado_adopcion",
         "name": "Cierre ganado (adopción)",
-        "order": 50,
+        "order": 60,
         "category": PipelineStage.Category.WON,
         "is_initial": False,
     },
     {
         "code": "cierre_perdido",
         "name": "Cierre perdido",
-        "order": 60,
+        "order": 70,
         "category": PipelineStage.Category.LOST,
         "is_initial": False,
     },
 ]
+
+LEGACY_ORDER_BY_CODE = {
+    "proyeccion_ventas": 10,
+    "cita_presentacion": 20,
+    "decisor_influenciador": 30,
+    "cotizacion_enviada": 40,
+    "cierre_ganado_adopcion": 50,
+    "cierre_perdido": 60,
+}
 
 
 class Command(BaseCommand):
@@ -70,7 +86,6 @@ class Command(BaseCommand):
             },
         )
 
-        # Evita violar la restricción de un único pipeline predeterminado.
         Pipeline.objects.exclude(pk=pipeline.pk).filter(
             is_default=True
         ).update(is_default=False)
@@ -92,35 +107,78 @@ class Command(BaseCommand):
             ]
         )
 
-        # Liberamos primero la marca inicial para no chocar con la
-        # restricción única mientras se sincroniza la configuración.
         pipeline.stages.filter(is_initial=True).update(is_initial=False)
 
-        # La configuración anterior ya utilizaba seis posiciones
-        # 10, 20, 30, 40, 50 y 60. Reutilizar la etapa existente por
-        # posición conserva sus PK y, por tanto, cualquier relación o
-        # historial ya registrado. Así evitamos duplicar etapas.
-        existing_by_order = {
+        existing_stages = list(
+            pipeline.stages.all().order_by("id")
+        )
+        existing_by_code = {
+            stage.code: stage
+            for stage in existing_stages
+        }
+        existing_by_legacy_order = {
             stage.order: stage
-            for stage in pipeline.stages.all()
+            for stage in existing_stages
         }
 
+        # Liberamos temporalmente los órdenes existentes para poder insertar
+        # una nueva etapa intermedia sin cambiar los PK de las etapas ya
+        # relacionadas con oportunidades e historial.
+        used_orders = {
+            stage.order
+            for stage in existing_stages
+        }
+        temporary_order = 10000
+
+        for stage in existing_stages:
+            while temporary_order in used_orders:
+                temporary_order += 1
+
+            stage.order = temporary_order
+            stage.save(
+                update_fields=[
+                    "order",
+                    "updated_at",
+                ]
+            )
+            used_orders.add(temporary_order)
+            temporary_order += 1
+
+        used_stage_ids = set()
+
         for stage_data in DEFAULT_STAGES:
-            stage = existing_by_order.get(stage_data["order"])
+            stage = existing_by_code.get(stage_data["code"])
+
+            if stage is None:
+                legacy_order = LEGACY_ORDER_BY_CODE.get(
+                    stage_data["code"]
+                )
+                legacy_stage = (
+                    existing_by_legacy_order.get(legacy_order)
+                    if legacy_order is not None
+                    else None
+                )
+
+                if (
+                    legacy_stage is not None
+                    and legacy_stage.pk not in used_stage_ids
+                ):
+                    stage = legacy_stage
 
             if stage is None:
                 stage = PipelineStage(
                     pipeline=pipeline,
-                    order=stage_data["order"],
                 )
 
             stage.code = stage_data["code"]
             stage.name = stage_data["name"]
+            stage.order = stage_data["order"]
             stage.category = stage_data["category"]
             stage.is_initial = stage_data["is_initial"]
             stage.is_active = True
             stage.full_clean()
             stage.save()
+            used_stage_ids.add(stage.pk)
 
         action = "creado" if created else "actualizado"
         self.stdout.write(
