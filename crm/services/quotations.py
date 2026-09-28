@@ -780,13 +780,16 @@ def accept_commercial_quotation(*, quotation, actor):
     locked_quotation = (
         CommercialQuotation.objects
         .select_for_update()
-        .select_related("opportunity")
+        .select_related(
+            "opportunity__pipeline",
+            "opportunity__stage",
+        )
         .get(pk=quotation.pk)
     )
 
     if locked_quotation.status != CommercialQuotation.Status.SENT:
         raise CommercialQuotationError(
-            "Solo una cotización enviada puede marcarse como aceptada."
+            "Solo una cotización enviada puede registrar aceptación."
         )
 
     if locked_quotation.opportunity.quotations.exclude(
@@ -796,6 +799,25 @@ def accept_commercial_quotation(*, quotation, actor):
     ).exists():
         raise CommercialQuotationError(
             "La oportunidad ya tiene otra cotización aceptada."
+        )
+
+    accepted_stage = (
+        PipelineStage.objects
+        .filter(
+            pipeline=locked_quotation.opportunity.pipeline,
+            code="cotizacion_aceptada",
+            category=PipelineStage.Category.OPEN,
+            is_active=True,
+        )
+        .first()
+    )
+
+    if accepted_stage is None:
+        raise CommercialQuotationError(
+            (
+                "El pipeline no tiene configurada la etapa de "
+                "cotización aceptada."
+            )
         )
 
     locked_quotation.opportunity.quotations.exclude(
@@ -821,5 +843,16 @@ def accept_commercial_quotation(*, quotation, actor):
             "updated_at",
         ]
     )
+
+    if locked_quotation.opportunity.stage_id != accepted_stage.id:
+        transition_opportunity_stage(
+            opportunity=locked_quotation.opportunity,
+            to_stage=accepted_stage,
+            changed_by=actor,
+            note=(
+                f"Aceptación del colegio registrada para la cotización "
+                f"v{locked_quotation.version}. Pendiente de adopción."
+            ),
+        )
 
     return locked_quotation
