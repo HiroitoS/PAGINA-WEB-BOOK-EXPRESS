@@ -17,6 +17,7 @@ from crm.models import (
 )
 from crm.services import (
     CommercialQuotationError,
+    accept_commercial_quotation,
     approve_commercial_quotation_discount,
     create_commercial_quotation_from_projection,
     send_commercial_quotation,
@@ -71,6 +72,14 @@ class CRMQuotationFromProjectionTests(TestCase):
             code="cotizacion_enviada",
             name="Cotización enviada",
             order=40,
+            category=PipelineStage.Category.OPEN,
+            created_by=self.admin,
+        )
+        self.accepted_stage = PipelineStage.objects.create(
+            pipeline=self.pipeline,
+            code="cotizacion_aceptada",
+            name="Cotización aceptada / pendiente de adopción",
+            order=50,
             category=PipelineStage.Category.OPEN,
             created_by=self.admin,
         )
@@ -376,6 +385,31 @@ class CRMQuotationFromProjectionTests(TestCase):
 
         item = quotation.items.get()
         self.assertEqual(item.quantity, 20)
+
+    def test_acceptance_moves_opportunity_to_pending_adoption_stage(self):
+        quotation = create_commercial_quotation_from_projection(
+            opportunity=self.opportunity,
+            actor=self.advisor,
+        )
+        sent = send_commercial_quotation(
+            quotation=quotation,
+            actor=self.advisor,
+        )
+        accepted = accept_commercial_quotation(
+            quotation=sent,
+            actor=self.advisor,
+        )
+
+        self.opportunity.refresh_from_db()
+
+        self.assertEqual(
+            accepted.status,
+            CommercialQuotation.Status.ACCEPTED,
+        )
+        self.assertEqual(
+            self.opportunity.stage,
+            self.accepted_stage,
+        )
 
     def test_sent_quotation_cannot_be_edited(self):
         quotation = create_commercial_quotation_from_projection(
