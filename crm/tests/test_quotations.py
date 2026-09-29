@@ -689,6 +689,7 @@ class CRMQuotationFromProjectionTests(TestCase):
         ):
             update_commercial_quotation_from_projection(
                 quotation=sent,
+                actor=self.advisor,
                 item_adjustments=[
                     {
                         "projection_item": self.projection_item,
