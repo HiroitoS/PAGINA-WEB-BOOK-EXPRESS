@@ -1034,9 +1034,10 @@ class SchoolViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
 
         data = dict(serializer.validated_data)
+        has_explicit_opportunity = "opportunity" in data
         opportunity = data.get("opportunity")
 
-        if opportunity is None:
+        if opportunity is None and not has_explicit_opportunity:
             opportunity = _single_visible_open_opportunity_for_school(
                 request.user,
                 school,
@@ -1104,9 +1105,10 @@ class SchoolViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
 
         data = dict(serializer.validated_data)
+        has_explicit_opportunity = "opportunity" in data
         opportunity = data.get("opportunity")
 
-        if opportunity is None:
+        if opportunity is None and not has_explicit_opportunity:
             opportunity = _single_visible_open_opportunity_for_school(
                 request.user,
                 school,
@@ -1174,9 +1176,10 @@ class SchoolViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
 
         data = dict(serializer.validated_data)
+        has_explicit_opportunity = "opportunity" in data
         opportunity = data.get("opportunity")
 
-        if opportunity is None:
+        if opportunity is None and not has_explicit_opportunity:
             opportunity = _single_visible_open_opportunity_for_school(
                 request.user,
                 school,

@@ -554,6 +554,33 @@ class CRMApiTests(TestCase):
             ).exists()
         )
 
+    def test_school_task_can_explicitly_remain_without_opportunity(self):
+        self.authenticate(self.advisor)
+
+        response = self.client.post(
+            reverse(
+                "crm:school-create-task",
+                args=[self.school.id],
+            ),
+            {
+                "title": "Volver a visitar el colegio",
+                "opportunity": None,
+                "due_at": (
+                    timezone.now() + timedelta(days=1)
+                ).isoformat(),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(
+            CRMWorkItemLink.objects.filter(
+                school=self.school,
+                opportunity__isnull=True,
+                task_id=response.data["id"],
+            ).exists()
+        )
+
     def test_school_work_items_expose_linked_task_context(self):
         contact = SchoolContact.objects.create(
             school=self.school,
