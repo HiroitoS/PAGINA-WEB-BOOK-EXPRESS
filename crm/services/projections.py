@@ -353,15 +353,25 @@ def create_commercial_projection_revision(
 
         seen_items.add(item_key)
 
+        expected_quantity = prepared_grades[grade_key]["student_count"]
         raw_quantity = payload.get("quantity")
 
-        if raw_quantity is None:
-            quantity = prepared_grades[grade_key]["student_count"]
-        else:
-            quantity = _positive_int(
+        if raw_quantity is not None:
+            requested_quantity = _positive_int(
                 raw_quantity,
                 field_label="Cantidad proyectada",
             )
+
+            if requested_quantity != expected_quantity:
+                raise CommercialProjectionError(
+                    (
+                        f"La cantidad proyectada de {product.name} "
+                        f"debe coincidir con los {expected_quantity} "
+                        "alumnos proyectados del grado."
+                    )
+                )
+
+        quantity = expected_quantity
 
         price = resolve_projection_price(
             product=product,

@@ -226,6 +226,22 @@ class CRMCommercialProjectionTests(TestCase):
             "Campaña escolar",
         )
 
+    def test_projection_rejects_quantity_different_from_grade_population(self):
+        with self.assertRaisesMessage(
+            CommercialProjectionError,
+            "debe coincidir con los 60 alumnos proyectados",
+        ):
+            self._create_projection(
+                items=[
+                    {
+                        "service": self.service,
+                        "grade": self.grade,
+                        "product": self.product,
+                        "quantity": 59,
+                    }
+                ],
+            )
+
     def test_projection_revision_preserves_previous_version(self):
         first = self._create_projection()
 
