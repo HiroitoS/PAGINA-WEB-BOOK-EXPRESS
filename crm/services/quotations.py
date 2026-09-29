@@ -5,6 +5,7 @@ from django.db import transaction
 from django.db.models import Max
 from django.utils import timezone
 
+from accounts.permissions import usuario_es_administrador
 from catalog.models import ProductPrice
 from crm.models import (
     CommercialProjection,
@@ -13,6 +14,7 @@ from crm.models import (
     Opportunity,
     PipelineStage,
 )
+from crm.permissions import usuario_puede_supervisar_crm
 
 from .opportunities import transition_opportunity_stage
 
@@ -31,6 +33,8 @@ def _decimal_value(value, *, field_label):
 
 
 def _product_snapshot(product):
+    product_type = getattr(product, "product_type", None)
+
     return {
         "product_name_snapshot": product.name,
         "provider_name_snapshot": product.provider.name,
@@ -43,6 +47,11 @@ def _product_snapshot(product):
         "area_name_snapshot": (
             product.area.name if product.area_id else ""
         ),
+        "product_code_snapshot": product.code or product.sku or "",
+        "product_type_name_snapshot": (
+            product_type.name if product_type else ""
+        ),
+        "commercial_line": _commercial_line_for_product(product),
     }
 
 
@@ -64,6 +73,227 @@ def _discount_value(value):
             "El descuento colegio debe estar entre 0% y 100%."
         )
     return discount
+
+
+def _actor_can_manage_financials(actor):
+    if actor is None:
+        return False
+
+    return (
+        usuario_es_administrador(actor)
+        or usuario_puede_supervisar_crm(actor)
+    )
+
+
+def _commercial_line_for_product(product):
+    product_type = getattr(product, "product_type", None)
+
+    if product_type is None:
+        return CommercialQuotationItem.CommercialLine.OTHER
+
+    normalized = " ".join(
+        value
+        for value in (
+            (product_type.slug or "").lower(),
+            (product_type.name or "").lower(),
+        )
+        if value
+    )
+
+    if "plan" in normalized and "lector" in normalized:
+        return CommercialQuotationItem.CommercialLine.READING_PLAN
+
+    if "texto" in normalized and "escolar" in normalized:
+        return CommercialQuotationItem.CommercialLine.SCHOOL_TEXT
+
+    return CommercialQuotationItem.CommercialLine.OTHER
+
+
+def _reading_month_value(value):
+    if value in (None, ""):
+        return None
+
+    try:
+        month = int(value)
+    except (TypeError, ValueError) as exc:
+        raise CommercialQuotationError(
+            "El mes de lectura debe ser un número entre 1 y 12."
+        ) from exc
+
+    if month < 1 or month > 12:
+        raise CommercialQuotationError(
+            "El mes de lectura debe estar entre 1 y 12."
+        )
+
+    return month
+
+
+def _commission_values(
+    *,
+    payload,
+    quantity,
+    actor,
+    existing_item=None,
+):
+    can_manage = _actor_can_manage_financials(actor)
+
+    provided_amount = None
+    if "commission_amount" in payload:
+        provided_amount = payload.get("commission_amount")
+    elif "school_commission" in payload:
+        provided_amount = payload.get("school_commission")
+
+    if not can_manage:
+        if provided_amount not in (None, ""):
+            amount = _decimal_value(
+                provided_amount,
+                field_label="Comisión",
+            )
+            if amount != Decimal("0.00"):
+                raise CommercialQuotationError(
+                    (
+                        "Solo supervisión comercial puede registrar "
+                        "comisiones o incentivos."
+                    )
+                )
+
+        if existing_item is not None:
+            return (
+                existing_item.commission_mode,
+                existing_item.commission_input_amount,
+                existing_item.school_commission,
+            )
+
+        return (
+            CommercialQuotationItem.CommissionMode.PER_UNIT,
+            Decimal("0.00"),
+            Decimal("0.00"),
+        )
+
+    if "commission_amount" in payload:
+        mode = payload.get(
+            "commission_mode",
+            CommercialQuotationItem.CommissionMode.PER_UNIT,
+        )
+        amount_value = payload.get("commission_amount")
+    elif "school_commission" in payload:
+        mode = CommercialQuotationItem.CommissionMode.PER_UNIT
+        amount_value = payload.get("school_commission")
+    elif existing_item is not None:
+        mode = existing_item.commission_mode
+        amount_value = existing_item.commission_input_amount
+    else:
+        mode = CommercialQuotationItem.CommissionMode.PER_UNIT
+        amount_value = "0.00"
+
+    valid_modes = {
+        CommercialQuotationItem.CommissionMode.PER_UNIT,
+        CommercialQuotationItem.CommissionMode.TOTAL,
+    }
+    if mode not in valid_modes:
+        raise CommercialQuotationError(
+            "La modalidad de comisión no es válida."
+        )
+
+    amount = _money(
+        _decimal_value(
+            amount_value,
+            field_label="Comisión",
+        )
+    )
+    if amount < Decimal("0.00"):
+        raise CommercialQuotationError(
+            "La comisión no puede ser negativa."
+        )
+
+    if mode == CommercialQuotationItem.CommissionMode.TOTAL:
+        unit_amount = _money(amount / Decimal(quantity))
+    else:
+        unit_amount = amount
+
+    return mode, amount, unit_amount
+
+
+def _profitability_snapshot(
+    *,
+    commercial_line,
+    pvp,
+    school_price,
+    supplier_cost,
+    school_commission,
+    quantity,
+    discount,
+):
+    margin_unit = _money(
+        school_price - supplier_cost - school_commission
+    )
+    margin_total = _money(margin_unit * Decimal(quantity))
+    margin_percent = Decimal("0.00")
+
+    if school_price > Decimal("0.00"):
+        margin_percent = _money(
+            margin_unit / school_price * Decimal("100.00")
+        )
+
+    green_threshold = None
+    band = CommercialQuotationItem.ProfitabilityBand.UNCLASSIFIED
+
+    if (
+        commercial_line
+        == CommercialQuotationItem.CommercialLine.SCHOOL_TEXT
+    ):
+        green_threshold = Decimal("20.00")
+        if margin_unit >= Decimal("20.00"):
+            band = CommercialQuotationItem.ProfitabilityBand.GREEN
+        elif margin_unit >= Decimal("15.00"):
+            band = CommercialQuotationItem.ProfitabilityBand.AMBER
+        elif margin_unit >= Decimal("0.00"):
+            band = CommercialQuotationItem.ProfitabilityBand.RED
+        else:
+            band = CommercialQuotationItem.ProfitabilityBand.LOSS
+    elif (
+        commercial_line
+        == CommercialQuotationItem.CommercialLine.READING_PLAN
+    ):
+        green_threshold = Decimal("5.00")
+        if margin_unit >= Decimal("5.00"):
+            band = CommercialQuotationItem.ProfitabilityBand.GREEN
+        elif margin_unit > Decimal("2.00"):
+            band = CommercialQuotationItem.ProfitabilityBand.AMBER
+        elif margin_unit >= Decimal("0.00"):
+            band = CommercialQuotationItem.ProfitabilityBand.RED
+        else:
+            band = CommercialQuotationItem.ProfitabilityBand.LOSS
+
+    max_green_discount = None
+    green_headroom = None
+
+    if (
+        green_threshold is not None
+        and pvp > Decimal("0.00")
+    ):
+        minimum_green_price = (
+            supplier_cost + school_commission + green_threshold
+        )
+        max_green_discount = _money(
+            (
+                Decimal("1.00")
+                - (minimum_green_price / pvp)
+            )
+            * Decimal("100.00")
+        )
+        green_headroom = _money(
+            max_green_discount - discount
+        )
+
+    return {
+        "commercial_margin_unit": margin_unit,
+        "commercial_margin_total": margin_total,
+        "commercial_margin_percent": margin_percent,
+        "profitability_band": band,
+        "max_green_discount_percent": max_green_discount,
+        "green_discount_headroom_points": green_headroom,
+    }
 
 
 def _quantity_from_projection(*, projection_item, payload):
@@ -186,6 +416,7 @@ def create_commercial_quotation_from_projection(
             "product__level",
             "product__grade",
             "product__area",
+            "product__product_type",
         )
         .order_by("id")
     )
@@ -211,6 +442,11 @@ def create_commercial_quotation_from_projection(
                 "No se puede repetir un producto proyectado en la cotización."
             )
         adjustments[projection_item.pk] = payload
+
+    existing_items_by_product = {
+        item.product_id: item
+        for item in locked_quotation.items.all()
+    }
 
     prepared_items = []
     requires_approval = False
@@ -244,11 +480,29 @@ def create_commercial_quotation_from_projection(
                 field_label="Precio PPFF",
             )
         )
-        school_commission = _money(
-            _decimal_value(
-                payload.get("school_commission", "0.00"),
-                field_label="Comisión colegio",
-            )
+        reading_month = _reading_month_value(
+            payload.get("reading_month")
+        )
+        (
+            commission_mode,
+            commission_input_amount,
+            school_commission,
+        ) = _commission_values(
+            payload=payload,
+            quantity=quantity,
+            actor=actor,
+        )
+        commercial_line = _commercial_line_for_product(
+            projection_item.product
+        )
+        profitability = _profitability_snapshot(
+            commercial_line=commercial_line,
+            pvp=pvp,
+            school_price=school_price,
+            supplier_cost=supplier_cost,
+            school_commission=school_commission,
+            quantity=quantity,
+            discount=discount,
         )
 
         if discount > STANDARD_SCHOOL_DISCOUNT:
@@ -264,7 +518,12 @@ def create_commercial_quotation_from_projection(
                 "school_price": school_price,
                 "school_discount_percent": discount,
                 "parent_price": parent_price,
+                "reading_month": reading_month,
+                "commission_mode": commission_mode,
+                "commission_input_amount": commission_input_amount,
                 "school_commission": school_commission,
+                "commercial_line": commercial_line,
+                **profitability,
                 "price_year_snapshot": (
                     projection_item.price_year_snapshot
                 ),
@@ -317,7 +576,28 @@ def create_commercial_quotation_from_projection(
                 "school_discount_percent"
             ],
             parent_price=prepared["parent_price"],
+            reading_month=prepared["reading_month"],
+            commission_mode=prepared["commission_mode"],
+            commission_input_amount=prepared[
+                "commission_input_amount"
+            ],
             school_commission=prepared["school_commission"],
+            commercial_margin_unit=prepared[
+                "commercial_margin_unit"
+            ],
+            commercial_margin_total=prepared[
+                "commercial_margin_total"
+            ],
+            commercial_margin_percent=prepared[
+                "commercial_margin_percent"
+            ],
+            profitability_band=prepared["profitability_band"],
+            max_green_discount_percent=prepared[
+                "max_green_discount_percent"
+            ],
+            green_discount_headroom_points=prepared[
+                "green_discount_headroom_points"
+            ],
             price_year_snapshot=prepared["price_year_snapshot"],
             price_campaign_snapshot=prepared[
                 "price_campaign_snapshot"
@@ -335,6 +615,7 @@ def create_commercial_quotation_from_projection(
 def update_commercial_quotation_from_projection(
     *,
     quotation,
+    actor,
     item_adjustments=None,
     notes="",
 ):
@@ -371,6 +652,7 @@ def update_commercial_quotation_from_projection(
             "product__level",
             "product__grade",
             "product__area",
+            "product__product_type",
         )
         .order_by("id")
     )
@@ -432,17 +714,53 @@ def update_commercial_quotation_from_projection(
             * (Decimal("100.00") - discount)
             / Decimal("100.00")
         )
+        existing_item = existing_items_by_product.get(
+            projection_item.product_id
+        )
         parent_price = _money(
             _decimal_value(
-                payload.get("parent_price", pvp),
+                payload.get(
+                    "parent_price",
+                    (
+                        existing_item.parent_price
+                        if existing_item is not None
+                        else pvp
+                    ),
+                ),
                 field_label="Precio PPFF",
             )
         )
-        school_commission = _money(
-            _decimal_value(
-                payload.get("school_commission", "0.00"),
-                field_label="Comisión colegio",
+        reading_month = _reading_month_value(
+            payload.get(
+                "reading_month",
+                (
+                    existing_item.reading_month
+                    if existing_item is not None
+                    else None
+                ),
             )
+        )
+        (
+            commission_mode,
+            commission_input_amount,
+            school_commission,
+        ) = _commission_values(
+            payload=payload,
+            quantity=quantity,
+            actor=actor,
+            existing_item=existing_item,
+        )
+        commercial_line = _commercial_line_for_product(
+            projection_item.product
+        )
+        profitability = _profitability_snapshot(
+            commercial_line=commercial_line,
+            pvp=pvp,
+            school_price=school_price,
+            supplier_cost=supplier_cost,
+            school_commission=school_commission,
+            quantity=quantity,
+            discount=discount,
         )
 
         if discount > STANDARD_SCHOOL_DISCOUNT:
@@ -457,7 +775,12 @@ def update_commercial_quotation_from_projection(
                 "school_price": school_price,
                 "school_discount_percent": discount,
                 "parent_price": parent_price,
+                "reading_month": reading_month,
+                "commission_mode": commission_mode,
+                "commission_input_amount": commission_input_amount,
                 "school_commission": school_commission,
+                "commercial_line": commercial_line,
+                **profitability,
                 "price_year_snapshot": (
                     projection_item.price_year_snapshot
                 ),
@@ -486,7 +809,28 @@ def update_commercial_quotation_from_projection(
                 "school_discount_percent"
             ],
             parent_price=prepared["parent_price"],
+            reading_month=prepared["reading_month"],
+            commission_mode=prepared["commission_mode"],
+            commission_input_amount=prepared[
+                "commission_input_amount"
+            ],
             school_commission=prepared["school_commission"],
+            commercial_margin_unit=prepared[
+                "commercial_margin_unit"
+            ],
+            commercial_margin_total=prepared[
+                "commercial_margin_total"
+            ],
+            commercial_margin_percent=prepared[
+                "commercial_margin_percent"
+            ],
+            profitability_band=prepared["profitability_band"],
+            max_green_discount_percent=prepared[
+                "max_green_discount_percent"
+            ],
+            green_discount_headroom_points=prepared[
+                "green_discount_headroom_points"
+            ],
             price_year_snapshot=prepared["price_year_snapshot"],
             price_campaign_snapshot=prepared[
                 "price_campaign_snapshot"
