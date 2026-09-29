@@ -443,11 +443,6 @@ def create_commercial_quotation_from_projection(
             )
         adjustments[projection_item.pk] = payload
 
-    existing_items_by_product = {
-        item.product_id: item
-        for item in locked_quotation.items.all()
-    }
-
     prepared_items = []
     requires_approval = False
 
@@ -685,6 +680,11 @@ def update_commercial_quotation_from_projection(
             )
 
         adjustments[projection_item.pk] = payload
+
+    existing_items_by_product = {
+        item.product_id: item
+        for item in locked_quotation.items.all()
+    }
 
     prepared_items = []
     requires_approval = False
