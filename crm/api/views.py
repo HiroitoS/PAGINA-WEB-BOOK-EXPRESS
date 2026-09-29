@@ -1888,7 +1888,10 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         )
 
         return Response(
-            CommercialQuotationSerializer(quotation).data,
+            CommercialQuotationSerializer(
+                quotation,
+                context={"request": request},
+            ).data,
             status=status.HTTP_201_CREATED,
         )
 
@@ -1913,6 +1916,7 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                 CommercialQuotationSerializer(
                     queryset,
                     many=True,
+                    context={"request": request},
                 ).data
             )
 
@@ -1955,7 +1959,10 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         )
 
         return Response(
-            CommercialQuotationSerializer(quotation).data,
+            CommercialQuotationSerializer(
+                quotation,
+                context={"request": request},
+            ).data,
             status=status.HTTP_201_CREATED,
         )
 
@@ -2002,6 +2009,7 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         try:
             quotation = update_commercial_quotation_from_projection(
                 quotation=quotation,
+                actor=request.user,
                 item_adjustments=serializer.validated_data.get(
                     "items",
                     [],
@@ -2026,7 +2034,10 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         )
 
         return Response(
-            CommercialQuotationSerializer(quotation).data
+            CommercialQuotationSerializer(
+                quotation,
+                context={"request": request},
+            ).data
         )
 
     @action(
@@ -2082,7 +2093,10 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         )
 
         return Response(
-            CommercialQuotationSerializer(quotation).data
+            CommercialQuotationSerializer(
+                quotation,
+                context={"request": request},
+            ).data
         )
 
     @action(
@@ -2149,7 +2163,10 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         )
 
         return Response(
-            CommercialQuotationSerializer(quotation).data
+            CommercialQuotationSerializer(
+                quotation,
+                context={"request": request},
+            ).data
         )
 
     @action(
@@ -2205,7 +2222,10 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         )
 
         return Response(
-            CommercialQuotationSerializer(quotation).data
+            CommercialQuotationSerializer(
+                quotation,
+                context={"request": request},
+            ).data
         )
 
     @action(
@@ -2271,7 +2291,10 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         )
 
         return Response(
-            CommercialQuotationSerializer(quotation).data
+            CommercialQuotationSerializer(
+                quotation,
+                context={"request": request},
+            ).data
         )
 
     @action(detail=True, methods=["get", "post"], url_path="adoptions")
