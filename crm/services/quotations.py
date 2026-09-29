@@ -773,6 +773,7 @@ def send_commercial_quotation(*, quotation, actor):
             note=(
                 f"Cotización v{locked_quotation.version} enviada."
             ),
+            allow_quotation_sent=True,
         )
 
     return locked_quotation

@@ -17,6 +17,9 @@ class OpportunityTransitionError(ValidationError):
     pass
 
 
+QUOTATION_SENT_STAGE_CODE = "cotizacion_enviada"
+
+
 def _validate_stage_for_pipeline(*, pipeline, stage):
     if stage.pipeline_id != pipeline.id:
         raise OpportunityTransitionError(
@@ -280,6 +283,7 @@ def transition_opportunity_stage(
     changed_by,
     note="",
     allow_won=False,
+    allow_quotation_sent=False,
 ):
     locked_opportunity = (
         Opportunity.objects
@@ -303,6 +307,30 @@ def transition_opportunity_stage(
     if current_stage.pk == to_stage.pk:
         raise OpportunityTransitionError(
             "La oportunidad ya se encuentra en esa etapa."
+        )
+
+    if (
+        to_stage.code == QUOTATION_SENT_STAGE_CODE
+        and not allow_quotation_sent
+    ):
+        raise OpportunityTransitionError(
+            (
+                "La etapa Cotización enviada se actualiza "
+                "automáticamente al marcar una cotización como enviada."
+            )
+        )
+
+    if (
+        current_stage.code == QUOTATION_SENT_STAGE_CODE
+        and to_stage.category == PipelineStage.Category.OPEN
+        and to_stage.order < current_stage.order
+    ):
+        raise OpportunityTransitionError(
+            (
+                "Una oportunidad con cotización enviada no retrocede "
+                "manualmente en el pipeline. Si el colegio solicita "
+                "cambios, use Reabrir negociación desde la cotización."
+            )
         )
 
     if (
@@ -384,6 +412,17 @@ def reopen_opportunity(
     if not locked_opportunity.stage.is_terminal:
         raise OpportunityTransitionError(
             "Solo se puede reabrir una oportunidad cerrada."
+        )
+
+    if (
+        locked_opportunity.stage.category
+        == PipelineStage.Category.WON
+    ):
+        raise OpportunityTransitionError(
+            (
+                "Una adopción confirmada no se reabre desde el pipeline. "
+                "Los cambios posteriores deben gestionarse desde Adopción."
+            )
         )
 
     _validate_stage_for_pipeline(
