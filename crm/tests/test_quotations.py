@@ -3,7 +3,15 @@ from decimal import Decimal
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from catalog.models import Area, Grade, Level, Product, ProductPrice, Provider
+from catalog.models import (
+    Area,
+    Grade,
+    Level,
+    Product,
+    ProductPrice,
+    ProductType,
+    Provider,
+)
 from crm.models import (
     Campaign,
     CommercialProjection,
@@ -102,12 +110,18 @@ class CRMQuotationFromProjectionTests(TestCase):
             name="Editorial Cotización",
             is_active=True,
         )
+        self.school_text_type = ProductType.objects.create(
+            name="Texto escolar",
+            is_active=True,
+        )
         self.product = Product.objects.create(
             provider=self.provider,
             name="Matemática 4 Cotización",
+            code="MAT-4-COT",
             level=self.level,
             grade=self.grade,
             area=self.area,
+            product_type=self.school_text_type,
             is_active=True,
         )
         ProductPrice.objects.create(
@@ -178,6 +192,31 @@ class CRMQuotationFromProjectionTests(TestCase):
         self.assertEqual(item.school_discount_percent, Decimal("20.00"))
         self.assertEqual(item.school_price, Decimal("80.00"))
         self.assertEqual(item.parent_price, Decimal("100.00"))
+        self.assertEqual(item.product_code_snapshot, "MAT-4-COT")
+        self.assertEqual(
+            item.commercial_line,
+            item.CommercialLine.SCHOOL_TEXT,
+        )
+        self.assertEqual(
+            item.commercial_margin_unit,
+            Decimal("20.00"),
+        )
+        self.assertEqual(
+            item.commercial_margin_total,
+            Decimal("400.00"),
+        )
+        self.assertEqual(
+            item.profitability_band,
+            item.ProfitabilityBand.GREEN,
+        )
+        self.assertEqual(
+            item.max_green_discount_percent,
+            Decimal("20.00"),
+        )
+        self.assertEqual(
+            item.green_discount_headroom_points,
+            Decimal("0.00"),
+        )
         self.assertFalse(item.uses_reference_price)
 
     def test_discount_over_standard_requires_approval_before_send(self):
@@ -325,6 +364,7 @@ class CRMQuotationFromProjectionTests(TestCase):
 
         updated = update_commercial_quotation_from_projection(
             quotation=quotation,
+            actor=self.admin,
             item_adjustments=[
                 {
                     "projection_item": self.projection_item,
@@ -349,11 +389,116 @@ class CRMQuotationFromProjectionTests(TestCase):
         self.assertEqual(item.school_price, Decimal("75.00"))
         self.assertEqual(item.parent_price, Decimal("95.00"))
         self.assertEqual(item.school_commission, Decimal("5.00"))
+        self.assertEqual(
+            item.commission_mode,
+            item.CommissionMode.PER_UNIT,
+        )
+        self.assertEqual(
+            item.commission_input_amount,
+            Decimal("5.00"),
+        )
+        self.assertEqual(
+            item.commercial_margin_unit,
+            Decimal("10.00"),
+        )
+        self.assertEqual(
+            item.profitability_band,
+            item.ProfitabilityBand.RED,
+        )
         self.assertEqual(updated.notes, "Ajuste comercial de prueba.")
         self.assertTrue(updated.requires_discount_approval)
         self.assertEqual(
             updated.discount_approval_status,
             CommercialQuotation.DiscountApprovalStatus.PENDING,
+        )
+
+    def test_advisor_cannot_register_positive_commission(self):
+        with self.assertRaisesMessage(
+            CommercialQuotationError,
+            "Solo supervisión comercial",
+        ):
+            create_commercial_quotation_from_projection(
+                opportunity=self.opportunity,
+                actor=self.advisor,
+                item_adjustments=[
+                    {
+                        "projection_item": self.projection_item,
+                        "school_commission": Decimal("5.00"),
+                    }
+                ],
+            )
+
+    def test_supervisor_can_use_total_commission(self):
+        quotation = create_commercial_quotation_from_projection(
+            opportunity=self.opportunity,
+            actor=self.admin,
+            item_adjustments=[
+                {
+                    "projection_item": self.projection_item,
+                    "commission_mode": "total",
+                    "commission_amount": Decimal("100.00"),
+                }
+            ],
+        )
+
+        item = quotation.items.get()
+
+        self.assertEqual(item.commission_mode, "total")
+        self.assertEqual(
+            item.commission_input_amount,
+            Decimal("100.00"),
+        )
+        self.assertEqual(item.school_commission, Decimal("5.00"))
+        self.assertEqual(
+            item.commercial_margin_unit,
+            Decimal("15.00"),
+        )
+        self.assertEqual(
+            item.profitability_band,
+            item.ProfitabilityBand.AMBER,
+        )
+
+    def test_plan_lector_uses_approved_profitability_thresholds(self):
+        plan_lector_type = ProductType.objects.create(
+            name="Plan lector",
+            is_active=True,
+        )
+        self.product.product_type = plan_lector_type
+        self.product.save(update_fields=["product_type", "updated_at"])
+
+        ProductPrice.objects.filter(product=self.product).update(
+            cost_price=Decimal("74.00")
+        )
+
+        quotation = create_commercial_quotation_from_projection(
+            opportunity=self.opportunity,
+            actor=self.admin,
+            item_adjustments=[
+                {
+                    "projection_item": self.projection_item,
+                    "reading_month": 4,
+                }
+            ],
+        )
+
+        item = quotation.items.get()
+
+        self.assertEqual(
+            item.commercial_line,
+            item.CommercialLine.READING_PLAN,
+        )
+        self.assertEqual(item.reading_month, 4)
+        self.assertEqual(
+            item.commercial_margin_unit,
+            Decimal("6.00"),
+        )
+        self.assertEqual(
+            item.profitability_band,
+            item.ProfitabilityBand.GREEN,
+        )
+        self.assertEqual(
+            item.max_green_discount_percent,
+            Decimal("21.00"),
         )
 
     def test_quantity_must_be_changed_in_projection_not_quotation(self):
@@ -368,6 +513,7 @@ class CRMQuotationFromProjectionTests(TestCase):
         ):
             update_commercial_quotation_from_projection(
                 quotation=quotation,
+                actor=self.advisor,
                 item_adjustments=[
                     {
                         "projection_item": self.projection_item,
