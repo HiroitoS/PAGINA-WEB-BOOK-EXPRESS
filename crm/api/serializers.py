@@ -1,9 +1,12 @@
+from decimal import Decimal
+
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
 from django.utils import timezone
 from django.utils.text import slugify
 
+from accounts.permissions import usuario_es_administrador
 from catalog.models import Area, Grade, Level, Product
 from crm.models import (
     Adoption,
@@ -31,10 +34,24 @@ from crm.models import (
     SchoolPopulationDetail,
     MarketEditorial,
 )
+from crm.permissions import usuario_puede_supervisar_crm
 from workspaces.models import CalendarEvent, Task, WorkspaceGroup
 
 
 User = get_user_model()
+
+
+def _request_can_view_quotation_financials(serializer):
+    request = serializer.context.get("request")
+    user = getattr(request, "user", None)
+
+    if user is None or not user.is_authenticated:
+        return False
+
+    return (
+        usuario_es_administrador(user)
+        or usuario_puede_supervisar_crm(user)
+    )
 
 
 class UserSummarySerializer(serializers.ModelSerializer):
@@ -1214,6 +1231,14 @@ class CommercialProjectionCreateSerializer(serializers.Serializer):
 
 class CommercialQuotationItemSerializer(serializers.ModelSerializer):
     product = serializers.SerializerMethodField()
+    commercial_line_display = serializers.CharField(
+        source="get_commercial_line_display",
+        read_only=True,
+    )
+    profitability_band_display = serializers.CharField(
+        source="get_profitability_band_display",
+        read_only=True,
+    )
 
     class Meta:
         model = CommercialQuotationItem
@@ -1225,6 +1250,11 @@ class CommercialQuotationItemSerializer(serializers.ModelSerializer):
             "level_name_snapshot",
             "grade_name_snapshot",
             "area_name_snapshot",
+            "product_code_snapshot",
+            "product_type_name_snapshot",
+            "commercial_line",
+            "commercial_line_display",
+            "reading_month",
             "quantity",
             "pvp",
             "supplier_cost",
@@ -1232,6 +1262,15 @@ class CommercialQuotationItemSerializer(serializers.ModelSerializer):
             "school_discount_percent",
             "parent_price",
             "school_commission",
+            "commission_mode",
+            "commission_input_amount",
+            "commercial_margin_unit",
+            "commercial_margin_total",
+            "commercial_margin_percent",
+            "profitability_band",
+            "profitability_band_display",
+            "max_green_discount_percent",
+            "green_discount_headroom_points",
             "price_year_snapshot",
             "price_campaign_snapshot",
             "uses_reference_price",
@@ -1242,6 +1281,29 @@ class CommercialQuotationItemSerializer(serializers.ModelSerializer):
             "id": obj.product_id,
             "name": obj.product.name,
         }
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+
+        if _request_can_view_quotation_financials(self):
+            return data
+
+        for field_name in (
+            "supplier_cost",
+            "school_commission",
+            "commission_mode",
+            "commission_input_amount",
+            "commercial_margin_unit",
+            "commercial_margin_total",
+            "commercial_margin_percent",
+            "profitability_band",
+            "profitability_band_display",
+            "max_green_discount_percent",
+            "green_discount_headroom_points",
+        ):
+            data.pop(field_name, None)
+
+        return data
 
 
 class CommercialQuotationSerializer(serializers.ModelSerializer):
@@ -1254,6 +1316,7 @@ class CommercialQuotationSerializer(serializers.ModelSerializer):
         read_only=True,
     )
     source_projection = serializers.SerializerMethodField()
+    commercial_analysis = serializers.SerializerMethodField()
     items = CommercialQuotationItemSerializer(
         many=True,
         read_only=True,
@@ -1272,6 +1335,7 @@ class CommercialQuotationSerializer(serializers.ModelSerializer):
             "status",
             "status_display",
             "source_projection",
+            "commercial_analysis",
             "school_name_snapshot",
             "campaign_name_snapshot",
             "notes",
@@ -1303,6 +1367,81 @@ class CommercialQuotationSerializer(serializers.ModelSerializer):
             "version": obj.source_projection.version,
             "campaign_year": obj.source_projection.campaign_year_snapshot,
         }
+
+    def get_commercial_analysis(self, obj):
+        if not _request_can_view_quotation_financials(self):
+            return None
+
+        sales_total = Decimal("0.00")
+        cost_total = Decimal("0.00")
+        commission_total = Decimal("0.00")
+        margin_total = Decimal("0.00")
+        band_counts = {
+            "green": 0,
+            "amber": 0,
+            "red": 0,
+            "loss": 0,
+            "unclassified": 0,
+        }
+        margin_by_editorial = {}
+
+        for item in obj.items.all():
+            quantity = Decimal(item.quantity)
+            item_sales = item.school_price * quantity
+            item_cost = item.supplier_cost * quantity
+            item_commission = item.school_commission * quantity
+
+            sales_total += item_sales
+            cost_total += item_cost
+            commission_total += item_commission
+            margin_total += item.commercial_margin_total
+
+            band_counts[item.profitability_band] = (
+                band_counts.get(item.profitability_band, 0) + 1
+            )
+
+            editorial_name = (
+                item.provider_name_snapshot or "Sin editorial"
+            )
+            margin_by_editorial[editorial_name] = (
+                margin_by_editorial.get(
+                    editorial_name,
+                    Decimal("0.00"),
+                )
+                + item.commercial_margin_total
+            )
+
+        margin_percent = Decimal("0.00")
+        if sales_total > Decimal("0.00"):
+            margin_percent = (
+                margin_total / sales_total * Decimal("100.00")
+            ).quantize(Decimal("0.01"))
+
+        return {
+            "sales_total": sales_total,
+            "cost_total": cost_total,
+            "commission_total": commission_total,
+            "margin_total": margin_total,
+            "margin_percent": margin_percent,
+            "products_by_band": band_counts,
+            "margin_by_editorial": [
+                {
+                    "editorial": editorial,
+                    "margin_total": margin,
+                }
+                for editorial, margin in sorted(
+                    margin_by_editorial.items()
+                )
+            ],
+        }
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+
+        if not _request_can_view_quotation_financials(self):
+            data.pop("commercial_analysis", None)
+
+        return data
 
 
 class CommercialQuotationItemCreateSerializer(serializers.Serializer):
@@ -1374,12 +1513,45 @@ class CommercialQuotationProjectionItemAdjustmentSerializer(
         min_value=0,
         required=False,
     )
-    school_commission = serializers.DecimalField(
+    reading_month = serializers.IntegerField(
+        min_value=1,
+        max_value=12,
+        required=False,
+        allow_null=True,
+    )
+    commission_mode = serializers.ChoiceField(
+        choices=CommercialQuotationItem.CommissionMode.choices,
+        required=False,
+    )
+    commission_amount = serializers.DecimalField(
         max_digits=12,
         decimal_places=2,
         min_value=0,
         required=False,
     )
+    school_commission = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        min_value=0,
+        required=False,
+        write_only=True,
+    )
+
+    def validate(self, attrs):
+        if (
+            "commission_amount" in attrs
+            and "school_commission" in attrs
+        ):
+            raise serializers.ValidationError(
+                {
+                    "commission_amount": (
+                        "Usa commission_amount o school_commission, "
+                        "pero no ambos."
+                    )
+                }
+            )
+
+        return attrs
 
 
 class CommercialQuotationFromProjectionSerializer(serializers.Serializer):
