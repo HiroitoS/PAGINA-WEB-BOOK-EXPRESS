@@ -113,6 +113,23 @@ class CommercialQuotation(TimeStampedModel):
         related_name="accepted_crm_quotations",
         verbose_name="Aceptada por",
     )
+    reopened_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Fecha de reapertura de negociación",
+    )
+    reopened_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reopened_crm_quotations",
+        verbose_name="Negociación reabierta por",
+    )
+    reopen_reason = models.TextField(
+        blank=True,
+        verbose_name="Motivo de reapertura",
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,

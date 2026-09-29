@@ -60,6 +60,7 @@ from crm.services import (
     create_school_reminder,
     create_school_task,
     record_commercial_activity,
+    reopen_commercial_quotation_negotiation,
     send_commercial_quotation,
     update_commercial_quotation_from_projection,
     reopen_opportunity,
@@ -79,6 +80,7 @@ from .serializers import (
     CommercialQuotationCreateSerializer,
     CommercialQuotationDiscountApprovalSerializer,
     CommercialQuotationFromProjectionSerializer,
+    CommercialQuotationReopenSerializer,
     CommercialQuotationSerializer,
     CommercialTeamDetailSerializer,
     OpportunityCreateSerializer,
@@ -1874,6 +1876,7 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                 "created_by",
                 "sent_by",
                 "accepted_by",
+                "reopened_by",
                 "discount_approved_by",
             )
             .prefetch_related("items__product")
@@ -1940,6 +1943,7 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                 "created_by",
                 "sent_by",
                 "accepted_by",
+                "reopened_by",
                 "discount_approved_by",
             )
             .prefetch_related("items__product")
@@ -2010,6 +2014,7 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                 "created_by",
                 "sent_by",
                 "accepted_by",
+                "reopened_by",
                 "discount_approved_by",
             )
             .prefetch_related("items__product")
@@ -2065,6 +2070,7 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                 "created_by",
                 "sent_by",
                 "accepted_by",
+                "reopened_by",
                 "discount_approved_by",
             )
             .prefetch_related("items__product")
@@ -2131,6 +2137,7 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                 "created_by",
                 "sent_by",
                 "accepted_by",
+                "reopened_by",
                 "discount_approved_by",
             )
             .prefetch_related("items__product")
@@ -2186,6 +2193,73 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                 "created_by",
                 "sent_by",
                 "accepted_by",
+                "reopened_by",
+                "discount_approved_by",
+            )
+            .prefetch_related("items__product")
+            .get(pk=quotation.pk)
+        )
+
+        return Response(
+            CommercialQuotationSerializer(quotation).data
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=r"quotations/(?P<quotation_id>[^/.]+)/reopen-negotiation",
+    )
+    def reopen_quotation_negotiation(
+        self,
+        request,
+        pk=None,
+        quotation_id=None,
+    ):
+        opportunity = self.get_object()
+
+        if not _user_can_manage_visible_opportunity(
+            request.user,
+            opportunity,
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para reabrir esta negociación."
+            )
+
+        quotation = opportunity.quotations.filter(
+            pk=quotation_id
+        ).first()
+
+        if quotation is None:
+            raise serializers.ValidationError(
+                {
+                    "quotation": (
+                        "La cotización no pertenece a esta oportunidad."
+                    )
+                }
+            )
+
+        serializer = CommercialQuotationReopenSerializer(
+            data=request.data
+        )
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            quotation = reopen_commercial_quotation_negotiation(
+                quotation=quotation,
+                actor=request.user,
+                reason=serializer.validated_data["reason"],
+            )
+        except CommercialQuotationError as exc:
+            _raise_service_validation_error(exc)
+
+        quotation = (
+            CommercialQuotation.objects
+            .select_related(
+                "source_projection",
+                "created_by",
+                "sent_by",
+                "accepted_by",
+                "reopened_by",
                 "discount_approved_by",
             )
             .prefetch_related("items__product")

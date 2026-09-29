@@ -20,6 +20,7 @@ from crm.services import (
     accept_commercial_quotation,
     approve_commercial_quotation_discount,
     create_commercial_quotation_from_projection,
+    reopen_commercial_quotation_negotiation,
     send_commercial_quotation,
     update_commercial_quotation_from_projection,
 )
@@ -449,6 +450,82 @@ class CRMQuotationFromProjectionTests(TestCase):
             self.opportunity.stage_history.count(),
             history_count,
         )
+
+    def test_accepted_quotation_can_reopen_negotiation_before_adoption(self):
+        quotation = create_commercial_quotation_from_projection(
+            opportunity=self.opportunity,
+            actor=self.advisor,
+        )
+        quotation = send_commercial_quotation(
+            quotation=quotation,
+            actor=self.advisor,
+        )
+        quotation = accept_commercial_quotation(
+            quotation=quotation,
+            actor=self.advisor,
+        )
+        accepted_at = quotation.accepted_at
+        accepted_by_id = quotation.accepted_by_id
+
+        reopened = reopen_commercial_quotation_negotiation(
+            quotation=quotation,
+            actor=self.admin,
+            reason="El colegio solicita modificar la población.",
+        )
+
+        self.opportunity.refresh_from_db()
+
+        self.assertEqual(
+            reopened.status,
+            CommercialQuotation.Status.SUPERSEDED,
+        )
+        self.assertEqual(reopened.accepted_at, accepted_at)
+        self.assertEqual(reopened.accepted_by_id, accepted_by_id)
+        self.assertEqual(reopened.reopened_by, self.admin)
+        self.assertIsNotNone(reopened.reopened_at)
+        self.assertEqual(
+            reopened.reopen_reason,
+            "El colegio solicita modificar la población.",
+        )
+        self.assertEqual(
+            self.opportunity.stage,
+            self.quotation_stage,
+        )
+
+        replacement = create_commercial_quotation_from_projection(
+            opportunity=self.opportunity,
+            actor=self.advisor,
+        )
+
+        self.assertEqual(replacement.version, 2)
+        self.assertEqual(
+            replacement.status,
+            CommercialQuotation.Status.DRAFT,
+        )
+
+    def test_reopen_negotiation_requires_reason(self):
+        quotation = create_commercial_quotation_from_projection(
+            opportunity=self.opportunity,
+            actor=self.advisor,
+        )
+        quotation = send_commercial_quotation(
+            quotation=quotation,
+            actor=self.advisor,
+        )
+        quotation = accept_commercial_quotation(
+            quotation=quotation,
+            actor=self.advisor,
+        )
+
+        with self.assertRaisesMessage(
+            CommercialQuotationError,
+            "Registra el motivo",
+        ):
+            reopen_commercial_quotation_negotiation(
+                quotation=quotation,
+                actor=self.admin,
+                reason="   ",
+            )
 
     def test_sent_quotation_cannot_be_edited(self):
         quotation = create_commercial_quotation_from_projection(

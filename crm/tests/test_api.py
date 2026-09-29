@@ -188,6 +188,53 @@ class CRMApiTests(TestCase):
             "accepted",
         )
 
+    def test_quotation_api_can_reopen_accepted_negotiation(self):
+        self.authenticate(self.advisor)
+        create_response = self._create_quotation_via_api()
+        quotation_id = create_response.data["id"]
+
+        self.client.post(
+            reverse(
+                "crm:opportunity-send-quotation",
+                args=[self.opportunity.id, quotation_id],
+            ),
+            {},
+            format="json",
+        )
+        self.client.post(
+            reverse(
+                "crm:opportunity-accept-quotation",
+                args=[self.opportunity.id, quotation_id],
+            ),
+            {},
+            format="json",
+        )
+
+        reopen_response = self.client.post(
+            reverse(
+                "crm:opportunity-reopen-quotation-negotiation",
+                args=[self.opportunity.id, quotation_id],
+            ),
+            {
+                "reason": "El colegio solicita una nueva propuesta.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(reopen_response.status_code, 200)
+        self.assertEqual(reopen_response.data["status"], "superseded")
+        self.assertEqual(
+            reopen_response.data["reopen_reason"],
+            "El colegio solicita una nueva propuesta.",
+        )
+        self.assertIsNotNone(reopen_response.data["reopened_at"])
+        self.assertIsNotNone(reopen_response.data["reopened_by"])
+
+        create_again = self._create_quotation_via_api()
+        self.assertEqual(create_again.status_code, 201)
+        self.assertEqual(create_again.data["version"], 2)
+        self.assertEqual(create_again.data["status"], "draft")
+
     def test_adoption_api_closes_opportunity_as_won(self):
         contact = SchoolContact.objects.create(
             school=self.school,

@@ -1261,6 +1261,7 @@ class CommercialQuotationSerializer(serializers.ModelSerializer):
     created_by = UserSummarySerializer(read_only=True)
     sent_by = UserSummarySerializer(read_only=True)
     accepted_by = UserSummarySerializer(read_only=True)
+    reopened_by = UserSummarySerializer(read_only=True)
     discount_approved_by = UserSummarySerializer(read_only=True)
 
     class Meta:
@@ -1284,6 +1285,9 @@ class CommercialQuotationSerializer(serializers.ModelSerializer):
             "sent_by",
             "accepted_at",
             "accepted_by",
+            "reopened_at",
+            "reopened_by",
+            "reopen_reason",
             "created_by",
             "items",
             "created_at",
@@ -1399,6 +1403,13 @@ class CommercialQuotationDiscountApprovalSerializer(
         required=False,
         allow_blank=True,
         default="",
+    )
+
+
+class CommercialQuotationReopenSerializer(serializers.Serializer):
+    reason = serializers.CharField(
+        allow_blank=False,
+        trim_whitespace=True,
     )
 
 

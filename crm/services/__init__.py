@@ -26,6 +26,7 @@ from .quotations import (
     approve_commercial_quotation_discount,
     create_commercial_quotation,
     create_commercial_quotation_from_projection,
+    reopen_commercial_quotation_negotiation,
     send_commercial_quotation,
     update_commercial_quotation_from_projection,
 )
@@ -49,6 +50,7 @@ __all__ = [
     "approve_commercial_quotation_discount",
     "send_commercial_quotation",
     "accept_commercial_quotation",
+    "reopen_commercial_quotation_negotiation",
     "CommercialActivityError",
     "record_commercial_activity",
     "OpportunityTransitionError",

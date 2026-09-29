@@ -829,3 +829,60 @@ def accept_commercial_quotation(*, quotation, actor):
     )
 
     return locked_quotation
+
+@transaction.atomic
+def reopen_commercial_quotation_negotiation(
+    *,
+    quotation,
+    actor,
+    reason,
+):
+    locked_quotation = (
+        CommercialQuotation.objects
+        .select_for_update()
+        .select_related("opportunity")
+        .get(pk=quotation.pk)
+    )
+
+    if locked_quotation.status != CommercialQuotation.Status.ACCEPTED:
+        raise CommercialQuotationError(
+            "Solo una cotización aceptada puede reabrir la negociación."
+        )
+
+    if locked_quotation.opportunity.is_closed:
+        raise CommercialQuotationError(
+            "No se puede reabrir una negociación de una oportunidad cerrada."
+        )
+
+    if locked_quotation.opportunity.adoptions.filter(
+        is_current=True,
+    ).exists():
+        raise CommercialQuotationError(
+            (
+                "La oportunidad ya tiene una adopción vigente. "
+                "Los cambios posteriores deben gestionarse desde Adopción."
+            )
+        )
+
+    cleaned_reason = (reason or "").strip()
+    if not cleaned_reason:
+        raise CommercialQuotationError(
+            "Registra el motivo para reabrir la negociación."
+        )
+
+    locked_quotation.status = CommercialQuotation.Status.SUPERSEDED
+    locked_quotation.reopened_at = timezone.now()
+    locked_quotation.reopened_by = actor
+    locked_quotation.reopen_reason = cleaned_reason
+    locked_quotation.save(
+        update_fields=[
+            "status",
+            "reopened_at",
+            "reopened_by",
+            "reopen_reason",
+            "updated_at",
+        ]
+    )
+
+    return locked_quotation
+
