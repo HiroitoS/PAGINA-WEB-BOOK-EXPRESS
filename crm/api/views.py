@@ -1765,6 +1765,7 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                     "items__product__level",
                     "items__product__grade",
                     "items__product__area",
+                    "items__product__product_type",
                 )
                 .first()
             )
@@ -1827,6 +1828,7 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                 "items__product__level",
                 "items__product__grade",
                 "items__product__area",
+                "items__product__product_type",
             )
             .order_by("-version")
         )
