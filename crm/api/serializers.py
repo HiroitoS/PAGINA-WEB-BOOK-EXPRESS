@@ -1020,6 +1020,7 @@ class CommercialProjectionItemSerializer(serializers.ModelSerializer):
     product = serializers.SerializerMethodField()
     grade_line_id = serializers.IntegerField(read_only=True)
     subtotal = serializers.SerializerMethodField()
+    commercial_line = serializers.SerializerMethodField()
 
     class Meta:
         model = CommercialProjectionItem
@@ -1032,6 +1033,7 @@ class CommercialProjectionItemSerializer(serializers.ModelSerializer):
             "level_name_snapshot",
             "grade_name_snapshot",
             "area_name_snapshot",
+            "commercial_line",
             "quantity",
             "unit_price",
             "subtotal",
@@ -1040,14 +1042,48 @@ class CommercialProjectionItemSerializer(serializers.ModelSerializer):
         )
 
     def get_product(self, obj):
+        product_type = getattr(obj.product, "product_type", None)
+
         return {
             "id": obj.product_id,
             "name": obj.product.name,
+            "code": obj.product.code or obj.product.sku or "",
             "provider": {
                 "id": obj.product.provider_id,
                 "name": obj.product.provider.name,
             },
+            "product_type": (
+                {
+                    "id": product_type.id,
+                    "name": product_type.name,
+                }
+                if product_type
+                else None
+            ),
         }
+
+    def get_commercial_line(self, obj):
+        product_type = getattr(obj.product, "product_type", None)
+
+        if product_type is None:
+            return CommercialQuotationItem.CommercialLine.OTHER
+
+        normalized = " ".join(
+            value
+            for value in (
+                (product_type.slug or "").lower(),
+                (product_type.name or "").lower(),
+            )
+            if value
+        )
+
+        if "plan" in normalized and "lector" in normalized:
+            return CommercialQuotationItem.CommercialLine.READING_PLAN
+
+        if "texto" in normalized and "escolar" in normalized:
+            return CommercialQuotationItem.CommercialLine.SCHOOL_TEXT
+
+        return CommercialQuotationItem.CommercialLine.OTHER
 
     def get_subtotal(self, obj):
         return f"{obj.subtotal:.2f}"
