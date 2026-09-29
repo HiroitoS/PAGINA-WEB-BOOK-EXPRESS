@@ -387,6 +387,36 @@ class CRMApiTests(TestCase):
         self.opportunity.refresh_from_db()
         self.assertIsNotNone(self.opportunity.last_activity_at)
 
+    def test_school_activity_can_explicitly_remain_without_opportunity(self):
+        self.authenticate(self.advisor)
+
+        response = self.client.post(
+            reverse(
+                "crm:school-activities",
+                args=[self.school.id],
+            ),
+            {
+                "activity_type": "cold_visit",
+                "summary": "Visita en frío al colegio",
+                "result": "No brindaron datos del directivo; se dejó material informativo.",
+                "contact": None,
+                "opportunity": None,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["school_id"], self.school.id)
+        self.assertIsNone(response.data["opportunity_id"])
+        self.assertIsNone(response.data["contact"])
+        self.assertEqual(
+            response.data["activity_type_display"],
+            "Visita en frío",
+        )
+
+        self.opportunity.refresh_from_db()
+        self.assertIsNone(self.opportunity.last_activity_at)
+
     def test_marking_school_primary_contact_fills_empty_open_opportunity(self):
         contact = SchoolContact.objects.create(
             school=self.school,
