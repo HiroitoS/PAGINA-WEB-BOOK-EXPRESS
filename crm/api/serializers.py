@@ -865,7 +865,7 @@ class OpportunityListSerializer(serializers.ModelSerializer):
                 candidates.append(
                     {
                         "type": "event",
-                        "type_display": "Evento",
+                        "type_display": event.get_event_type_display(),
                         "id": event.id,
                         "title": event.title,
                         "scheduled_at": event.start_at,

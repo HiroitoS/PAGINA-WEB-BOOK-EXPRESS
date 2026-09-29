@@ -764,6 +764,42 @@ class CRMApiTests(TestCase):
             event_response.data["id"],
         )
 
+    def test_school_event_preserves_commercial_activity_type(self):
+        self.authenticate(self.advisor)
+
+        start_at = timezone.now() + timedelta(days=2)
+        response = self.client.post(
+            reverse(
+                "crm:school-create-event",
+                args=[self.school.id],
+            ),
+            {
+                "title": "Volver para presentación de producto",
+                "start_at": start_at.isoformat(),
+                "event_type": "cold_visit",
+                "opportunity": self.opportunity.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["event_type"], "cold_visit")
+
+        list_response = self.client.get(
+            reverse("crm:opportunity-list"),
+        )
+        self.assertEqual(list_response.status_code, 200)
+
+        opportunity_data = next(
+            item
+            for item in list_response.data["results"]
+            if item["id"] == self.opportunity.id
+        )
+        self.assertEqual(
+            opportunity_data["next_activity"]["type_display"],
+            "Visita en frío",
+        )
+
     def test_school_detail_exposes_services_population_and_segment(self):
         level = Level.objects.create(
             name="Primaria CRM API",
