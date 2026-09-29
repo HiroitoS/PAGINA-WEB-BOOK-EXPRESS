@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from django.conf import settings
-from django.core.validators import MinValueValidator
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
 from catalog.models import Product
@@ -164,6 +164,22 @@ class CommercialQuotation(TimeStampedModel):
 
 
 class CommercialQuotationItem(TimeStampedModel):
+    class CommercialLine(models.TextChoices):
+        SCHOOL_TEXT = "school_text", "Texto escolar"
+        READING_PLAN = "reading_plan", "Plan lector"
+        OTHER = "other", "Otra línea"
+
+    class CommissionMode(models.TextChoices):
+        PER_UNIT = "per_unit", "Por unidad"
+        TOTAL = "total", "Monto total"
+
+    class ProfitabilityBand(models.TextChoices):
+        GREEN = "green", "Verde"
+        AMBER = "amber", "Ámbar"
+        RED = "red", "Rojo"
+        LOSS = "loss", "Pérdida"
+        UNCLASSIFIED = "unclassified", "Sin clasificar"
+
     quotation = models.ForeignKey(
         CommercialQuotation,
         on_delete=models.CASCADE,
@@ -198,6 +214,31 @@ class CommercialQuotationItem(TimeStampedModel):
         max_length=100,
         blank=True,
         verbose_name="Área al cotizar",
+    )
+    product_code_snapshot = models.CharField(
+        max_length=100,
+        blank=True,
+        verbose_name="Código de producto al cotizar",
+    )
+    product_type_name_snapshot = models.CharField(
+        max_length=100,
+        blank=True,
+        verbose_name="Tipo de producto al cotizar",
+    )
+    commercial_line = models.CharField(
+        max_length=20,
+        choices=CommercialLine.choices,
+        default=CommercialLine.OTHER,
+        verbose_name="Línea comercial",
+    )
+    reading_month = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        validators=[
+            MinValueValidator(1),
+            MaxValueValidator(12),
+        ],
+        verbose_name="Mes de lectura",
     )
     quantity = models.PositiveIntegerField(
         validators=[MinValueValidator(1)],
@@ -241,7 +282,58 @@ class CommercialQuotationItem(TimeStampedModel):
         decimal_places=2,
         default=Decimal("0.00"),
         validators=[MinValueValidator(Decimal("0.00"))],
-        verbose_name="Comisión colegio",
+        verbose_name="Comisión unitaria autorizada",
+    )
+    commission_mode = models.CharField(
+        max_length=20,
+        choices=CommissionMode.choices,
+        default=CommissionMode.PER_UNIT,
+        verbose_name="Modalidad de comisión",
+    )
+    commission_input_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        validators=[MinValueValidator(Decimal("0.00"))],
+        verbose_name="Comisión ingresada",
+    )
+    commercial_margin_unit = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        verbose_name="Margen comercial unitario",
+    )
+    commercial_margin_total = models.DecimalField(
+        max_digits=16,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        verbose_name="Margen comercial proyectado",
+    )
+    commercial_margin_percent = models.DecimalField(
+        max_digits=7,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        verbose_name="Margen comercial (%)",
+    )
+    profitability_band = models.CharField(
+        max_length=20,
+        choices=ProfitabilityBand.choices,
+        default=ProfitabilityBand.UNCLASSIFIED,
+        verbose_name="Semáforo de rentabilidad",
+    )
+    max_green_discount_percent = models.DecimalField(
+        max_digits=7,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name="Descuento máximo para mantener verde (%)",
+    )
+    green_discount_headroom_points = models.DecimalField(
+        max_digits=7,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name="Margen de negociación hasta verde (puntos)",
     )
     price_year_snapshot = models.PositiveSmallIntegerField(
         null=True,
