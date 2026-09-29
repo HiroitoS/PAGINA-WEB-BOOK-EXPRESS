@@ -71,31 +71,43 @@ class CRMApiTests(TestCase):
         self.client.force_authenticate(user=user)
 
     def _create_quote_product(self):
-        provider = Provider.objects.create(
+        provider, _ = Provider.objects.get_or_create(
             name="Editorial cotización API",
-            is_active=True,
+            defaults={
+                "is_active": True,
+            },
         )
-        level = Level.objects.create(
+        level, _ = Level.objects.get_or_create(
             name="Primaria cotización API",
-            is_active=True,
+            defaults={
+                "is_active": True,
+            },
         )
-        grade = Grade.objects.create(
+        grade, _ = Grade.objects.get_or_create(
             name="4to Primaria cotización API",
-            order=4,
-            is_active=True,
+            defaults={
+                "order": 4,
+                "is_active": True,
+            },
         )
-        area = Area.objects.create(
+        area, _ = Area.objects.get_or_create(
             name="Matemática cotización API",
-            is_active=True,
+            defaults={
+                "is_active": True,
+            },
         )
-        return Product.objects.create(
+        product, _ = Product.objects.get_or_create(
             provider=provider,
             name="Matemática 4 cotización API",
-            level=level,
-            grade=grade,
-            area=area,
-            is_active=True,
+            defaults={
+                "level": level,
+                "grade": grade,
+                "area": area,
+                "is_active": True,
+            },
         )
+
+        return product
 
     def _create_quotation_via_api(self):
         product = self._create_quote_product()
