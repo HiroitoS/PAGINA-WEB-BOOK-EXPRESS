@@ -20,10 +20,12 @@ from crm.models import (
 )
 from crm.services import (
     AdoptionError,
+    CommercialQuotationError,
     accept_commercial_quotation,
     confirm_adoption,
     create_commercial_quotation,
     create_opportunity,
+    reopen_commercial_quotation_negotiation,
     send_commercial_quotation,
 )
 
@@ -319,6 +321,46 @@ class CRMAdoptionFlowTests(TestCase):
             ).count(),
             1,
         )
+
+    def test_negotiation_cannot_reopen_after_adoption(self):
+        quotation = create_commercial_quotation(
+            opportunity=self.opportunity,
+            actor=self.advisor,
+            items=self.quotation_items(),
+        )
+        quotation = send_commercial_quotation(
+            quotation=quotation,
+            actor=self.advisor,
+        )
+        quotation = accept_commercial_quotation(
+            quotation=quotation,
+            actor=self.advisor,
+        )
+
+        confirm_adoption(
+            quotation=quotation,
+            authorized_contact=self.contact,
+            signed_at=timezone.now() - timedelta(minutes=10),
+            actor=self.admin,
+        )
+
+        with self.assertRaisesMessage(
+            CommercialQuotationError,
+            "oportunidad cerrada",
+        ):
+            reopen_commercial_quotation_negotiation(
+                quotation=quotation,
+                actor=self.admin,
+                reason="Solicitud posterior a la adopción.",
+            )
+
+        quotation.refresh_from_db()
+        self.assertEqual(
+            quotation.status,
+            CommercialQuotation.Status.ACCEPTED,
+        )
+        self.assertIsNone(quotation.reopened_at)
+        self.assertEqual(quotation.reopen_reason, "")
 
     def test_adoption_rejects_future_signature(self):
         quotation = create_commercial_quotation(
