@@ -68,6 +68,11 @@ from crm.services import (
     transition_opportunity_stage,
 )
 
+from crm.services.commercial_lines import (
+    VALID_PROJECTION_LINES,
+    resolve_product_commercial_line,
+)
+
 from .pagination import CRMPageNumberPagination
 from .serializers import (
     AdoptionConfirmSerializer,
@@ -1562,6 +1567,19 @@ class OpportunityViewSet(viewsets.ModelViewSet):
             request.query_params.get("product_search") or ""
         ).strip()
         editorial_id = request.query_params.get("editorial")
+        commercial_line = (
+            request.query_params.get("commercial_line") or ""
+        ).strip()
+
+        if commercial_line and commercial_line not in VALID_PROJECTION_LINES:
+            raise serializers.ValidationError(
+                {
+                    "commercial_line": (
+                        "La línea comercial debe ser Texto escolar "
+                        "o Plan lector."
+                    )
+                }
+            )
 
         if not service_id or not grade_id:
             raise serializers.ValidationError(
@@ -1614,20 +1632,38 @@ class OpportunityViewSet(viewsets.ModelViewSet):
             )
         )
 
+        products = list(
+            base_products
+            .select_related(
+                "provider",
+                "level",
+                "grade",
+                "area",
+                "series",
+                "product_type",
+            )
+            .order_by("provider__name", "name", "id")
+        )
+
+        if commercial_line:
+            products = [
+                product
+                for product in products
+                if resolve_product_commercial_line(product)
+                == commercial_line
+            ]
+
+        editorial_map = {
+            product.provider_id: product.provider.name
+            for product in products
+        }
         editorial_options = [
-            {
-                "id": item["provider_id"],
-                "name": item["provider__name"],
-            }
-            for item in (
-                base_products
-                .values("provider_id", "provider__name")
-                .order_by("provider__name", "provider_id")
-                .distinct()
+            {"id": provider_id, "name": name}
+            for provider_id, name in sorted(
+                editorial_map.items(),
+                key=lambda item: item[1].lower(),
             )
         ]
-
-        products = base_products
 
         if editorial_id:
             try:
@@ -1637,29 +1673,34 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                     {"editorial": "La editorial seleccionada no es válida."}
                 ) from exc
 
-            products = products.filter(provider_id=editorial_id)
+            products = [
+                product
+                for product in products
+                if product.provider_id == editorial_id
+            ]
 
         if product_search:
-            products = products.filter(
-                Q(name__icontains=product_search)
-                | Q(provider__name__icontains=product_search)
-                | Q(area__name__icontains=product_search)
-                | Q(series__name__icontains=product_search)
-                | Q(level__name__icontains=product_search)
-                | Q(grade__name__icontains=product_search)
-            )
+            search_value = product_search.casefold()
 
-        products = (
-            products
-            .select_related(
-                "provider",
-                "level",
-                "grade",
-                "area",
-                "series",
-            )
-            .order_by("provider__name", "name", "id")
-        )
+            def matches_search(product):
+                values = (
+                    product.name,
+                    product.provider.name,
+                    product.area.name if product.area_id else "",
+                    product.series.name if product.series_id else "",
+                    product.level.name if product.level_id else "",
+                    product.grade.name if product.grade_id else "",
+                )
+                return any(
+                    search_value in str(value or "").casefold()
+                    for value in values
+                )
+
+            products = [
+                product
+                for product in products
+                if matches_search(product)
+            ]
 
         choices = []
 
@@ -1676,6 +1717,7 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                 {
                     "id": product.id,
                     "name": product.name,
+                    "commercial_line": resolve_product_commercial_line(product),
                     "editorial": {
                         "id": product.provider_id,
                         "name": product.provider.name,
@@ -1739,6 +1781,7 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                     "name": opportunity.campaign.name,
                     "year": opportunity.campaign.year,
                 },
+                "commercial_line": commercial_line or None,
                 "editorials": editorial_options,
                 "results": choices,
             }
@@ -1797,6 +1840,9 @@ class OpportunityViewSet(viewsets.ModelViewSet):
             projection = create_commercial_projection_revision(
                 opportunity=opportunity,
                 actor=request.user,
+                commercial_line=serializer.validated_data[
+                    "commercial_line"
+                ],
                 grade_lines=serializer.validated_data["grades"],
                 items=serializer.validated_data.get("items", []),
                 notes=serializer.validated_data.get("notes", ""),
