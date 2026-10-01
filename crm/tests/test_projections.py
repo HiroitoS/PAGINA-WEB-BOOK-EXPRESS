@@ -472,6 +472,68 @@ class CRMCommercialProjectionTests(TestCase):
             {self.provider.id, second_provider.id},
         )
 
+    def test_projection_products_api_filters_by_commercial_line(self):
+        plan_area = Area.objects.create(
+            name="Plan lector",
+            is_active=True,
+        )
+        plan_product = Product.objects.create(
+            provider=self.provider,
+            name="Obra literaria de prueba",
+            level=self.level,
+            grade=self.grade,
+            area=plan_area,
+            is_active=True,
+        )
+        ProductPrice.objects.create(
+            product=plan_product,
+            year=2027,
+            campaign="Campaña escolar",
+            price=Decimal("35.00"),
+            cost_price=Decimal("20.00"),
+            is_active=True,
+        )
+
+        self.client.force_authenticate(user=self.advisor)
+
+        school_response = self.client.get(
+            reverse(
+                "crm:opportunity-projection-products",
+                args=[self.opportunity.id],
+            ),
+            {
+                "service": self.service.id,
+                "grade": self.grade.id,
+                "commercial_line": "school_text",
+            },
+        )
+        reading_response = self.client.get(
+            reverse(
+                "crm:opportunity-projection-products",
+                args=[self.opportunity.id],
+            ),
+            {
+                "service": self.service.id,
+                "grade": self.grade.id,
+                "commercial_line": "reading_plan",
+            },
+        )
+
+        self.assertEqual(school_response.status_code, 200)
+        self.assertEqual(reading_response.status_code, 200)
+        self.assertIn(
+            self.product.id,
+            {item["id"] for item in school_response.data["results"]},
+        )
+        self.assertNotIn(
+            plan_product.id,
+            {item["id"] for item in school_response.data["results"]},
+        )
+        self.assertEqual(
+            {item["id"] for item in reading_response.data["results"]},
+            {plan_product.id},
+        )
+
     def test_projection_api_creates_reads_and_exposes_base_population(self):
         self.client.force_authenticate(user=self.advisor)
 
@@ -500,6 +562,7 @@ class CRMCommercialProjectionTests(TestCase):
                 args=[self.opportunity.id],
             ),
             {
+                "commercial_line": "school_text",
                 "grades": [
                     {
                         "service": self.service.id,
@@ -520,6 +583,10 @@ class CRMCommercialProjectionTests(TestCase):
 
         self.assertEqual(create_response.status_code, 201)
         self.assertEqual(create_response.data["version"], 1)
+        self.assertEqual(
+            create_response.data["commercial_line"],
+            "school_text",
+        )
         self.assertEqual(
             create_response.data["total_students"],
             60,
