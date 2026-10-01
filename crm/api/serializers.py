@@ -1181,6 +1181,8 @@ class CommercialProjectionCreateSerializer(serializers.Serializer):
             CommercialProjection.CommercialLine.SCHOOL_TEXT,
             CommercialProjection.CommercialLine.READING_PLAN,
         ),
+        required=False,
+        default=CommercialProjection.CommercialLine.SCHOOL_TEXT,
     )
     grades = CommercialProjectionGradeInputSerializer(
         many=True,
