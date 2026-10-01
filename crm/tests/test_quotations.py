@@ -146,6 +146,7 @@ class CRMQuotationFromProjectionTests(TestCase):
             school_name_snapshot=self.school.name,
             campaign_name_snapshot=self.campaign.name,
             campaign_year_snapshot=self.campaign.year,
+            commercial_line=CommercialProjection.CommercialLine.SCHOOL_TEXT,
             created_by=self.advisor,
         )
         self.projection_grade = CommercialProjectionGrade.objects.create(
@@ -181,6 +182,10 @@ class CRMQuotationFromProjectionTests(TestCase):
         item = quotation.items.get()
 
         self.assertEqual(quotation.source_projection, self.projection)
+        self.assertEqual(
+            quotation.commercial_line,
+            CommercialQuotation.CommercialLine.SCHOOL_TEXT,
+        )
         self.assertFalse(quotation.requires_discount_approval)
         self.assertEqual(
             quotation.discount_approval_status,
@@ -207,7 +212,7 @@ class CRMQuotationFromProjectionTests(TestCase):
         )
         self.assertEqual(
             item.profitability_band,
-            item.ProfitabilityBand.GREEN,
+            item.ProfitabilityBand.AMBER,
         )
         self.assertEqual(
             item.max_green_discount_percent,
@@ -316,6 +321,7 @@ class CRMQuotationFromProjectionTests(TestCase):
             school_name_snapshot=self.school.name,
             campaign_name_snapshot=self.campaign.name,
             campaign_year_snapshot=self.campaign.year,
+            commercial_line=CommercialProjection.CommercialLine.SCHOOL_TEXT,
             created_by=self.advisor,
         )
         another_grade = CommercialProjectionGrade.objects.create(
@@ -469,6 +475,12 @@ class CRMQuotationFromProjectionTests(TestCase):
         ProductPrice.objects.filter(product=self.product).update(
             cost_price=Decimal("74.00")
         )
+        self.projection.commercial_line = (
+            CommercialProjection.CommercialLine.READING_PLAN
+        )
+        self.projection.save(
+            update_fields=["commercial_line", "updated_at"]
+        )
 
         quotation = create_commercial_quotation_from_projection(
             opportunity=self.opportunity,
@@ -500,6 +512,23 @@ class CRMQuotationFromProjectionTests(TestCase):
             item.max_green_discount_percent,
             Decimal("21.00"),
         )
+
+    def test_plan_lector_requires_reading_month(self):
+        self.projection.commercial_line = (
+            CommercialProjection.CommercialLine.READING_PLAN
+        )
+        self.projection.save(
+            update_fields=["commercial_line", "updated_at"]
+        )
+
+        with self.assertRaisesMessage(
+            CommercialQuotationError,
+            "Selecciona el mes de lectura",
+        ):
+            create_commercial_quotation_from_projection(
+                opportunity=self.opportunity,
+                actor=self.admin,
+            )
 
     def test_quantity_must_be_changed_in_projection_not_quotation(self):
         quotation = create_commercial_quotation_from_projection(
