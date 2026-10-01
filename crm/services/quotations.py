@@ -16,6 +16,12 @@ from crm.models import (
 )
 from crm.permissions import usuario_puede_supervisar_crm
 
+from .commercial_lines import (
+    OTHER,
+    READING_PLAN,
+    SCHOOL_TEXT,
+    resolve_product_commercial_line,
+)
 from .opportunities import transition_opportunity_stage
 
 
@@ -51,7 +57,6 @@ def _product_snapshot(product):
         "product_type_name_snapshot": (
             product_type.name if product_type else ""
         ),
-        "commercial_line": _commercial_line_for_product(product),
     }
 
 
@@ -83,30 +88,6 @@ def _actor_can_manage_financials(actor):
         usuario_es_administrador(actor)
         or usuario_puede_supervisar_crm(actor)
     )
-
-
-def _commercial_line_for_product(product):
-    product_type = getattr(product, "product_type", None)
-
-    if product_type is None:
-        return CommercialQuotationItem.CommercialLine.OTHER
-
-    normalized = " ".join(
-        value
-        for value in (
-            (product_type.slug or "").lower(),
-            (product_type.name or "").lower(),
-        )
-        if value
-    )
-
-    if "plan" in normalized and "lector" in normalized:
-        return CommercialQuotationItem.CommercialLine.READING_PLAN
-
-    if "texto" in normalized and "escolar" in normalized:
-        return CommercialQuotationItem.CommercialLine.SCHOOL_TEXT
-
-    return CommercialQuotationItem.CommercialLine.OTHER
 
 
 def _reading_month_value(value):
@@ -243,7 +224,7 @@ def _profitability_snapshot(
         == CommercialQuotationItem.CommercialLine.SCHOOL_TEXT
     ):
         green_threshold = Decimal("20.00")
-        if margin_unit >= Decimal("20.00"):
+        if margin_unit > Decimal("20.00"):
             band = CommercialQuotationItem.ProfitabilityBand.GREEN
         elif margin_unit >= Decimal("15.00"):
             band = CommercialQuotationItem.ProfitabilityBand.AMBER
@@ -256,7 +237,7 @@ def _profitability_snapshot(
         == CommercialQuotationItem.CommercialLine.READING_PLAN
     ):
         green_threshold = Decimal("5.00")
-        if margin_unit >= Decimal("5.00"):
+        if margin_unit > Decimal("5.00"):
             band = CommercialQuotationItem.ProfitabilityBand.GREEN
         elif margin_unit > Decimal("2.00"):
             band = CommercialQuotationItem.ProfitabilityBand.AMBER
@@ -426,6 +407,15 @@ def create_commercial_quotation_from_projection(
             "La proyección vigente no tiene productos para cotizar."
         )
 
+    if projection.commercial_line == OTHER:
+        raise CommercialQuotationError(
+            (
+                "La proyección vigente no tiene una línea comercial "
+                "definida. Genera una nueva versión como Texto escolar "
+                "o Plan lector antes de cotizar."
+            )
+        )
+
     adjustments = {}
     for payload in item_adjustments or []:
         projection_item = payload.get("projection_item")
@@ -475,9 +465,20 @@ def create_commercial_quotation_from_projection(
                 field_label="Precio PPFF",
             )
         )
+        commercial_line = projection.commercial_line
         reading_month = _reading_month_value(
             payload.get("reading_month")
         )
+        if commercial_line == READING_PLAN and reading_month is None:
+            raise CommercialQuotationError(
+                (
+                    f"Selecciona el mes de lectura para "
+                    f"{projection_item.product.name}."
+                )
+            )
+        if commercial_line == SCHOOL_TEXT:
+            reading_month = None
+
         (
             commission_mode,
             commission_input_amount,
@@ -486,9 +487,6 @@ def create_commercial_quotation_from_projection(
             payload=payload,
             quantity=quantity,
             actor=actor,
-        )
-        commercial_line = _commercial_line_for_product(
-            projection_item.product
         )
         profitability = _profitability_snapshot(
             commercial_line=commercial_line,
@@ -546,6 +544,7 @@ def create_commercial_quotation_from_projection(
         status=CommercialQuotation.Status.DRAFT,
         school_name_snapshot=locked_opportunity.school.name,
         campaign_name_snapshot=locked_opportunity.campaign.name,
+        commercial_line=projection.commercial_line,
         notes=(notes or "").strip(),
         requires_discount_approval=requires_approval,
         discount_approval_status=(
@@ -657,6 +656,14 @@ def update_commercial_quotation_from_projection(
             "La proyección de origen no tiene productos para cotizar."
         )
 
+    if projection.commercial_line == OTHER:
+        raise CommercialQuotationError(
+            (
+                "La proyección de origen no tiene una línea comercial "
+                "definida. Genera una nueva versión de la proyección."
+            )
+        )
+
     adjustments = {}
     for payload in item_adjustments or []:
         projection_item = payload.get("projection_item")
@@ -730,6 +737,7 @@ def update_commercial_quotation_from_projection(
                 field_label="Precio PPFF",
             )
         )
+        commercial_line = projection.commercial_line
         reading_month = _reading_month_value(
             payload.get(
                 "reading_month",
@@ -740,6 +748,16 @@ def update_commercial_quotation_from_projection(
                 ),
             )
         )
+        if commercial_line == READING_PLAN and reading_month is None:
+            raise CommercialQuotationError(
+                (
+                    f"Selecciona el mes de lectura para "
+                    f"{projection_item.product.name}."
+                )
+            )
+        if commercial_line == SCHOOL_TEXT:
+            reading_month = None
+
         (
             commission_mode,
             commission_input_amount,
@@ -749,9 +767,6 @@ def update_commercial_quotation_from_projection(
             quantity=quantity,
             actor=actor,
             existing_item=existing_item,
-        )
-        commercial_line = _commercial_line_for_product(
-            projection_item.product
         )
         profitability = _profitability_snapshot(
             commercial_line=commercial_line,
@@ -842,6 +857,7 @@ def update_commercial_quotation_from_projection(
         item.save()
 
     locked_quotation.notes = (notes or "").strip()
+    locked_quotation.commercial_line = projection.commercial_line
     locked_quotation.requires_discount_approval = requires_approval
     locked_quotation.discount_approval_status = (
         CommercialQuotation.DiscountApprovalStatus.PENDING
@@ -855,6 +871,7 @@ def update_commercial_quotation_from_projection(
     locked_quotation.save(
         update_fields=[
             "notes",
+            "commercial_line",
             "requires_discount_approval",
             "discount_approval_status",
             "discount_approved_at",
@@ -948,12 +965,25 @@ def create_commercial_quotation(
         or 0
     )
 
+    resolved_lines = {
+        resolve_product_commercial_line(payload.get("product"))
+        for payload in items
+        if payload.get("product") is not None
+    }
+    resolved_lines.discard(OTHER)
+    quotation_line = (
+        next(iter(resolved_lines))
+        if len(resolved_lines) == 1
+        else OTHER
+    )
+
     quotation = CommercialQuotation(
         opportunity=locked_opportunity,
         version=current_version + 1,
         status=CommercialQuotation.Status.DRAFT,
         school_name_snapshot=locked_opportunity.school.name,
         campaign_name_snapshot=locked_opportunity.campaign.name,
+        commercial_line=quotation_line,
         notes=(notes or "").strip(),
         created_by=actor,
     )
