@@ -35,6 +35,7 @@ from crm.models import (
     MarketEditorial,
 )
 from crm.permissions import usuario_puede_supervisar_crm
+from crm.services.commercial_lines import resolve_product_commercial_line
 from workspaces.models import CalendarEvent, Task, WorkspaceGroup
 
 
@@ -1063,33 +1064,17 @@ class CommercialProjectionItemSerializer(serializers.ModelSerializer):
         }
 
     def get_commercial_line(self, obj):
-        product_type = getattr(obj.product, "product_type", None)
-
-        if product_type is None:
-            return CommercialQuotationItem.CommercialLine.OTHER
-
-        normalized = " ".join(
-            value
-            for value in (
-                (product_type.slug or "").lower(),
-                (product_type.name or "").lower(),
-            )
-            if value
-        )
-
-        if "plan" in normalized and "lector" in normalized:
-            return CommercialQuotationItem.CommercialLine.READING_PLAN
-
-        if "texto" in normalized and "escolar" in normalized:
-            return CommercialQuotationItem.CommercialLine.SCHOOL_TEXT
-
-        return CommercialQuotationItem.CommercialLine.OTHER
+        return resolve_product_commercial_line(obj.product)
 
     def get_subtotal(self, obj):
         return f"{obj.subtotal:.2f}"
 
 
 class CommercialProjectionSerializer(serializers.ModelSerializer):
+    commercial_line_display = serializers.CharField(
+        source="get_commercial_line_display",
+        read_only=True,
+    )
     grades = CommercialProjectionGradeSerializer(
         many=True,
         read_only=True,
@@ -1112,6 +1097,8 @@ class CommercialProjectionSerializer(serializers.ModelSerializer):
             "school_name_snapshot",
             "campaign_name_snapshot",
             "campaign_year_snapshot",
+            "commercial_line",
+            "commercial_line_display",
             "notes",
             "total_students",
             "total_amount",
@@ -1189,6 +1176,12 @@ class CommercialProjectionItemInputSerializer(serializers.Serializer):
 
 
 class CommercialProjectionCreateSerializer(serializers.Serializer):
+    commercial_line = serializers.ChoiceField(
+        choices=(
+            CommercialProjection.CommercialLine.SCHOOL_TEXT,
+            CommercialProjection.CommercialLine.READING_PLAN,
+        ),
+    )
     grades = CommercialProjectionGradeInputSerializer(
         many=True,
         allow_empty=False,
@@ -1343,6 +1336,10 @@ class CommercialQuotationItemSerializer(serializers.ModelSerializer):
 
 
 class CommercialQuotationSerializer(serializers.ModelSerializer):
+    commercial_line_display = serializers.CharField(
+        source="get_commercial_line_display",
+        read_only=True,
+    )
     status_display = serializers.CharField(
         source="get_status_display",
         read_only=True,
@@ -1374,6 +1371,8 @@ class CommercialQuotationSerializer(serializers.ModelSerializer):
             "commercial_analysis",
             "school_name_snapshot",
             "campaign_name_snapshot",
+            "commercial_line",
+            "commercial_line_display",
             "notes",
             "requires_discount_approval",
             "discount_approval_status",
@@ -1402,6 +1401,10 @@ class CommercialQuotationSerializer(serializers.ModelSerializer):
             "id": obj.source_projection_id,
             "version": obj.source_projection.version,
             "campaign_year": obj.source_projection.campaign_year_snapshot,
+            "commercial_line": obj.source_projection.commercial_line,
+            "commercial_line_display": (
+                obj.source_projection.get_commercial_line_display()
+            ),
         }
 
     def get_commercial_analysis(self, obj):
@@ -1454,6 +1457,8 @@ class CommercialQuotationSerializer(serializers.ModelSerializer):
             ).quantize(Decimal("0.01"))
 
         return {
+            "commercial_line": obj.commercial_line,
+            "commercial_line_display": obj.get_commercial_line_display(),
             "sales_total": sales_total,
             "cost_total": cost_total,
             "commission_total": commission_total,
