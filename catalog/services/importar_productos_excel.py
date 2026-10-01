@@ -91,6 +91,62 @@ def normalizar_columna(valor):
     return limpiar_texto(valor).lower()
 
 
+def inferir_linea_comercial(data):
+    valor_explicito = slugify(
+        limpiar_texto(data.get("linea_comercial"))
+    )
+
+    if valor_explicito in {
+        "texto-escolar",
+        "school-text",
+        "school-textbook",
+    }:
+        return Product.CommercialLine.SCHOOL_TEXT
+
+    if valor_explicito in {
+        "plan-lector",
+        "reading-plan",
+    }:
+        return Product.CommercialLine.READING_PLAN
+
+    señales = " ".join(
+        slugify(limpiar_texto(data.get(campo)))
+        for campo in (
+            "categoria_original",
+            "subcategoria_original",
+            "tipo_producto",
+            "area",
+            "serie",
+            "nombre",
+        )
+        if limpiar_texto(data.get(campo))
+    )
+
+    if any(
+        marcador in señales
+        for marcador in (
+            "plan-lector",
+            "plan-de-lectura",
+            "lectura-plan",
+        )
+    ):
+        return Product.CommercialLine.READING_PLAN
+
+    if any(
+        marcador in señales
+        for marcador in (
+            "texto-escolar",
+            "textos-escolares",
+            "proyecto-evolucion",
+            "pack-proyecto",
+            "pack",
+        )
+    ):
+        return Product.CommercialLine.SCHOOL_TEXT
+
+    return Product.CommercialLine.OTHER
+
+
 def convertir_booleano(valor):
     valor = limpiar_texto(valor).upper()
 
@@ -255,6 +311,9 @@ def leer_datos_excel(ruta_archivo, anio_catalogo=None):
             "area": limpiar_texto(obtener_valor(fila, columnas, "area")),
             "serie": limpiar_texto(obtener_valor(fila, columnas, "serie")),
             "tipo_producto": limpiar_texto(obtener_valor(fila, columnas, "tipo_producto")),
+            "linea_comercial": limpiar_texto(
+                obtener_valor(fila, columnas, "linea_comercial")
+            ),
             "anio_catalogo": obtener_valor(fila, columnas, "anio_catalogo"),
             "precio_costo": obtener_valor(fila, columnas, "precio_costo"),
             "precio_referencial": obtener_valor(fila, columnas, "precio_referencial"),
@@ -409,6 +468,7 @@ def confirmar_importacion_productos(carga_id):
         consult_price = convertir_booleano(data.get("consultar_precio"))
 
         product = buscar_producto_existente(data)
+        commercial_line = inferir_linea_comercial(data)
 
         if product is None:
             product = Product.objects.create(
@@ -421,6 +481,7 @@ def confirmar_importacion_productos(carga_id):
                 grade=grade,
                 area=area,
                 product_type=product_type,
+                commercial_line=commercial_line,
                 description=data.get("descripcion"),
                 is_active=is_active,
             )
@@ -434,6 +495,11 @@ def confirmar_importacion_productos(carga_id):
             product.grade = grade
             product.area = area
             product.product_type = product_type
+            if (
+                commercial_line != Product.CommercialLine.OTHER
+                or product.commercial_line == Product.CommercialLine.OTHER
+            ):
+                product.commercial_line = commercial_line
             product.description = data.get("descripcion")
             product.is_active = is_active
             product.save()
