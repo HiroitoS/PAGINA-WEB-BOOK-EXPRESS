@@ -570,6 +570,7 @@ def create_commercial_quotation_from_projection(
                 "school_discount_percent"
             ],
             parent_price=prepared["parent_price"],
+            commercial_line=prepared["commercial_line"],
             reading_month=prepared["reading_month"],
             commission_mode=prepared["commission_mode"],
             commission_input_amount=prepared[
@@ -824,6 +825,7 @@ def update_commercial_quotation_from_projection(
                 "school_discount_percent"
             ],
             parent_price=prepared["parent_price"],
+            commercial_line=prepared["commercial_line"],
             reading_month=prepared["reading_month"],
             commission_mode=prepared["commission_mode"],
             commission_input_amount=prepared[
@@ -1034,6 +1036,7 @@ def create_commercial_quotation(
                 payload.get("school_commission", "0.00"),
                 field_label="Comisión colegio",
             ),
+            commercial_line=resolve_product_commercial_line(product),
             **_product_snapshot(product),
         )
         item.full_clean()
