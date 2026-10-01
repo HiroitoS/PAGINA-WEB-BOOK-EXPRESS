@@ -17,12 +17,16 @@ def _normalized_text(value):
 
 def resolve_product_commercial_line(product):
     """
-    Resolve the commercial line from catalog metadata.
+    Resolve the commercial line from the explicit catalog classification.
 
-    Positive Plan Lector signals take priority so a literary title is never
-    treated as a school textbook merely because it also has level/grade data.
-    Products that cannot be classified safely remain OTHER.
+    Metadata inference is kept only as a safe fallback for legacy products.
+    Positive Plan Lector signals always take priority.
     """
+    explicit_line = getattr(product, "commercial_line", OTHER)
+
+    if explicit_line in VALID_PROJECTION_LINES:
+        return explicit_line
+
     product_type = getattr(product, "product_type", None)
     area = getattr(product, "area", None)
     series = getattr(product, "series", None)
@@ -55,11 +59,7 @@ def resolve_product_commercial_line(product):
     if any(marker in joined for marker in school_markers):
         return SCHOOL_TEXT
 
-    if (
-        getattr(product, "level_id", None)
-        and getattr(product, "grade_id", None)
-        and getattr(product, "area_id", None)
-    ):
+    if "pack" in _normalized_text(getattr(product, "name", "")):
         return SCHOOL_TEXT
 
     return OTHER
