@@ -13,6 +13,11 @@ from .school import SchoolEducationalService
 
 
 class CommercialProjection(TimeStampedModel):
+    class CommercialLine(models.TextChoices):
+        SCHOOL_TEXT = "school_text", "Texto escolar"
+        READING_PLAN = "reading_plan", "Plan lector"
+        OTHER = "other", "Sin clasificar"
+
     opportunity = models.ForeignKey(
         Opportunity,
         on_delete=models.PROTECT,
@@ -37,6 +42,13 @@ class CommercialProjection(TimeStampedModel):
     )
     campaign_year_snapshot = models.PositiveSmallIntegerField(
         verbose_name="Año de campaña",
+    )
+    commercial_line = models.CharField(
+        max_length=20,
+        choices=CommercialLine.choices,
+        default=CommercialLine.OTHER,
+        db_index=True,
+        verbose_name="Línea comercial",
     )
     notes = models.TextField(
         blank=True,
