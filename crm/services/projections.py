@@ -11,6 +11,12 @@ from crm.models import (
     Opportunity,
 )
 
+from .commercial_lines import (
+    OTHER,
+    VALID_PROJECTION_LINES,
+    resolve_product_commercial_line,
+)
+
 
 class CommercialProjectionError(ValidationError):
     pass
@@ -213,6 +219,7 @@ def create_commercial_projection_revision(
     *,
     opportunity,
     actor,
+    commercial_line,
     grade_lines,
     items,
     notes="",
@@ -231,6 +238,11 @@ def create_commercial_projection_revision(
     if locked_opportunity.is_closed:
         raise CommercialProjectionError(
             "No se puede proyectar una oportunidad cerrada."
+        )
+
+    if commercial_line not in VALID_PROJECTION_LINES:
+        raise CommercialProjectionError(
+            "Selecciona si la proyección es Texto escolar o Plan lector."
         )
 
     if not grade_lines:
@@ -325,6 +337,25 @@ def create_commercial_projection_revision(
                 f"El producto {product.name} está inactivo."
             )
 
+        resolved_line = resolve_product_commercial_line(product)
+
+        if resolved_line == OTHER:
+            raise CommercialProjectionError(
+                (
+                    f"{product.name} no tiene una línea comercial "
+                    "identificable en el catálogo. Revisa su tipo, área "
+                    "o clasificación antes de agregarlo a la proyección."
+                )
+            )
+
+        if resolved_line != commercial_line:
+            raise CommercialProjectionError(
+                (
+                    f"{product.name} no corresponde a la línea comercial "
+                    "seleccionada para esta proyección."
+                )
+            )
+
         if product.level_id and product.level_id != service.level_id:
             raise CommercialProjectionError(
                 (
@@ -410,6 +441,7 @@ def create_commercial_projection_revision(
         school_name_snapshot=locked_opportunity.school.name,
         campaign_name_snapshot=locked_opportunity.campaign.name,
         campaign_year_snapshot=locked_opportunity.campaign.year,
+        commercial_line=commercial_line,
         notes=(notes or "").strip(),
         created_by=actor,
     )
