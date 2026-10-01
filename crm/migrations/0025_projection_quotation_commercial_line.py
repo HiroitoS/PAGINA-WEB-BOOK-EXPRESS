@@ -15,6 +15,10 @@ def _norm(value):
 
 
 def _product_line(product):
+    explicit_line = getattr(product, "commercial_line", OTHER)
+    if explicit_line in {SCHOOL_TEXT, READING_PLAN}:
+        return explicit_line
+
     product_type = getattr(product, "product_type", None)
     area = getattr(product, "area", None)
     series = getattr(product, "series", None)
@@ -90,21 +94,21 @@ def _quotation_line(quotation):
 def _profitability(line, margin_unit):
     if line == SCHOOL_TEXT:
         if margin_unit > Decimal("20.00"):
-            return "green", Decimal("20.00")
+            return "green", Decimal("20.01")
         if margin_unit >= Decimal("15.00"):
-            return "amber", Decimal("20.00")
+            return "amber", Decimal("20.01")
         if margin_unit >= Decimal("0.00"):
-            return "red", Decimal("20.00")
-        return "loss", Decimal("20.00")
+            return "red", Decimal("20.01")
+        return "loss", Decimal("20.01")
 
     if line == READING_PLAN:
         if margin_unit > Decimal("5.00"):
-            return "green", Decimal("5.00")
+            return "green", Decimal("5.01")
         if margin_unit > Decimal("2.00"):
-            return "amber", Decimal("5.00")
+            return "amber", Decimal("5.01")
         if margin_unit >= Decimal("0.00"):
-            return "red", Decimal("5.00")
-        return "loss", Decimal("5.00")
+            return "red", Decimal("5.01")
+        return "loss", Decimal("5.01")
 
     return "unclassified", None
 
@@ -191,6 +195,7 @@ def reverse_backfill(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
+        ("catalog", "0005_product_commercial_line"),
         ("crm", "0024_backfill_quotation_financial_analysis"),
     ]
 
