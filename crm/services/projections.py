@@ -13,6 +13,7 @@ from crm.models import (
 
 from .commercial_lines import (
     OTHER,
+    SCHOOL_TEXT,
     VALID_PROJECTION_LINES,
     resolve_product_commercial_line,
 )
@@ -219,7 +220,7 @@ def create_commercial_projection_revision(
     *,
     opportunity,
     actor,
-    commercial_line,
+    commercial_line=SCHOOL_TEXT,
     grade_lines,
     items,
     notes="",
