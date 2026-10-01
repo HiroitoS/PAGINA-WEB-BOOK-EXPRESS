@@ -174,7 +174,7 @@ def backfill_commercial_lines(apps, schema_editor):
 
     for quotation in CommercialQuotation.objects.select_related(
         "source_projection"
-    ).prefetch_related("items").iterator():
+    ).prefetch_related("items").iterator(chunk_size=200):
         CommercialQuotation.objects.filter(pk=quotation.pk).update(
             commercial_line=_quotation_line(quotation),
         )
