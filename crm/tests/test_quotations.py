@@ -122,6 +122,7 @@ class CRMQuotationFromProjectionTests(TestCase):
             grade=self.grade,
             area=self.area,
             product_type=self.school_text_type,
+            commercial_line=Product.CommercialLine.SCHOOL_TEXT,
             is_active=True,
         )
         ProductPrice.objects.create(
@@ -470,7 +471,14 @@ class CRMQuotationFromProjectionTests(TestCase):
             is_active=True,
         )
         self.product.product_type = plan_lector_type
-        self.product.save(update_fields=["product_type", "updated_at"])
+        self.product.commercial_line = Product.CommercialLine.READING_PLAN
+        self.product.save(
+            update_fields=[
+                "product_type",
+                "commercial_line",
+                "updated_at",
+            ]
+        )
 
         ProductPrice.objects.filter(product=self.product).update(
             cost_price=Decimal("74.00")
