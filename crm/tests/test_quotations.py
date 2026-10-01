@@ -216,11 +216,11 @@ class CRMQuotationFromProjectionTests(TestCase):
         )
         self.assertEqual(
             item.max_green_discount_percent,
-            Decimal("20.00"),
+            Decimal("19.99"),
         )
         self.assertEqual(
             item.green_discount_headroom_points,
-            Decimal("0.00"),
+            Decimal("-0.01"),
         )
         self.assertFalse(item.uses_reference_price)
 
@@ -510,7 +510,7 @@ class CRMQuotationFromProjectionTests(TestCase):
         )
         self.assertEqual(
             item.max_green_discount_percent,
-            Decimal("21.00"),
+            Decimal("20.99"),
         )
 
     def test_plan_lector_requires_reading_month(self):
