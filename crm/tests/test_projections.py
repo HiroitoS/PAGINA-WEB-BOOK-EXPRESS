@@ -168,6 +168,7 @@ class CRMCommercialProjectionTests(TestCase):
             level=self.level,
             grade=self.grade,
             area=self.area,
+            commercial_line=Product.CommercialLine.SCHOOL_TEXT,
             is_active=True,
         )
         ProductPrice.objects.create(
@@ -472,6 +473,40 @@ class CRMCommercialProjectionTests(TestCase):
             {self.provider.id, second_provider.id},
         )
 
+    def test_projection_rejects_product_from_other_commercial_line(self):
+        plan_product = Product.objects.create(
+            provider=self.provider,
+            name="Obra plan lector incompatible",
+            level=self.level,
+            grade=self.grade,
+            area=self.area,
+            commercial_line=Product.CommercialLine.READING_PLAN,
+            is_active=True,
+        )
+        ProductPrice.objects.create(
+            product=plan_product,
+            year=2027,
+            campaign="Campaña escolar",
+            price=Decimal("35.00"),
+            cost_price=Decimal("20.00"),
+            is_active=True,
+        )
+
+        with self.assertRaisesMessage(
+            CommercialProjectionError,
+            "no corresponde a la línea comercial",
+        ):
+            self._create_projection(
+                commercial_line="school_text",
+                items=[
+                    {
+                        "service": self.service,
+                        "grade": self.grade,
+                        "product": plan_product,
+                    }
+                ],
+            )
+
     def test_projection_products_api_filters_by_commercial_line(self):
         plan_area = Area.objects.create(
             name="Plan lector",
@@ -483,6 +518,7 @@ class CRMCommercialProjectionTests(TestCase):
             level=self.level,
             grade=self.grade,
             area=plan_area,
+            commercial_line=Product.CommercialLine.READING_PLAN,
             is_active=True,
         )
         ProductPrice.objects.create(
