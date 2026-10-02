@@ -735,3 +735,41 @@ class CRMQuotationFromProjectionTests(TestCase):
                 ],
             )
 
+    def test_supervisor_can_override_supplier_cost_in_draft(self):
+        quotation = create_commercial_quotation_from_projection(
+            opportunity=self.opportunity,
+            actor=self.admin,
+            item_adjustments=[
+                {
+                    "projection_item": self.projection_item,
+                    "supplier_cost": Decimal("70.00"),
+                }
+            ],
+        )
+
+        item = quotation.items.get()
+
+        self.assertEqual(item.supplier_cost, Decimal("70.00"))
+        self.assertEqual(item.school_price, Decimal("80.00"))
+        self.assertEqual(item.commercial_margin_unit, Decimal("10.00"))
+        self.assertEqual(
+            item.profitability_band,
+            item.ProfitabilityBand.RED,
+        )
+
+    def test_advisor_cannot_override_supplier_cost(self):
+        with self.assertRaisesMessage(
+            CommercialQuotationError,
+            "Solo supervisión comercial",
+        ):
+            create_commercial_quotation_from_projection(
+                opportunity=self.opportunity,
+                actor=self.advisor,
+                item_adjustments=[
+                    {
+                        "projection_item": self.projection_item,
+                        "supplier_cost": Decimal("70.00"),
+                    }
+                ],
+            )
+
