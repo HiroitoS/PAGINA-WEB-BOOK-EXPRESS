@@ -1816,22 +1816,18 @@ class CommercialQuotationFromProjectionSerializer(serializers.Serializer):
         choices=CommercialQuotation.SaleMode.choices,
         required=False,
         allow_blank=True,
-        default="",
     )
     service_date = serializers.DateField(
         required=False,
         allow_null=True,
-        default=None,
     )
     fair_start_time = serializers.TimeField(
         required=False,
         allow_null=True,
-        default=None,
     )
     fair_end_time = serializers.TimeField(
         required=False,
         allow_null=True,
-        default=None,
     )
     notes = serializers.CharField(
         required=False,
