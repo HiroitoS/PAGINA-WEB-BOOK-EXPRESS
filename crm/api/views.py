@@ -2140,17 +2140,26 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                     "items",
                     [],
                 ),
-                sale_mode=serializer.validated_data.get("sale_mode", ""),
+                sale_mode=serializer.validated_data.get(
+                    "sale_mode",
+                    quotation.sale_mode,
+                ),
                 service_date=serializer.validated_data.get(
-                    "service_date"
+                    "service_date",
+                    quotation.service_date,
                 ),
                 fair_start_time=serializer.validated_data.get(
-                    "fair_start_time"
+                    "fair_start_time",
+                    quotation.fair_start_time,
                 ),
                 fair_end_time=serializer.validated_data.get(
-                    "fair_end_time"
+                    "fair_end_time",
+                    quotation.fair_end_time,
                 ),
-                notes=serializer.validated_data.get("notes", ""),
+                notes=serializer.validated_data.get(
+                    "notes",
+                    quotation.notes,
+                ),
             )
         except CommercialQuotationError as exc:
             _raise_service_validation_error(exc)
