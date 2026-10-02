@@ -1352,6 +1352,9 @@ class CommercialQuotationItemSerializer(serializers.ModelSerializer):
         )
 
     def get_margin_before_commission_unit(self, obj):
+        if obj.supplier_discount_percent is None:
+            return None
+
         return (obj.school_price - obj.supplier_cost).quantize(
             Decimal("0.01")
         )
@@ -1360,6 +1363,9 @@ class CommercialQuotationItemSerializer(serializers.ModelSerializer):
         return green_margin_threshold(obj.commercial_line)
 
     def get_green_margin_surplus_unit(self, obj):
+        if obj.supplier_discount_percent is None:
+            return None
+
         threshold = green_margin_threshold(obj.commercial_line)
 
         if threshold is None:
@@ -1399,6 +1405,25 @@ class CommercialQuotationItemSerializer(serializers.ModelSerializer):
         data = super().to_representation(instance)
 
         if _request_can_view_quotation_financials(self):
+            if instance.supplier_discount_percent is None:
+                for field_name in (
+                    "supplier_cost",
+                    "margin_before_commission_unit",
+                    "commercial_margin_unit",
+                    "commercial_margin_total",
+                    "commercial_margin_percent",
+                    "green_margin_surplus_unit",
+                    "green_margin_surplus_total",
+                    "additional_discount_available_points",
+                    "discount_recovery_required_points",
+                    "max_green_discount_percent",
+                    "green_discount_headroom_points",
+                ):
+                    data[field_name] = None
+
+                data["profitability_band"] = "unclassified"
+                data["profitability_band_display"] = "Sin clasificar"
+
             return data
 
         for field_name in (
@@ -1515,6 +1540,7 @@ class CommercialQuotationSerializer(serializers.ModelSerializer):
         commission_total = Decimal("0.00")
         margin_total = Decimal("0.00")
         green_margin_surplus_total = Decimal("0.00")
+        pending_supplier_conditions = 0
         band_counts = {
             "green": 0,
             "amber": 0,
@@ -1527,12 +1553,18 @@ class CommercialQuotationSerializer(serializers.ModelSerializer):
         for item in obj.items.all():
             quantity = Decimal(item.quantity)
             item_sales = item.school_price * quantity
-            item_cost = item.supplier_cost * quantity
             item_commission = item.school_commission * quantity
 
             sales_total += item_sales
-            cost_total += item_cost
             commission_total += item_commission
+
+            if item.supplier_discount_percent is None:
+                pending_supplier_conditions += 1
+                band_counts["unclassified"] += 1
+                continue
+
+            item_cost = item.supplier_cost * quantity
+            cost_total += item_cost
             margin_total += item.commercial_margin_total
 
             threshold = green_margin_threshold(item.commercial_line)
@@ -1557,8 +1589,15 @@ class CommercialQuotationSerializer(serializers.ModelSerializer):
                 + item.commercial_margin_total
             )
 
-        margin_percent = Decimal("0.00")
-        if sales_total > Decimal("0.00"):
+        has_pending_supplier_conditions = (
+            pending_supplier_conditions > 0
+        )
+
+        margin_percent = None
+        if (
+            not has_pending_supplier_conditions
+            and sales_total > Decimal("0.00")
+        ):
             margin_percent = (
                 margin_total / sales_total * Decimal("100.00")
             ).quantize(Decimal("0.01"))
@@ -1567,27 +1606,45 @@ class CommercialQuotationSerializer(serializers.ModelSerializer):
             "commercial_line": obj.commercial_line,
             "commercial_line_display": obj.get_commercial_line_display(),
             "sales_total": sales_total,
-            "cost_total": cost_total,
+            "cost_total": (
+                None if has_pending_supplier_conditions else cost_total
+            ),
             "commission_total": commission_total,
-            "margin_total": margin_total,
+            "margin_total": (
+                None if has_pending_supplier_conditions else margin_total
+            ),
             "margin_percent": margin_percent,
+            "has_pending_supplier_conditions": (
+                has_pending_supplier_conditions
+            ),
+            "pending_supplier_conditions": (
+                pending_supplier_conditions
+            ),
             "green_margin_threshold_unit": green_margin_threshold(
                 obj.commercial_line
             ),
             "green_margin_surplus_total": (
-                green_margin_surplus_total.quantize(Decimal("0.01"))
+                None
+                if has_pending_supplier_conditions
+                else green_margin_surplus_total.quantize(
+                    Decimal("0.01")
+                )
             ),
 
             "products_by_band": band_counts,
-            "margin_by_editorial": [
+            "margin_by_editorial": (
+                []
+                if has_pending_supplier_conditions
+                else [
                 {
                     "editorial": editorial,
                     "margin_total": margin,
                 }
-                for editorial, margin in sorted(
-                    margin_by_editorial.items()
-                )
-            ],
+                    for editorial, margin in sorted(
+                        margin_by_editorial.items()
+                    )
+                ]
+            ),
         }
 
     def to_representation(self, instance):
