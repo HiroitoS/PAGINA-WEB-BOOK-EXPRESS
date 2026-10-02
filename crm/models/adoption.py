@@ -184,6 +184,17 @@ class AdoptionItem(TimeStampedModel):
         validators=[MinValueValidator(Decimal("0.00"))],
         verbose_name="Costo editorial confirmado",
     )
+    supplier_discount_percent = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[
+            MinValueValidator(Decimal("0.00")),
+            MaxValueValidator(Decimal("100.00")),
+        ],
+        verbose_name="Descuento editorial confirmado (%)",
+    )
     school_price = models.DecimalField(
         max_digits=12,
         decimal_places=2,
