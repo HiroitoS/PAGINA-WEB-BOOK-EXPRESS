@@ -2010,10 +2010,7 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                     "accepted_by",
                     "discount_approved_by",
                 )
-                .prefetch_related(
-                    "items__product",
-                    "items__quotation_item",
-                )
+                .prefetch_related("items__product")
                 .order_by("-version")
             )
             return Response(
@@ -2413,7 +2410,10 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                     "confirmed_by",
                     "authorized_contact",
                 )
-                .prefetch_related("items__product")
+                .prefetch_related(
+                    "items__product",
+                    "items__quotation_item",
+                )
                 .order_by("-version")
             )
             return Response(
