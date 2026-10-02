@@ -45,6 +45,14 @@ class CommercialQuotation(TimeStampedModel):
     version = models.PositiveSmallIntegerField(
         verbose_name="Versión",
     )
+    internal_code = models.CharField(
+        max_length=40,
+        unique=True,
+        null=True,
+        blank=True,
+        editable=False,
+        verbose_name="Código interno",
+    )
     status = models.CharField(
         max_length=20,
         choices=Status.choices,
@@ -208,6 +216,27 @@ class CommercialQuotation(TimeStampedModel):
                 name="crm_quote_opp_status_idx",
             ),
         ]
+
+    def _build_internal_code(self):
+        if self.pk is None:
+            return None
+
+        year = self.opportunity.campaign.year
+        return (
+            f"BE-COT-{year}-"
+            f"{self.pk:06d}-V{self.version:02d}"
+        )
+
+    def save(self, *args, **kwargs):
+        needs_internal_code = not self.internal_code
+        super().save(*args, **kwargs)
+
+        if needs_internal_code:
+            internal_code = self._build_internal_code()
+            type(self).objects.filter(pk=self.pk).update(
+                internal_code=internal_code
+            )
+            self.internal_code = internal_code
 
     def __str__(self):
         return (
