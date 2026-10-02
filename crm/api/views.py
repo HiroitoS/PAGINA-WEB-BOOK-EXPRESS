@@ -1704,8 +1704,15 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                     product=product,
                     campaign=opportunity.campaign,
                 )
+                price_available = True
+                price_message = ""
             except CommercialProjectionError:
-                continue
+                price = None
+                price_available = False
+                price_message = (
+                    "Falta un precio numérico activo para esta campaña "
+                    "o un año anterior."
+                )
 
             choices.append(
                 {
@@ -1748,12 +1755,27 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                         if product.series_id
                         else None
                     ),
-                    "unit_price": str(price.price),
-                    "price_year": price.year,
-                    "price_campaign": price.campaign,
-                    "price_is_reference": (
-                        price.year != opportunity.campaign.year
+                    "unit_price": (
+                        str(price.price)
+                        if price is not None
+                        else None
                     ),
+                    "price_year": (
+                        price.year
+                        if price is not None
+                        else None
+                    ),
+                    "price_campaign": (
+                        price.campaign
+                        if price is not None
+                        else ""
+                    ),
+                    "price_is_reference": (
+                        price is not None
+                        and price.year != opportunity.campaign.year
+                    ),
+                    "price_available": price_available,
+                    "price_message": price_message,
                 }
             )
 
