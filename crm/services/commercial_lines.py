@@ -1,4 +1,4 @@
-from django.utils.text import slugify
+from decimal import Decimal
 
 
 SCHOOL_TEXT = "school_text"
@@ -11,58 +11,36 @@ VALID_PROJECTION_LINES = {
 }
 
 
-def _normalized_text(value):
-    return slugify(str(value or "")).lower()
-
-
 def resolve_product_commercial_line(product):
     """
-    Resolve the commercial line from the explicit catalog classification.
+    Return the explicit commercial line stored in the catalog.
 
-    Metadata inference is kept only as a safe fallback for legacy products.
-    Positive Plan Lector signals always take priority.
+    Runtime CRM flows do not infer the line from names, areas or product
+    types. Legacy products must be classified in the catalog before they can
+    enter a new projection.
     """
     explicit_line = getattr(product, "commercial_line", OTHER)
 
     if explicit_line in VALID_PROJECTION_LINES:
         return explicit_line
 
-    product_type = getattr(product, "product_type", None)
-    area = getattr(product, "area", None)
-    series = getattr(product, "series", None)
-
-    signals = [
-        _normalized_text(getattr(product_type, "name", "")),
-        _normalized_text(getattr(product_type, "slug", "")),
-        _normalized_text(getattr(area, "name", "")),
-        _normalized_text(getattr(area, "slug", "")),
-        _normalized_text(getattr(series, "name", "")),
-        _normalized_text(getattr(series, "slug", "")),
-        _normalized_text(getattr(product, "name", "")),
-    ]
-    joined = " ".join(filter(None, signals))
-
-    reading_markers = (
-        "plan-lector",
-        "plan-de-lectura",
-        "lectura-plan",
-    )
-    if any(marker in joined for marker in reading_markers):
-        return READING_PLAN
-
-    school_markers = (
-        "texto-escolar",
-        "textos-escolares",
-        "proyecto-evolucion",
-        "pack-proyecto",
-    )
-    if any(marker in joined for marker in school_markers):
-        return SCHOOL_TEXT
-
-    if "pack" in _normalized_text(getattr(product, "name", "")):
-        return SCHOOL_TEXT
-
     return OTHER
+
+
+def green_margin_threshold(commercial_line):
+    """
+    Smallest unit margin that satisfies the approved strict green rule.
+
+    Texto escolar: green when margin > S/ 20.00.
+    Plan lector: green when margin > S/ 5.00.
+    """
+    if commercial_line == SCHOOL_TEXT:
+        return Decimal("20.01")
+
+    if commercial_line == READING_PLAN:
+        return Decimal("5.01")
+
+    return None
 
 
 def commercial_line_display(value):
