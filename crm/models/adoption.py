@@ -139,6 +139,11 @@ class Adoption(TimeStampedModel):
         blank=True,
         verbose_name="Fecha de atención",
     )
+    service_end_date = models.DateField(
+        null=True,
+        blank=True,
+        verbose_name="Fecha de fin de feria",
+    )
     fair_start_time = models.TimeField(
         null=True,
         blank=True,
