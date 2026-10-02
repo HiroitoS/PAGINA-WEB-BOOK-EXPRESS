@@ -1117,6 +1117,11 @@ class CommercialProjectionSerializer(serializers.ModelSerializer):
             "campaign_year_snapshot",
             "commercial_line",
             "commercial_line_display",
+            "sale_mode",
+            "sale_mode_display",
+            "service_date",
+            "fair_start_time",
+            "fair_end_time",
             "notes",
             "total_students",
             "total_amount",
@@ -1465,6 +1470,10 @@ class CommercialQuotationSerializer(serializers.ModelSerializer):
         source="get_discount_approval_status_display",
         read_only=True,
     )
+    sale_mode_display = serializers.CharField(
+        source="get_sale_mode_display",
+        read_only=True,
+    )
     source_projection = serializers.SerializerMethodField()
     commercial_analysis = serializers.SerializerMethodField()
     items = CommercialQuotationItemSerializer(
@@ -1696,6 +1705,27 @@ class CommercialQuotationCreateSerializer(serializers.Serializer):
         many=True,
         allow_empty=False,
     )
+    sale_mode = serializers.ChoiceField(
+        choices=CommercialQuotation.SaleMode.choices,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+    service_date = serializers.DateField(
+        required=False,
+        allow_null=True,
+        default=None,
+    )
+    fair_start_time = serializers.TimeField(
+        required=False,
+        allow_null=True,
+        default=None,
+    )
+    fair_end_time = serializers.TimeField(
+        required=False,
+        allow_null=True,
+        default=None,
+    )
     notes = serializers.CharField(
         required=False,
         allow_blank=True,
@@ -1782,6 +1812,27 @@ class CommercialQuotationFromProjectionSerializer(serializers.Serializer):
         allow_empty=True,
         default=list,
     )
+    sale_mode = serializers.ChoiceField(
+        choices=CommercialQuotation.SaleMode.choices,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+    service_date = serializers.DateField(
+        required=False,
+        allow_null=True,
+        default=None,
+    )
+    fair_start_time = serializers.TimeField(
+        required=False,
+        allow_null=True,
+        default=None,
+    )
+    fair_end_time = serializers.TimeField(
+        required=False,
+        allow_null=True,
+        default=None,
+    )
     notes = serializers.CharField(
         required=False,
         allow_blank=True,
@@ -1845,6 +1896,10 @@ class AdoptionSerializer(serializers.ModelSerializer):
     advisor = UserSummarySerializer(read_only=True)
     confirmed_by = UserSummarySerializer(read_only=True)
     authorized_contact = SchoolContactSerializer(read_only=True)
+    sale_mode_display = serializers.CharField(
+        source="get_sale_mode_display",
+        read_only=True,
+    )
     items = AdoptionItemSerializer(many=True, read_only=True)
 
     class Meta:
@@ -1857,8 +1912,18 @@ class AdoptionSerializer(serializers.ModelSerializer):
             "campaign_name_snapshot",
             "advisor",
             "advisor_name_snapshot",
+            "advisor_phone_snapshot",
+            "advisor_whatsapp_snapshot",
             "authorized_contact",
             "authorized_contact_name_snapshot",
+            "authorized_contact_position_snapshot",
+            "authorized_contact_phone_snapshot",
+            "authorized_contact_email_snapshot",
+            "sale_mode",
+            "sale_mode_display",
+            "service_date",
+            "fair_start_time",
+            "fair_end_time",
             "signed_at",
             "confirmed_at",
             "confirmed_by",
