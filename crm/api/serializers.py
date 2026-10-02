@@ -35,10 +35,7 @@ from crm.models import (
     MarketEditorial,
 )
 from crm.permissions import usuario_puede_supervisar_crm
-from crm.services.commercial_lines import (
-    green_margin_threshold,
-    resolve_product_commercial_line,
-)
+from crm.services.commercial_lines import green_margin_threshold
 from workspaces.models import CalendarEvent, Task, WorkspaceGroup
 
 
