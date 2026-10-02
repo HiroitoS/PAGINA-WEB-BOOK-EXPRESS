@@ -28,6 +28,11 @@ class CommercialQuotation(TimeStampedModel):
         PENDING = "pending", "Pendiente"
         APPROVED = "approved", "Aprobada"
 
+    class SaleMode(models.TextChoices):
+        POINT_OF_SALE = "point_of_sale", "Punto de venta / librería"
+        FAIR = "fair", "Feria"
+        CONSIGNMENT = "consignment", "Consignación"
+
     opportunity = models.ForeignKey(
         Opportunity,
         on_delete=models.PROTECT,
@@ -115,6 +120,29 @@ class CommercialQuotation(TimeStampedModel):
         default=CommercialLine.OTHER,
         db_index=True,
         verbose_name="Línea comercial",
+    )
+    sale_mode = models.CharField(
+        max_length=20,
+        choices=SaleMode.choices,
+        blank=True,
+        default="",
+        db_index=True,
+        verbose_name="Modalidad de venta",
+    )
+    service_date = models.DateField(
+        null=True,
+        blank=True,
+        verbose_name="Fecha de atención",
+    )
+    fair_start_time = models.TimeField(
+        null=True,
+        blank=True,
+        verbose_name="Hora de inicio de feria",
+    )
+    fair_end_time = models.TimeField(
+        null=True,
+        blank=True,
+        verbose_name="Hora de fin de feria",
     )
     notes = models.TextField(
         blank=True,
