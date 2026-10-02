@@ -1974,6 +1974,16 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                     "items",
                     [],
                 ),
+                sale_mode=serializer.validated_data.get("sale_mode", ""),
+                service_date=serializer.validated_data.get(
+                    "service_date"
+                ),
+                fair_start_time=serializer.validated_data.get(
+                    "fair_start_time"
+                ),
+                fair_end_time=serializer.validated_data.get(
+                    "fair_end_time"
+                ),
                 notes=serializer.validated_data.get("notes", ""),
             )
         except CommercialQuotationError as exc:
@@ -2045,6 +2055,16 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                 opportunity=opportunity,
                 actor=request.user,
                 items=serializer.validated_data["items"],
+                sale_mode=serializer.validated_data.get("sale_mode", ""),
+                service_date=serializer.validated_data.get(
+                    "service_date"
+                ),
+                fair_start_time=serializer.validated_data.get(
+                    "fair_start_time"
+                ),
+                fair_end_time=serializer.validated_data.get(
+                    "fair_end_time"
+                ),
                 notes=serializer.validated_data.get("notes", ""),
             )
         except CommercialQuotationError as exc:
@@ -2119,6 +2139,16 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                 item_adjustments=serializer.validated_data.get(
                     "items",
                     [],
+                ),
+                sale_mode=serializer.validated_data.get("sale_mode", ""),
+                service_date=serializer.validated_data.get(
+                    "service_date"
+                ),
+                fair_start_time=serializer.validated_data.get(
+                    "fair_start_time"
+                ),
+                fair_end_time=serializer.validated_data.get(
+                    "fair_end_time"
                 ),
                 notes=serializer.validated_data.get("notes", ""),
             )
