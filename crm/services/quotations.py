@@ -657,9 +657,6 @@ def create_commercial_quotation_from_projection(
             "school",
             "campaign",
             "stage",
-            "primary_contact",
-            "owner",
-            "owner__book_express_profile",
         )
         .get(pk=opportunity.pk)
     )
@@ -1272,9 +1269,6 @@ def create_commercial_quotation(
             "school",
             "campaign",
             "stage",
-            "primary_contact",
-            "owner",
-            "owner__book_express_profile",
         )
         .get(pk=opportunity.pk)
     )
@@ -1390,9 +1384,6 @@ def send_commercial_quotation(*, quotation, actor):
         .select_related(
             "opportunity__pipeline",
             "opportunity__stage",
-            "opportunity__primary_contact",
-            "opportunity__owner",
-            "opportunity__owner__book_express_profile",
         )
         .get(pk=quotation.pk)
     )
