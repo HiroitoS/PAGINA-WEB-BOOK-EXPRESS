@@ -138,6 +138,38 @@ def confirm_adoption(
 
     confirmed_at = timezone.now()
 
+    advisor = opportunity.owner
+    advisor_profile = (
+        getattr(advisor, "book_express_profile", None)
+        if advisor is not None
+        else None
+    )
+    advisor_name = (
+        locked_quotation.advisor_name_snapshot
+        or _user_display_name(advisor)
+    )
+    advisor_phone = (
+        locked_quotation.advisor_phone_snapshot
+        or (
+            getattr(advisor_profile, "phone", "")
+            if advisor_profile is not None
+            else ""
+        )
+    )
+    advisor_whatsapp = (
+        locked_quotation.advisor_whatsapp_snapshot
+        or (
+            getattr(advisor_profile, "whatsapp", "")
+            if advisor_profile is not None
+            else ""
+        )
+    )
+    authorized_phone = (
+        authorized_contact.whatsapp
+        or authorized_contact.phone
+        or ""
+    )
+
     adoption = Adoption(
         opportunity=opportunity,
         quotation=locked_quotation,
@@ -147,10 +179,21 @@ def confirm_adoption(
         is_current=True,
         school_name_snapshot=opportunity.school.name,
         campaign_name_snapshot=opportunity.campaign.name,
-        advisor=opportunity.owner,
-        advisor_name_snapshot=_user_display_name(opportunity.owner),
+        advisor=advisor,
+        advisor_name_snapshot=advisor_name,
+        advisor_phone_snapshot=advisor_phone,
+        advisor_whatsapp_snapshot=advisor_whatsapp,
         authorized_contact=authorized_contact,
         authorized_contact_name_snapshot=authorized_contact.full_name,
+        authorized_contact_position_snapshot=(
+            authorized_contact.position or ""
+        ),
+        authorized_contact_phone_snapshot=authorized_phone,
+        authorized_contact_email_snapshot=authorized_contact.email or "",
+        sale_mode=locked_quotation.sale_mode,
+        service_date=locked_quotation.service_date,
+        fair_start_time=locked_quotation.fair_start_time,
+        fair_end_time=locked_quotation.fair_end_time,
         signed_at=signed_at,
         confirmed_at=confirmed_at,
         confirmed_by=actor,
