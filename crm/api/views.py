@@ -2451,6 +2451,7 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                 opportunity.adoptions
                 .select_related(
                     "advisor",
+                    "advisor__book_express_profile",
                     "confirmed_by",
                     "authorized_contact",
                 )
@@ -2519,6 +2520,7 @@ class OpportunityViewSet(viewsets.ModelViewSet):
             Adoption.objects
             .select_related(
                 "advisor",
+                "advisor__book_express_profile",
                 "confirmed_by",
                 "authorized_contact",
             )
