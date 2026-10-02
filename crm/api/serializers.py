@@ -1482,6 +1482,7 @@ class CommercialQuotationSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "version",
+            "internal_code",
             "status",
             "status_display",
             "source_projection",
