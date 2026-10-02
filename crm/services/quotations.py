@@ -349,6 +349,46 @@ def _cost_price_for_projection_item(*, projection_item):
     return price.cost_price
 
 
+def _supplier_cost_value(
+    *,
+    payload,
+    actor,
+    projection_item,
+    existing_item=None,
+):
+    provided_cost = payload.get("supplier_cost")
+
+    if provided_cost not in (None, ""):
+        if not _actor_can_manage_financials(actor):
+            raise CommercialQuotationError(
+                (
+                    "Solo supervisión comercial puede modificar "
+                    "el costo editorial."
+                )
+            )
+
+        supplier_cost = _money(
+            _decimal_value(
+                provided_cost,
+                field_label="Costo editorial",
+            )
+        )
+        if supplier_cost < Decimal("0.00"):
+            raise CommercialQuotationError(
+                "El costo editorial no puede ser negativo."
+            )
+        return supplier_cost
+
+    if existing_item is not None:
+        return _money(existing_item.supplier_cost)
+
+    return _money(
+        _cost_price_for_projection_item(
+            projection_item=projection_item,
+        )
+    )
+
+
 @transaction.atomic
 def create_commercial_quotation_from_projection(
     *,
@@ -452,10 +492,10 @@ def create_commercial_quotation_from_projection(
             )
         )
         pvp = _money(projection_item.unit_price)
-        supplier_cost = _money(
-            _cost_price_for_projection_item(
-                projection_item=projection_item,
-            )
+        supplier_cost = _supplier_cost_value(
+            payload=payload,
+            actor=actor,
+            projection_item=projection_item,
         )
         school_price = _money(
             pvp * (Decimal("100.00") - discount) / Decimal("100.00")
@@ -713,18 +753,19 @@ def update_commercial_quotation_from_projection(
             )
         )
         pvp = _money(projection_item.unit_price)
-        supplier_cost = _money(
-            _cost_price_for_projection_item(
-                projection_item=projection_item,
-            )
+        existing_item = existing_items_by_product.get(
+            projection_item.product_id
+        )
+        supplier_cost = _supplier_cost_value(
+            payload=payload,
+            actor=actor,
+            projection_item=projection_item,
+            existing_item=existing_item,
         )
         school_price = _money(
             pvp
             * (Decimal("100.00") - discount)
             / Decimal("100.00")
-        )
-        existing_item = existing_items_by_product.get(
-            projection_item.product_id
         )
         parent_price = _money(
             _decimal_value(
