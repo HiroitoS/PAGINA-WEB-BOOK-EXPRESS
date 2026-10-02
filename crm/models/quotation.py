@@ -60,6 +60,47 @@ class CommercialQuotation(TimeStampedModel):
         max_length=150,
         verbose_name="Campaña al cotizar",
     )
+    primary_contact_name_snapshot = models.CharField(
+        max_length=180,
+        blank=True,
+        default="",
+        verbose_name="Contacto al cotizar",
+    )
+    primary_contact_position_snapshot = models.CharField(
+        max_length=120,
+        blank=True,
+        default="",
+        verbose_name="Cargo del contacto al cotizar",
+    )
+    primary_contact_phone_snapshot = models.CharField(
+        max_length=30,
+        blank=True,
+        default="",
+        verbose_name="Teléfono del contacto al cotizar",
+    )
+    primary_contact_email_snapshot = models.EmailField(
+        blank=True,
+        default="",
+        verbose_name="Correo del contacto al cotizar",
+    )
+    advisor_name_snapshot = models.CharField(
+        max_length=180,
+        blank=True,
+        default="",
+        verbose_name="Asesor al cotizar",
+    )
+    advisor_phone_snapshot = models.CharField(
+        max_length=30,
+        blank=True,
+        default="",
+        verbose_name="Celular del asesor al cotizar",
+    )
+    advisor_whatsapp_snapshot = models.CharField(
+        max_length=30,
+        blank=True,
+        default="",
+        verbose_name="WhatsApp del asesor al cotizar",
+    )
     commercial_line = models.CharField(
         max_length=20,
         choices=CommercialLine.choices,
