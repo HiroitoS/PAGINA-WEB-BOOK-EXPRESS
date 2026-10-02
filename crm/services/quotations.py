@@ -205,7 +205,20 @@ def _profitability_snapshot(
     school_commission,
     quantity,
     discount,
+    supplier_condition_defined=True,
 ):
+    if not supplier_condition_defined:
+        return {
+            "commercial_margin_unit": Decimal("0.00"),
+            "commercial_margin_total": Decimal("0.00"),
+            "commercial_margin_percent": Decimal("0.00"),
+            "profitability_band": (
+                CommercialQuotationItem.ProfitabilityBand.UNCLASSIFIED
+            ),
+            "max_green_discount_percent": None,
+            "green_discount_headroom_points": None,
+        }
+
     margin_unit = _money(
         school_price - supplier_cost - school_commission
     )
@@ -349,44 +362,247 @@ def _cost_price_for_projection_item(*, projection_item):
     return price.cost_price
 
 
-def _supplier_cost_value(
+def _supplier_discount_value(value):
+    discount = _decimal_value(
+        value,
+        field_label="Descuento editorial",
+    )
+    if discount < Decimal("0.00") or discount > Decimal("100.00"):
+        raise CommercialQuotationError(
+            "El descuento editorial debe estar entre 0% y 100%."
+        )
+    return discount
+
+
+def _supplier_condition_values(
     *,
     payload,
     actor,
     projection_item,
+    pvp,
     existing_item=None,
 ):
-    provided_cost = payload.get("supplier_cost")
+    provided_discount = payload.get("supplier_discount_percent")
 
-    if provided_cost not in (None, ""):
+    if provided_discount not in (None, ""):
         if not _actor_can_manage_financials(actor):
             raise CommercialQuotationError(
                 (
-                    "Solo supervisión comercial puede modificar "
-                    "el costo editorial."
+                    "Solo supervisión comercial puede registrar "
+                    "el descuento editorial."
                 )
             )
 
-        supplier_cost = _money(
-            _decimal_value(
-                provided_cost,
-                field_label="Costo editorial",
-            )
+        supplier_discount = _supplier_discount_value(
+            provided_discount
         )
-        if supplier_cost < Decimal("0.00"):
-            raise CommercialQuotationError(
-                "El costo editorial no puede ser negativo."
-            )
-        return supplier_cost
+        supplier_cost = _money(
+            pvp
+            * (Decimal("100.00") - supplier_discount)
+            / Decimal("100.00")
+        )
+        return supplier_discount, supplier_cost
 
     if existing_item is not None:
-        return _money(existing_item.supplier_cost)
-
-    return _money(
-        _cost_price_for_projection_item(
-            projection_item=projection_item,
+        return (
+            existing_item.supplier_discount_percent,
+            _money(existing_item.supplier_cost),
         )
+
+    # Compatibilidad temporal con cotizaciones antiguas: el costo histórico
+    # del catálogo puede conservarse como referencia, pero NO define una
+    # condición editorial nueva. Una cotización no puede enviarse hasta que
+    # supervisión registre explícitamente el descuento editorial.
+    try:
+        legacy_cost = _money(
+            _cost_price_for_projection_item(
+                projection_item=projection_item,
+            )
+        )
+    except CommercialQuotationError:
+        legacy_cost = Decimal("0.00")
+
+    return None, legacy_cost
+
+
+def preview_commercial_quotation_financials(
+    *,
+    opportunity,
+    actor,
+    item_adjustments,
+):
+    if not _actor_can_manage_financials(actor):
+        raise CommercialQuotationError(
+            "Solo supervisión comercial puede consultar este análisis."
+        )
+
+    projection = (
+        CommercialProjection.objects
+        .filter(
+            opportunity=opportunity,
+            is_current=True,
+        )
+        .first()
     )
+
+    if projection is None:
+        raise CommercialQuotationError(
+            "Primero registra una proyección comercial vigente."
+        )
+
+    if projection.commercial_line == OTHER:
+        raise CommercialQuotationError(
+            "La proyección debe ser Texto escolar o Plan lector."
+        )
+
+    adjustments = {}
+    for payload in item_adjustments or []:
+        projection_item = payload.get("projection_item")
+
+        if projection_item is None:
+            raise CommercialQuotationError(
+                "Cada análisis debe indicar el producto proyectado."
+            )
+
+        if projection_item.projection_id != projection.id:
+            raise CommercialQuotationError(
+                "El producto no pertenece a la proyección vigente."
+            )
+
+        adjustments[projection_item.pk] = payload
+
+    previews = []
+
+    for projection_item in (
+        projection.items
+        .select_related("product")
+        .order_by("id")
+    ):
+        payload = adjustments.get(projection_item.pk)
+        if payload is None:
+            continue
+
+        supplier_discount_value = payload.get(
+            "supplier_discount_percent"
+        )
+        if supplier_discount_value in (None, ""):
+            continue
+
+        quantity = _quantity_from_projection(
+            projection_item=projection_item,
+            payload=payload,
+        )
+        pvp = _money(projection_item.unit_price)
+        school_discount = _discount_value(
+            payload.get(
+                "school_discount_percent",
+                STANDARD_SCHOOL_DISCOUNT,
+            )
+        )
+        school_price = _money(
+            pvp
+            * (Decimal("100.00") - school_discount)
+            / Decimal("100.00")
+        )
+        supplier_discount = _supplier_discount_value(
+            supplier_discount_value
+        )
+        supplier_cost = _money(
+            pvp
+            * (Decimal("100.00") - supplier_discount)
+            / Decimal("100.00")
+        )
+
+        (
+            commission_mode,
+            commission_input_amount,
+            school_commission,
+        ) = _commission_values(
+            payload=payload,
+            quantity=quantity,
+            actor=actor,
+        )
+
+        profitability = _profitability_snapshot(
+            commercial_line=projection.commercial_line,
+            pvp=pvp,
+            school_price=school_price,
+            supplier_cost=supplier_cost,
+            school_commission=school_commission,
+            quantity=quantity,
+            discount=school_discount,
+            supplier_condition_defined=True,
+        )
+
+        green_threshold = green_margin_threshold(
+            projection.commercial_line
+        )
+        green_surplus_unit = None
+        green_surplus_total = None
+
+        if green_threshold is not None:
+            green_surplus_unit = _money(
+                profitability["commercial_margin_unit"]
+                - green_threshold
+            )
+            green_surplus_total = _money(
+                green_surplus_unit * Decimal(quantity)
+            )
+
+        headroom = profitability[
+            "green_discount_headroom_points"
+        ]
+        additional_points = None
+        recovery_points = None
+        if headroom is not None:
+            additional_points = max(
+                headroom,
+                Decimal("0.00"),
+            )
+            recovery_points = max(
+                -headroom,
+                Decimal("0.00"),
+            )
+
+        previews.append(
+            {
+                "projection_item": projection_item.pk,
+                "pvp": pvp,
+                "quantity": quantity,
+                "school_discount_percent": school_discount,
+                "school_discount_amount": _money(
+                    pvp - school_price
+                ),
+                "school_price": school_price,
+                "supplier_discount_percent": supplier_discount,
+                "supplier_discount_amount": _money(
+                    pvp - supplier_cost
+                ),
+                "supplier_cost": supplier_cost,
+                "commission_mode": commission_mode,
+                "commission_input_amount": commission_input_amount,
+                "school_commission": school_commission,
+                "margin_before_commission_unit": _money(
+                    school_price - supplier_cost
+                ),
+                **profitability,
+                "green_margin_threshold_unit": green_threshold,
+                "green_margin_surplus_unit": green_surplus_unit,
+                "green_margin_surplus_total": green_surplus_total,
+                "additional_discount_available_points": (
+                    additional_points
+                ),
+                "discount_recovery_required_points": recovery_points,
+                "profitability_band_display": dict(
+                    CommercialQuotationItem.ProfitabilityBand.choices
+                ).get(
+                    profitability["profitability_band"],
+                    "Sin clasificar",
+                ),
+            }
+        )
+
+    return previews
 
 
 @transaction.atomic
@@ -492,10 +708,14 @@ def create_commercial_quotation_from_projection(
             )
         )
         pvp = _money(projection_item.unit_price)
-        supplier_cost = _supplier_cost_value(
+        (
+            supplier_discount_percent,
+            supplier_cost,
+        ) = _supplier_condition_values(
             payload=payload,
             actor=actor,
             projection_item=projection_item,
+            pvp=pvp,
         )
         school_price = _money(
             pvp * (Decimal("100.00") - discount) / Decimal("100.00")
@@ -537,6 +757,9 @@ def create_commercial_quotation_from_projection(
             school_commission=school_commission,
             quantity=quantity,
             discount=discount,
+            supplier_condition_defined=(
+                supplier_discount_percent is not None
+            ),
         )
 
         if discount > STANDARD_SCHOOL_DISCOUNT:
@@ -549,6 +772,9 @@ def create_commercial_quotation_from_projection(
                 "quantity": quantity,
                 "pvp": pvp,
                 "supplier_cost": supplier_cost,
+                "supplier_discount_percent": (
+                    supplier_discount_percent
+                ),
                 "school_price": school_price,
                 "school_discount_percent": discount,
                 "parent_price": parent_price,
@@ -606,6 +832,9 @@ def create_commercial_quotation_from_projection(
             quantity=prepared["quantity"],
             pvp=prepared["pvp"],
             supplier_cost=prepared["supplier_cost"],
+            supplier_discount_percent=prepared[
+                "supplier_discount_percent"
+            ],
             school_price=prepared["school_price"],
             school_discount_percent=prepared[
                 "school_discount_percent"
@@ -756,10 +985,14 @@ def update_commercial_quotation_from_projection(
         existing_item = existing_items_by_product.get(
             projection_item.product_id
         )
-        supplier_cost = _supplier_cost_value(
+        (
+            supplier_discount_percent,
+            supplier_cost,
+        ) = _supplier_condition_values(
             payload=payload,
             actor=actor,
             projection_item=projection_item,
+            pvp=pvp,
             existing_item=existing_item,
         )
         school_price = _money(
@@ -819,6 +1052,9 @@ def update_commercial_quotation_from_projection(
             school_commission=school_commission,
             quantity=quantity,
             discount=discount,
+            supplier_condition_defined=(
+                supplier_discount_percent is not None
+            ),
         )
 
         if discount > STANDARD_SCHOOL_DISCOUNT:
@@ -830,6 +1066,9 @@ def update_commercial_quotation_from_projection(
                 "quantity": quantity,
                 "pvp": pvp,
                 "supplier_cost": supplier_cost,
+                "supplier_discount_percent": (
+                    supplier_discount_percent
+                ),
                 "school_price": school_price,
                 "school_discount_percent": discount,
                 "parent_price": parent_price,
@@ -862,6 +1101,9 @@ def update_commercial_quotation_from_projection(
             quantity=prepared["quantity"],
             pvp=prepared["pvp"],
             supplier_cost=prepared["supplier_cost"],
+            supplier_discount_percent=prepared[
+                "supplier_discount_percent"
+            ],
             school_price=prepared["school_price"],
             school_discount_percent=prepared[
                 "school_discount_percent"
@@ -1110,6 +1352,17 @@ def send_commercial_quotation(*, quotation, actor):
     if not locked_quotation.items.exists():
         raise CommercialQuotationError(
             "No se puede enviar una cotización sin productos."
+        )
+
+    if locked_quotation.items.filter(
+        supplier_discount_percent__isnull=True,
+    ).exists():
+        raise CommercialQuotationError(
+            (
+                "Supervisión comercial debe registrar el descuento "
+                "editorial de todos los productos antes de enviar "
+                "la cotización."
+            )
         )
 
     if locked_quotation.items.filter(
