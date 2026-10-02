@@ -118,6 +118,7 @@ class ProductPriceSerializer(serializers.ModelSerializer):
             "product_code",
             "product_sku",
             "provider_name",
+            "cost_price",
             "created_at",
             "updated_at",
         ]
