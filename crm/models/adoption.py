@@ -14,6 +14,11 @@ from .school import School, SchoolContact
 
 
 class Adoption(TimeStampedModel):
+    class SaleMode(models.TextChoices):
+        POINT_OF_SALE = "point_of_sale", "Punto de venta / librería"
+        FAIR = "fair", "Feria"
+        CONSIGNMENT = "consignment", "Consignación"
+
     opportunity = models.ForeignKey(
         Opportunity,
         on_delete=models.PROTECT,
@@ -68,6 +73,18 @@ class Adoption(TimeStampedModel):
         blank=True,
         verbose_name="Asesor al confirmar",
     )
+    advisor_phone_snapshot = models.CharField(
+        max_length=30,
+        blank=True,
+        default="",
+        verbose_name="Celular del asesor al confirmar",
+    )
+    advisor_whatsapp_snapshot = models.CharField(
+        max_length=30,
+        blank=True,
+        default="",
+        verbose_name="WhatsApp del asesor al confirmar",
+    )
     authorized_contact = models.ForeignKey(
         SchoolContact,
         on_delete=models.PROTECT,
@@ -77,6 +94,23 @@ class Adoption(TimeStampedModel):
     authorized_contact_name_snapshot = models.CharField(
         max_length=180,
         verbose_name="Directivo al confirmar",
+    )
+    authorized_contact_position_snapshot = models.CharField(
+        max_length=120,
+        blank=True,
+        default="",
+        verbose_name="Cargo del directivo al confirmar",
+    )
+    authorized_contact_phone_snapshot = models.CharField(
+        max_length=30,
+        blank=True,
+        default="",
+        verbose_name="Teléfono del directivo al confirmar",
+    )
+    authorized_contact_email_snapshot = models.EmailField(
+        blank=True,
+        default="",
+        verbose_name="Correo del directivo al confirmar",
     )
     signed_at = models.DateTimeField(
         verbose_name="Fecha de firma / aprobación",
@@ -91,6 +125,29 @@ class Adoption(TimeStampedModel):
         blank=True,
         related_name="confirmed_crm_adoptions",
         verbose_name="Confirmada por",
+    )
+    sale_mode = models.CharField(
+        max_length=20,
+        choices=SaleMode.choices,
+        blank=True,
+        default="",
+        db_index=True,
+        verbose_name="Modalidad de venta",
+    )
+    service_date = models.DateField(
+        null=True,
+        blank=True,
+        verbose_name="Fecha de atención",
+    )
+    fair_start_time = models.TimeField(
+        null=True,
+        blank=True,
+        verbose_name="Hora de inicio de feria",
+    )
+    fair_end_time = models.TimeField(
+        null=True,
+        blank=True,
+        verbose_name="Hora de fin de feria",
     )
     notes = models.TextField(
         blank=True,
