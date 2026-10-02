@@ -35,7 +35,10 @@ from crm.models import (
     MarketEditorial,
 )
 from crm.permissions import usuario_puede_supervisar_crm
-from crm.services.commercial_lines import resolve_product_commercial_line
+from crm.services.commercial_lines import (
+    green_margin_threshold,
+    resolve_product_commercial_line,
+)
 from workspaces.models import CalendarEvent, Task, WorkspaceGroup
 
 
@@ -1064,7 +1067,7 @@ class CommercialProjectionItemSerializer(serializers.ModelSerializer):
         }
 
     def get_commercial_line(self, obj):
-        return resolve_product_commercial_line(obj.product)
+        return obj.product.commercial_line
 
     def get_subtotal(self, obj):
         return f"{obj.subtotal:.2f}"
@@ -1262,6 +1265,11 @@ class CommercialProjectionCreateSerializer(serializers.Serializer):
 
 class CommercialQuotationItemSerializer(serializers.ModelSerializer):
     product = serializers.SerializerMethodField()
+    green_margin_threshold_unit = serializers.SerializerMethodField()
+    green_margin_surplus_unit = serializers.SerializerMethodField()
+    green_margin_surplus_total = serializers.SerializerMethodField()
+    additional_discount_available_points = serializers.SerializerMethodField()
+    discount_recovery_required_points = serializers.SerializerMethodField()
     commercial_line_display = serializers.CharField(
         source="get_commercial_line_display",
         read_only=True,
@@ -1298,6 +1306,11 @@ class CommercialQuotationItemSerializer(serializers.ModelSerializer):
             "commercial_margin_unit",
             "commercial_margin_total",
             "commercial_margin_percent",
+            "green_margin_threshold_unit",
+            "green_margin_surplus_unit",
+            "green_margin_surplus_total",
+            "additional_discount_available_points",
+            "discount_recovery_required_points",
             "profitability_band",
             "profitability_band_display",
             "max_green_discount_percent",
@@ -1313,6 +1326,45 @@ class CommercialQuotationItemSerializer(serializers.ModelSerializer):
             "name": obj.product.name,
         }
 
+    def get_green_margin_threshold_unit(self, obj):
+        return green_margin_threshold(obj.commercial_line)
+
+    def get_green_margin_surplus_unit(self, obj):
+        threshold = green_margin_threshold(obj.commercial_line)
+
+        if threshold is None:
+            return None
+
+        return (obj.commercial_margin_unit - threshold).quantize(
+            Decimal("0.01")
+        )
+
+    def get_green_margin_surplus_total(self, obj):
+        surplus = self.get_green_margin_surplus_unit(obj)
+
+        if surplus is None:
+            return None
+
+        return (surplus * Decimal(obj.quantity)).quantize(
+            Decimal("0.01")
+        )
+
+    def get_additional_discount_available_points(self, obj):
+        headroom = obj.green_discount_headroom_points
+
+        if headroom is None:
+            return None
+
+        return max(headroom, Decimal("0.00"))
+
+    def get_discount_recovery_required_points(self, obj):
+        headroom = obj.green_discount_headroom_points
+
+        if headroom is None:
+            return None
+
+        return max(-headroom, Decimal("0.00"))
+
     def to_representation(self, instance):
         data = super().to_representation(instance)
 
@@ -1327,6 +1379,11 @@ class CommercialQuotationItemSerializer(serializers.ModelSerializer):
             "commercial_margin_unit",
             "commercial_margin_total",
             "commercial_margin_percent",
+            "green_margin_threshold_unit",
+            "green_margin_surplus_unit",
+            "green_margin_surplus_total",
+            "additional_discount_available_points",
+            "discount_recovery_required_points",
             "profitability_band",
             "profitability_band_display",
             "max_green_discount_percent",
@@ -1417,6 +1474,7 @@ class CommercialQuotationSerializer(serializers.ModelSerializer):
         cost_total = Decimal("0.00")
         commission_total = Decimal("0.00")
         margin_total = Decimal("0.00")
+        green_margin_surplus_total = Decimal("0.00")
         band_counts = {
             "green": 0,
             "amber": 0,
@@ -1436,6 +1494,13 @@ class CommercialQuotationSerializer(serializers.ModelSerializer):
             cost_total += item_cost
             commission_total += item_commission
             margin_total += item.commercial_margin_total
+
+            threshold = green_margin_threshold(item.commercial_line)
+            if threshold is not None:
+                green_margin_surplus_total += (
+                    (item.commercial_margin_unit - threshold)
+                    * quantity
+                )
 
             band_counts[item.profitability_band] = (
                 band_counts.get(item.profitability_band, 0) + 1
@@ -1466,6 +1531,13 @@ class CommercialQuotationSerializer(serializers.ModelSerializer):
             "commission_total": commission_total,
             "margin_total": margin_total,
             "margin_percent": margin_percent,
+            "green_margin_threshold_unit": green_margin_threshold(
+                obj.commercial_line
+            ),
+            "green_margin_surplus_total": (
+                green_margin_surplus_total.quantize(Decimal("0.01"))
+            ),
+
             "products_by_band": band_counts,
             "margin_by_editorial": [
                 {
