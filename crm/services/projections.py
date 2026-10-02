@@ -15,7 +15,6 @@ from .commercial_lines import (
     OTHER,
     SCHOOL_TEXT,
     VALID_PROJECTION_LINES,
-    resolve_product_commercial_line,
 )
 
 
@@ -343,7 +342,7 @@ def create_commercial_projection_revision(
             )
 
         if enforce_commercial_line:
-            resolved_line = resolve_product_commercial_line(product)
+            resolved_line = product.commercial_line
 
             if resolved_line == OTHER:
                 raise CommercialProjectionError(
