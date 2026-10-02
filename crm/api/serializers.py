@@ -1296,6 +1296,7 @@ class CommercialQuotationItemSerializer(serializers.ModelSerializer):
             "quantity",
             "pvp",
             "supplier_cost",
+            "supplier_discount_percent",
             "school_price",
             "school_discount_percent",
             "school_discount_amount",
@@ -1384,6 +1385,7 @@ class CommercialQuotationItemSerializer(serializers.ModelSerializer):
 
         for field_name in (
             "supplier_cost",
+            "supplier_discount_percent",
             "school_discount_amount",
             "margin_before_commission_unit",
             "school_commission",
@@ -1641,11 +1643,13 @@ class CommercialQuotationProjectionItemAdjustmentSerializer(
         min_value=0,
         required=False,
     )
-    supplier_cost = serializers.DecimalField(
-        max_digits=12,
+    supplier_discount_percent = serializers.DecimalField(
+        max_digits=5,
         decimal_places=2,
         min_value=0,
+        max_value=100,
         required=False,
+        allow_null=True,
     )
     reading_month = serializers.IntegerField(
         min_value=1,
