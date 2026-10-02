@@ -20,6 +20,7 @@ from .commercial_lines import (
     OTHER,
     READING_PLAN,
     SCHOOL_TEXT,
+    green_margin_threshold,
     resolve_product_commercial_line,
 )
 from .opportunities import transition_opportunity_stage
@@ -223,7 +224,7 @@ def _profitability_snapshot(
         commercial_line
         == CommercialQuotationItem.CommercialLine.SCHOOL_TEXT
     ):
-        green_threshold = Decimal("20.01")
+        green_threshold = green_margin_threshold(commercial_line)
         if margin_unit > Decimal("20.00"):
             band = CommercialQuotationItem.ProfitabilityBand.GREEN
         elif margin_unit >= Decimal("15.00"):
@@ -236,7 +237,7 @@ def _profitability_snapshot(
         commercial_line
         == CommercialQuotationItem.CommercialLine.READING_PLAN
     ):
-        green_threshold = Decimal("5.01")
+        green_threshold = green_margin_threshold(commercial_line)
         if margin_unit > Decimal("5.00"):
             band = CommercialQuotationItem.ProfitabilityBand.GREEN
         elif margin_unit > Decimal("2.00"):
