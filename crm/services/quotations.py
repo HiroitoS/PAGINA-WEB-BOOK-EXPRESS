@@ -1390,6 +1390,9 @@ def send_commercial_quotation(*, quotation, actor):
         .select_related(
             "opportunity__pipeline",
             "opportunity__stage",
+            "opportunity__primary_contact",
+            "opportunity__owner",
+            "opportunity__owner__book_express_profile",
         )
         .get(pk=quotation.pk)
     )
@@ -1478,14 +1481,29 @@ def send_commercial_quotation(*, quotation, actor):
         updated_at=timezone.now(),
     )
 
+    party_snapshot = _quotation_party_snapshot(
+        locked_quotation.opportunity
+    )
+
     locked_quotation.status = CommercialQuotation.Status.SENT
     locked_quotation.sent_at = timezone.now()
     locked_quotation.sent_by = actor
+
+    for field_name, value in party_snapshot.items():
+        setattr(locked_quotation, field_name, value)
+
     locked_quotation.save(
         update_fields=[
             "status",
             "sent_at",
             "sent_by",
+            "primary_contact_name_snapshot",
+            "primary_contact_position_snapshot",
+            "primary_contact_phone_snapshot",
+            "primary_contact_email_snapshot",
+            "advisor_name_snapshot",
+            "advisor_phone_snapshot",
+            "advisor_whatsapp_snapshot",
             "updated_at",
         ]
     )
