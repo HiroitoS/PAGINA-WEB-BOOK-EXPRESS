@@ -646,6 +646,7 @@ class CRMQuotationFromProjectionTests(TestCase):
             actor=self.admin,
             sale_mode=CommercialQuotation.SaleMode.FAIR,
             service_date=date(2027, 1, 18),
+            service_end_date=date(2027, 1, 18),
             fair_start_time=time(15, 0),
             item_adjustments=[
                 {
@@ -664,6 +665,79 @@ class CRMQuotationFromProjectionTests(TestCase):
                 actor=self.advisor,
             )
 
+    def test_fair_requires_end_date_before_send(self):
+        quotation = create_commercial_quotation_from_projection(
+            opportunity=self.opportunity,
+            actor=self.admin,
+            sale_mode=CommercialQuotation.SaleMode.FAIR,
+            service_date=date(2027, 1, 18),
+            fair_start_time=time(15, 0),
+            fair_end_time=time(18, 0),
+            item_adjustments=[
+                {
+                    "projection_item": self.projection_item,
+                    "supplier_discount_percent": Decimal("40.00"),
+                }
+            ],
+        )
+
+        with self.assertRaisesMessage(
+            CommercialQuotationError,
+            "fecha de fin de la feria",
+        ):
+            send_commercial_quotation(
+                quotation=quotation,
+                actor=self.advisor,
+            )
+
+    def test_fair_end_date_cannot_be_before_start_date(self):
+        with self.assertRaisesMessage(
+            CommercialQuotationError,
+            "fecha de fin de la feria",
+        ):
+            create_commercial_quotation_from_projection(
+                opportunity=self.opportunity,
+                actor=self.admin,
+                sale_mode=CommercialQuotation.SaleMode.FAIR,
+                service_date=date(2027, 1, 18),
+                service_end_date=date(2027, 1, 17),
+                fair_start_time=time(15, 0),
+                fair_end_time=time(18, 0),
+                item_adjustments=[
+                    {
+                        "projection_item": self.projection_item,
+                        "supplier_discount_percent": Decimal("40.00"),
+                    }
+                ],
+            )
+
+    def test_multiday_fair_allows_end_time_before_start_time(self):
+        quotation = create_commercial_quotation_from_projection(
+            opportunity=self.opportunity,
+            actor=self.admin,
+            sale_mode=CommercialQuotation.SaleMode.FAIR,
+            service_date=date(2027, 1, 18),
+            service_end_date=date(2027, 1, 20),
+            fair_start_time=time(15, 0),
+            fair_end_time=time(13, 0),
+            item_adjustments=[
+                {
+                    "projection_item": self.projection_item,
+                    "supplier_discount_percent": Decimal("40.00"),
+                }
+            ],
+        )
+
+        sent = send_commercial_quotation(
+            quotation=quotation,
+            actor=self.advisor,
+        )
+
+        self.assertEqual(
+            sent.status,
+            CommercialQuotation.Status.SENT,
+        )
+
     def test_fair_end_time_must_be_after_start_time(self):
         with self.assertRaisesMessage(
             CommercialQuotationError,
@@ -674,6 +748,7 @@ class CRMQuotationFromProjectionTests(TestCase):
                 actor=self.admin,
                 sale_mode=CommercialQuotation.SaleMode.FAIR,
                 service_date=date(2027, 1, 18),
+                service_end_date=date(2027, 1, 18),
                 fair_start_time=time(18, 0),
                 fair_end_time=time(15, 0),
                 item_adjustments=[
@@ -690,6 +765,7 @@ class CRMQuotationFromProjectionTests(TestCase):
             actor=self.admin,
             sale_mode=CommercialQuotation.SaleMode.CONSIGNMENT,
             service_date=date(2027, 1, 20),
+            service_end_date=date(2027, 1, 22),
             fair_start_time=time(8, 0),
             fair_end_time=time(13, 0),
             item_adjustments=[
@@ -705,6 +781,7 @@ class CRMQuotationFromProjectionTests(TestCase):
             CommercialQuotation.SaleMode.CONSIGNMENT,
         )
         self.assertEqual(quotation.service_date, date(2027, 1, 20))
+        self.assertIsNone(quotation.service_end_date)
         self.assertIsNone(quotation.fair_start_time)
         self.assertIsNone(quotation.fair_end_time)
 
