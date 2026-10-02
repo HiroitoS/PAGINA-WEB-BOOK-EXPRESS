@@ -1505,6 +1505,7 @@ class CommercialQuotationSerializer(serializers.ModelSerializer):
             "sale_mode",
             "sale_mode_display",
             "service_date",
+            "service_end_date",
             "fair_start_time",
             "fair_end_time",
             "notes",
@@ -1716,6 +1717,11 @@ class CommercialQuotationCreateSerializer(serializers.Serializer):
         allow_null=True,
         default=None,
     )
+    service_end_date = serializers.DateField(
+        required=False,
+        allow_null=True,
+        default=None,
+    )
     fair_start_time = serializers.TimeField(
         required=False,
         allow_null=True,
@@ -1821,6 +1827,10 @@ class CommercialQuotationFromProjectionSerializer(serializers.Serializer):
         required=False,
         allow_null=True,
     )
+    service_end_date = serializers.DateField(
+        required=False,
+        allow_null=True,
+    )
     fair_start_time = serializers.TimeField(
         required=False,
         allow_null=True,
@@ -1918,6 +1928,7 @@ class AdoptionSerializer(serializers.ModelSerializer):
             "sale_mode",
             "sale_mode_display",
             "service_date",
+            "service_end_date",
             "fair_start_time",
             "fair_end_time",
             "signed_at",
