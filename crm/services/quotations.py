@@ -340,9 +340,9 @@ def _cost_price_for_projection_item(*, projection_item):
     if price is None or price.cost_price is None:
         raise CommercialQuotationError(
             (
-                f"{projection_item.product.name} no tiene precio costo "
-                f"registrado para {projection_item.price_year_snapshot}. "
-                "Completa el precio del catálogo antes de cotizar."
+                f"{projection_item.product.name} no tiene un costo "
+                f"comercial disponible para {projection_item.price_year_snapshot}. "
+                "Supervisión debe registrar el costo editorial real en la cotización."
             )
         )
 
