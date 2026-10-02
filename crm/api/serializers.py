@@ -1739,6 +1739,7 @@ class AdoptionItemSerializer(serializers.ModelSerializer):
             "quantity",
             "pvp",
             "supplier_cost",
+            "supplier_discount_percent",
             "school_price",
             "parent_price",
             "school_commission",
