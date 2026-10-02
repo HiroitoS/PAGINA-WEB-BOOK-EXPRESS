@@ -61,6 +61,43 @@ def _product_snapshot(product):
     }
 
 
+def _quotation_party_snapshot(opportunity):
+    contact = opportunity.primary_contact
+    owner = opportunity.owner
+
+    contact_phone = ""
+    if contact is not None:
+        contact_phone = contact.whatsapp or contact.phone or ""
+
+    advisor_name = ""
+    advisor_phone = ""
+    advisor_whatsapp = ""
+
+    if owner is not None:
+        advisor_name = owner.get_full_name() or owner.username
+        profile = getattr(owner, "book_express_profile", None)
+
+        if profile is not None:
+            advisor_phone = profile.phone or ""
+            advisor_whatsapp = profile.whatsapp or ""
+
+    return {
+        "primary_contact_name_snapshot": (
+            contact.full_name if contact is not None else ""
+        ),
+        "primary_contact_position_snapshot": (
+            contact.position if contact is not None else ""
+        ),
+        "primary_contact_phone_snapshot": contact_phone,
+        "primary_contact_email_snapshot": (
+            contact.email if contact is not None else ""
+        ),
+        "advisor_name_snapshot": advisor_name,
+        "advisor_phone_snapshot": advisor_phone,
+        "advisor_whatsapp_snapshot": advisor_whatsapp,
+    }
+
+
 STANDARD_SCHOOL_DISCOUNT = Decimal("20.00")
 MONEY_QUANTUM = Decimal("0.01")
 
@@ -616,7 +653,14 @@ def create_commercial_quotation_from_projection(
     locked_opportunity = (
         Opportunity.objects
         .select_for_update()
-        .select_related("school", "campaign", "stage")
+        .select_related(
+            "school",
+            "campaign",
+            "stage",
+            "primary_contact",
+            "owner",
+            "owner__book_express_profile",
+        )
         .get(pk=opportunity.pk)
     )
 
@@ -811,6 +855,7 @@ def create_commercial_quotation_from_projection(
         status=CommercialQuotation.Status.DRAFT,
         school_name_snapshot=locked_opportunity.school.name,
         campaign_name_snapshot=locked_opportunity.campaign.name,
+        **_quotation_party_snapshot(locked_opportunity),
         commercial_line=projection.commercial_line,
         notes=(notes or "").strip(),
         requires_discount_approval=requires_approval,
@@ -1223,7 +1268,14 @@ def create_commercial_quotation(
     locked_opportunity = (
         Opportunity.objects
         .select_for_update()
-        .select_related("school", "campaign", "stage")
+        .select_related(
+            "school",
+            "campaign",
+            "stage",
+            "primary_contact",
+            "owner",
+            "owner__book_express_profile",
+        )
         .get(pk=opportunity.pk)
     )
 
@@ -1269,6 +1321,7 @@ def create_commercial_quotation(
         status=CommercialQuotation.Status.DRAFT,
         school_name_snapshot=locked_opportunity.school.name,
         campaign_name_snapshot=locked_opportunity.campaign.name,
+        **_quotation_party_snapshot(locked_opportunity),
         commercial_line=quotation_line,
         notes=(notes or "").strip(),
         created_by=actor,
