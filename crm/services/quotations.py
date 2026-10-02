@@ -106,6 +106,7 @@ def _normalize_sale_schedule(
     *,
     sale_mode="",
     service_date=None,
+    service_end_date=None,
     fair_start_time=None,
     fair_end_time=None,
 ):
@@ -121,13 +122,24 @@ def _normalize_sale_schedule(
         )
 
     if not mode:
-        return "", None, None, None
+        return "", None, None, None, None
 
     if mode != CommercialQuotation.SaleMode.FAIR:
-        return mode, service_date, None, None
+        return mode, service_date, None, None, None
 
     if (
-        fair_start_time is not None
+        service_date is not None
+        and service_end_date is not None
+        and service_end_date < service_date
+    ):
+        raise CommercialQuotationError(
+            "La fecha de fin de la feria no puede ser anterior a la fecha de inicio."
+        )
+
+    if (
+        service_date is not None
+        and service_end_date == service_date
+        and fair_start_time is not None
         and fair_end_time is not None
         and fair_end_time <= fair_start_time
     ):
@@ -138,6 +150,7 @@ def _normalize_sale_schedule(
     return (
         mode,
         service_date,
+        service_end_date,
         fair_start_time,
         fair_end_time,
     )
@@ -151,7 +164,7 @@ def _validate_sale_schedule_for_send(quotation):
 
     if quotation.service_date is None:
         if quotation.sale_mode == CommercialQuotation.SaleMode.FAIR:
-            message = "Registra la fecha de la feria antes de enviar la cotización."
+            message = "Registra la fecha de inicio de la feria antes de enviar la cotización."
         elif quotation.sale_mode == CommercialQuotation.SaleMode.CONSIGNMENT:
             message = (
                 "Registra la fecha de entrega en consignación antes de "
@@ -166,6 +179,16 @@ def _validate_sale_schedule_for_send(quotation):
         raise CommercialQuotationError(message)
 
     if quotation.sale_mode == CommercialQuotation.SaleMode.FAIR:
+        if quotation.service_end_date is None:
+            raise CommercialQuotationError(
+                "Registra la fecha de fin de la feria antes de enviar la cotización."
+            )
+
+        if quotation.service_end_date < quotation.service_date:
+            raise CommercialQuotationError(
+                "La fecha de fin de la feria no puede ser anterior a la fecha de inicio."
+            )
+
         if (
             quotation.fair_start_time is None
             or quotation.fair_end_time is None
@@ -177,7 +200,10 @@ def _validate_sale_schedule_for_send(quotation):
                 )
             )
 
-        if quotation.fair_end_time <= quotation.fair_start_time:
+        if (
+            quotation.service_end_date == quotation.service_date
+            and quotation.fair_end_time <= quotation.fair_start_time
+        ):
             raise CommercialQuotationError(
                 "La hora de fin de la feria debe ser posterior a la hora de inicio."
             )
@@ -727,6 +753,7 @@ def create_commercial_quotation_from_projection(
     notes="",
     sale_mode="",
     service_date=None,
+    service_end_date=None,
     fair_start_time=None,
     fair_end_time=None,
 ):
@@ -928,11 +955,13 @@ def create_commercial_quotation_from_projection(
     (
         sale_mode,
         service_date,
+        service_end_date,
         fair_start_time,
         fair_end_time,
     ) = _normalize_sale_schedule(
         sale_mode=sale_mode,
         service_date=service_date,
+        service_end_date=service_end_date,
         fair_start_time=fair_start_time,
         fair_end_time=fair_end_time,
     )
@@ -948,6 +977,7 @@ def create_commercial_quotation_from_projection(
         commercial_line=projection.commercial_line,
         sale_mode=sale_mode,
         service_date=service_date,
+        service_end_date=service_end_date,
         fair_start_time=fair_start_time,
         fair_end_time=fair_end_time,
         notes=(notes or "").strip(),
@@ -1023,6 +1053,7 @@ def update_commercial_quotation_from_projection(
     notes="",
     sale_mode="",
     service_date=None,
+    service_end_date=None,
     fair_start_time=None,
     fair_end_time=None,
 ):
@@ -1236,11 +1267,13 @@ def update_commercial_quotation_from_projection(
     (
         sale_mode,
         service_date,
+        service_end_date,
         fair_start_time,
         fair_end_time,
     ) = _normalize_sale_schedule(
         sale_mode=sale_mode,
         service_date=service_date,
+        service_end_date=service_end_date,
         fair_start_time=fair_start_time,
         fair_end_time=fair_end_time,
     )
@@ -1300,6 +1333,7 @@ def update_commercial_quotation_from_projection(
     locked_quotation.commercial_line = projection.commercial_line
     locked_quotation.sale_mode = sale_mode
     locked_quotation.service_date = service_date
+    locked_quotation.service_end_date = service_end_date
     locked_quotation.fair_start_time = fair_start_time
     locked_quotation.fair_end_time = fair_end_time
     locked_quotation.requires_discount_approval = requires_approval
@@ -1318,6 +1352,7 @@ def update_commercial_quotation_from_projection(
             "commercial_line",
             "sale_mode",
             "service_date",
+            "service_end_date",
             "fair_start_time",
             "fair_end_time",
             "requires_discount_approval",
@@ -1383,6 +1418,7 @@ def create_commercial_quotation(
     notes="",
     sale_mode="",
     service_date=None,
+    service_end_date=None,
     fair_start_time=None,
     fair_end_time=None,
 ):
@@ -1436,11 +1472,13 @@ def create_commercial_quotation(
     (
         sale_mode,
         service_date,
+        service_end_date,
         fair_start_time,
         fair_end_time,
     ) = _normalize_sale_schedule(
         sale_mode=sale_mode,
         service_date=service_date,
+        service_end_date=service_end_date,
         fair_start_time=fair_start_time,
         fair_end_time=fair_end_time,
     )
@@ -1455,6 +1493,7 @@ def create_commercial_quotation(
         commercial_line=quotation_line,
         sale_mode=sale_mode,
         service_date=service_date,
+        service_end_date=service_end_date,
         fair_start_time=fair_start_time,
         fair_end_time=fair_end_time,
         notes=(notes or "").strip(),
