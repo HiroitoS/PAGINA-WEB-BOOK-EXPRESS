@@ -440,26 +440,21 @@ def _supplier_condition_values(
         )
         return supplier_discount, supplier_cost
 
-    if existing_item is not None:
+    if (
+        existing_item is not None
+        and existing_item.supplier_discount_percent is not None
+    ):
         return (
             existing_item.supplier_discount_percent,
             _money(existing_item.supplier_cost),
         )
 
-    # Compatibilidad temporal con cotizaciones antiguas: el costo histórico
-    # del catálogo puede conservarse como referencia, pero NO define una
-    # condición editorial nueva. Una cotización no puede enviarse hasta que
-    # supervisión registre explícitamente el descuento editorial.
-    try:
-        legacy_cost = _money(
-            _cost_price_for_projection_item(
-                projection_item=projection_item,
-            )
-        )
-    except CommercialQuotationError:
-        legacy_cost = Decimal("0.00")
-
-    return None, legacy_cost
+    # Regla comercial actual:
+    # el costo editorial se define únicamente a partir del descuento
+    # editorial registrado por supervisión. Mientras ese porcentaje no
+    # exista, la condición editorial permanece pendiente y no se calcula
+    # rentabilidad con un costo histórico del catálogo.
+    return None, Decimal("0.00")
 
 
 def preview_commercial_quotation_financials(
