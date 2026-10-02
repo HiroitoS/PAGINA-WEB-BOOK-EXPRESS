@@ -1262,6 +1262,9 @@ class CommercialProjectionCreateSerializer(serializers.Serializer):
 
 class CommercialQuotationItemSerializer(serializers.ModelSerializer):
     product = serializers.SerializerMethodField()
+    school_discount_amount = serializers.SerializerMethodField()
+    supplier_discount_equivalent_percent = serializers.SerializerMethodField()
+    margin_before_commission_unit = serializers.SerializerMethodField()
     green_margin_threshold_unit = serializers.SerializerMethodField()
     green_margin_surplus_unit = serializers.SerializerMethodField()
     green_margin_surplus_total = serializers.SerializerMethodField()
@@ -1296,6 +1299,9 @@ class CommercialQuotationItemSerializer(serializers.ModelSerializer):
             "supplier_cost",
             "school_price",
             "school_discount_percent",
+            "school_discount_amount",
+            "supplier_discount_equivalent_percent",
+            "margin_before_commission_unit",
             "parent_price",
             "school_commission",
             "commission_mode",
@@ -1322,6 +1328,26 @@ class CommercialQuotationItemSerializer(serializers.ModelSerializer):
             "id": obj.product_id,
             "name": obj.product.name,
         }
+
+    def get_school_discount_amount(self, obj):
+        return (obj.pvp - obj.school_price).quantize(
+            Decimal("0.01")
+        )
+
+    def get_supplier_discount_equivalent_percent(self, obj):
+        if obj.pvp <= Decimal("0.00"):
+            return None
+
+        return (
+            (obj.pvp - obj.supplier_cost)
+            / obj.pvp
+            * Decimal("100.00")
+        ).quantize(Decimal("0.01"))
+
+    def get_margin_before_commission_unit(self, obj):
+        return (obj.school_price - obj.supplier_cost).quantize(
+            Decimal("0.01")
+        )
 
     def get_green_margin_threshold_unit(self, obj):
         return green_margin_threshold(obj.commercial_line)
@@ -1370,6 +1396,9 @@ class CommercialQuotationItemSerializer(serializers.ModelSerializer):
 
         for field_name in (
             "supplier_cost",
+            "school_discount_amount",
+            "supplier_discount_equivalent_percent",
+            "margin_before_commission_unit",
             "school_commission",
             "commission_mode",
             "commission_input_amount",
