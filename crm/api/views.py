@@ -52,6 +52,7 @@ from crm.services import (
     create_commercial_projection_revision,
     create_commercial_quotation,
     create_commercial_quotation_from_projection,
+    preview_commercial_quotation_financials,
     create_opportunity,
     create_opportunity_event,
     create_opportunity_reminder,
@@ -82,6 +83,7 @@ from .serializers import (
     CommercialQuotationCreateSerializer,
     CommercialQuotationDiscountApprovalSerializer,
     CommercialQuotationFromProjectionSerializer,
+    CommercialQuotationProjectionItemAdjustmentSerializer,
     CommercialQuotationReopenSerializer,
     CommercialQuotationSerializer,
     CommercialTeamDetailSerializer,
@@ -1901,6 +1903,41 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                 many=True,
             ).data
         )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="quotations/financial-preview",
+    )
+    def quotation_financial_preview(self, request, pk=None):
+        opportunity = self.get_object()
+
+        if not (
+            usuario_es_administrador(request.user)
+            or usuario_puede_supervisar_crm(request.user)
+        ):
+            raise PermissionDenied(
+                "Solo supervisión comercial puede revisar "
+                "costos y rentabilidad."
+            )
+
+        serializer = CommercialQuotationProjectionItemAdjustmentSerializer(
+            data=request.data.get("items", []),
+            many=True,
+        )
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            previews = preview_commercial_quotation_financials(
+                opportunity=opportunity,
+                actor=request.user,
+                item_adjustments=serializer.validated_data,
+            )
+        except CommercialQuotationError as exc:
+            _raise_service_validation_error(exc)
+
+        return Response({"items": previews})
+
 
     @action(
         detail=True,
