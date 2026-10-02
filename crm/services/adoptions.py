@@ -192,6 +192,7 @@ def confirm_adoption(
         authorized_contact_email_snapshot=authorized_contact.email or "",
         sale_mode=locked_quotation.sale_mode,
         service_date=locked_quotation.service_date,
+        service_end_date=locked_quotation.service_end_date,
         fair_start_time=locked_quotation.fair_start_time,
         fair_end_time=locked_quotation.fair_end_time,
         signed_at=signed_at,
