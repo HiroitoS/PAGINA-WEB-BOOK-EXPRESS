@@ -570,6 +570,83 @@ class CRMCommercialProjectionTests(TestCase):
             {plan_product.id},
         )
 
+    def test_projection_products_api_does_not_infer_plan_lector_at_runtime(self):
+        plan_area = Area.objects.create(
+            name="Plan lector sin clasificar",
+            is_active=True,
+        )
+        unclassified_product = Product.objects.create(
+            provider=self.provider,
+            name="Obra pendiente de clasificación",
+            level=self.level,
+            grade=self.grade,
+            area=plan_area,
+            commercial_line=Product.CommercialLine.OTHER,
+            is_active=True,
+        )
+        ProductPrice.objects.create(
+            product=unclassified_product,
+            year=2027,
+            campaign="Campaña escolar",
+            price=Decimal("30.00"),
+            cost_price=Decimal("18.00"),
+            is_active=True,
+        )
+
+        self.client.force_authenticate(user=self.advisor)
+
+        response = self.client.get(
+            reverse(
+                "crm:opportunity-projection-products",
+                args=[self.opportunity.id],
+            ),
+            {
+                "service": self.service.id,
+                "grade": self.grade.id,
+                "commercial_line": "reading_plan",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(
+            unclassified_product.id,
+            {item["id"] for item in response.data["results"]},
+        )
+
+    def test_projection_rejects_unclassified_product_for_new_line(self):
+        unclassified_product = Product.objects.create(
+            provider=self.provider,
+            name="Producto pendiente de clasificación",
+            level=self.level,
+            grade=self.grade,
+            area=self.area,
+            commercial_line=Product.CommercialLine.OTHER,
+            is_active=True,
+        )
+        ProductPrice.objects.create(
+            product=unclassified_product,
+            year=2027,
+            campaign="Campaña escolar",
+            price=Decimal("40.00"),
+            cost_price=Decimal("25.00"),
+            is_active=True,
+        )
+
+        with self.assertRaisesMessage(
+            CommercialProjectionError,
+            "no tiene una línea comercial",
+        ):
+            self._create_projection(
+                commercial_line="school_text",
+                items=[
+                    {
+                        "service": self.service,
+                        "grade": self.grade,
+                        "product": unclassified_product,
+                    }
+                ],
+            )
+
     def test_projection_api_creates_reads_and_exposes_base_population(self):
         self.client.force_authenticate(user=self.advisor)
 
