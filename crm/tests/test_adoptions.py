@@ -175,8 +175,9 @@ class CRMAdoptionFlowTests(TestCase):
         return {
             "sale_mode": CommercialQuotation.SaleMode.FAIR,
             "service_date": date(2027, 1, 18),
+            "service_end_date": date(2027, 1, 20),
             "fair_start_time": time(15, 0),
-            "fair_end_time": time(18, 0),
+            "fair_end_time": time(13, 0),
         }
 
     def define_editorial_condition(self, quotation):
@@ -331,8 +332,9 @@ class CRMAdoptionFlowTests(TestCase):
             CommercialQuotation.SaleMode.FAIR,
         )
         self.assertEqual(adoption.service_date, date(2027, 1, 18))
+        self.assertEqual(adoption.service_end_date, date(2027, 1, 20))
         self.assertEqual(adoption.fair_start_time, time(15, 0))
-        self.assertEqual(adoption.fair_end_time, time(18, 0))
+        self.assertEqual(adoption.fair_end_time, time(13, 0))
         self.assertEqual(
             adoption.authorized_contact_position_snapshot,
             self.contact.position,
