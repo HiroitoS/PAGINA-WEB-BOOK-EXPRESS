@@ -68,10 +68,7 @@ from crm.services import (
     transition_opportunity_stage,
 )
 
-from crm.services.commercial_lines import (
-    VALID_PROJECTION_LINES,
-    resolve_product_commercial_line,
-)
+from crm.services.commercial_lines import VALID_PROJECTION_LINES
 
 from .pagination import CRMPageNumberPagination
 from .serializers import (
@@ -1632,6 +1629,11 @@ class OpportunityViewSet(viewsets.ModelViewSet):
             )
         )
 
+        if commercial_line:
+            base_products = base_products.filter(
+                commercial_line=commercial_line,
+            )
+
         products = list(
             base_products
             .select_related(
@@ -1644,14 +1646,6 @@ class OpportunityViewSet(viewsets.ModelViewSet):
             )
             .order_by("provider__name", "name", "id")
         )
-
-        if commercial_line:
-            products = [
-                product
-                for product in products
-                if resolve_product_commercial_line(product)
-                == commercial_line
-            ]
 
         editorial_map = {
             product.provider_id: product.provider.name
@@ -1717,7 +1711,7 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                 {
                     "id": product.id,
                     "name": product.name,
-                    "commercial_line": resolve_product_commercial_line(product),
+                    "commercial_line": product.commercial_line,
                     "editorial": {
                         "id": product.provider_id,
                         "name": product.provider.name,
