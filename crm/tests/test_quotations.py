@@ -184,6 +184,10 @@ class CRMQuotationFromProjectionTests(TestCase):
 
         self.assertEqual(quotation.source_projection, self.projection)
         self.assertEqual(
+            quotation.internal_code,
+            f"BE-COT-2027-{quotation.pk:06d}-V01",
+        )
+        self.assertEqual(
             quotation.commercial_line,
             CommercialQuotation.CommercialLine.SCHOOL_TEXT,
         )
@@ -413,6 +417,10 @@ class CRMQuotationFromProjectionTests(TestCase):
 
         self.assertEqual(updated.pk, quotation.pk)
         self.assertEqual(updated.version, 1)
+        self.assertEqual(
+            updated.internal_code,
+            quotation.internal_code,
+        )
         self.assertEqual(
             self.opportunity.quotations.count(),
             1,
