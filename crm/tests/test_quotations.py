@@ -1,3 +1,4 @@
+from datetime import date, time
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
@@ -232,6 +233,8 @@ class CRMQuotationFromProjectionTests(TestCase):
         quotation = create_commercial_quotation_from_projection(
             opportunity=self.opportunity,
             actor=self.advisor,
+            sale_mode=CommercialQuotation.SaleMode.POINT_OF_SALE,
+            service_date=date(2027, 1, 15),
         )
 
         with self.assertRaisesMessage(
@@ -247,6 +250,8 @@ class CRMQuotationFromProjectionTests(TestCase):
         quotation = create_commercial_quotation_from_projection(
             opportunity=self.opportunity,
             actor=self.admin,
+            sale_mode=CommercialQuotation.SaleMode.POINT_OF_SALE,
+            service_date=date(2027, 1, 15),
             item_adjustments=[
                 {
                     "projection_item": self.projection_item,
@@ -316,6 +321,8 @@ class CRMQuotationFromProjectionTests(TestCase):
         quotation = create_commercial_quotation_from_projection(
             opportunity=self.opportunity,
             actor=self.admin,
+            sale_mode=CommercialQuotation.SaleMode.POINT_OF_SALE,
+            service_date=date(2027, 1, 15),
             item_adjustments=[
                 {
                     "projection_item": self.projection_item,
@@ -602,6 +609,8 @@ class CRMQuotationFromProjectionTests(TestCase):
         return create_commercial_quotation_from_projection(
             opportunity=self.opportunity,
             actor=self.admin,
+            sale_mode=CommercialQuotation.SaleMode.POINT_OF_SALE,
+            service_date=date(2027, 1, 15),
             item_adjustments=[
                 {
                     "projection_item": self.projection_item,
@@ -609,6 +618,95 @@ class CRMQuotationFromProjectionTests(TestCase):
                 }
             ],
         )
+
+    def test_send_requires_sale_mode_and_service_date(self):
+        quotation = create_commercial_quotation_from_projection(
+            opportunity=self.opportunity,
+            actor=self.admin,
+            item_adjustments=[
+                {
+                    "projection_item": self.projection_item,
+                    "supplier_discount_percent": Decimal("40.00"),
+                }
+            ],
+        )
+
+        with self.assertRaisesMessage(
+            CommercialQuotationError,
+            "modalidad de venta",
+        ):
+            send_commercial_quotation(
+                quotation=quotation,
+                actor=self.advisor,
+            )
+
+    def test_fair_requires_start_and_end_time_before_send(self):
+        quotation = create_commercial_quotation_from_projection(
+            opportunity=self.opportunity,
+            actor=self.admin,
+            sale_mode=CommercialQuotation.SaleMode.FAIR,
+            service_date=date(2027, 1, 18),
+            fair_start_time=time(15, 0),
+            item_adjustments=[
+                {
+                    "projection_item": self.projection_item,
+                    "supplier_discount_percent": Decimal("40.00"),
+                }
+            ],
+        )
+
+        with self.assertRaisesMessage(
+            CommercialQuotationError,
+            "hora de inicio y la hora de fin",
+        ):
+            send_commercial_quotation(
+                quotation=quotation,
+                actor=self.advisor,
+            )
+
+    def test_fair_end_time_must_be_after_start_time(self):
+        with self.assertRaisesMessage(
+            CommercialQuotationError,
+            "hora de fin de la feria",
+        ):
+            create_commercial_quotation_from_projection(
+                opportunity=self.opportunity,
+                actor=self.admin,
+                sale_mode=CommercialQuotation.SaleMode.FAIR,
+                service_date=date(2027, 1, 18),
+                fair_start_time=time(18, 0),
+                fair_end_time=time(15, 0),
+                item_adjustments=[
+                    {
+                        "projection_item": self.projection_item,
+                        "supplier_discount_percent": Decimal("40.00"),
+                    }
+                ],
+            )
+
+    def test_non_fair_mode_clears_fair_hours(self):
+        quotation = create_commercial_quotation_from_projection(
+            opportunity=self.opportunity,
+            actor=self.admin,
+            sale_mode=CommercialQuotation.SaleMode.CONSIGNMENT,
+            service_date=date(2027, 1, 20),
+            fair_start_time=time(8, 0),
+            fair_end_time=time(13, 0),
+            item_adjustments=[
+                {
+                    "projection_item": self.projection_item,
+                    "supplier_discount_percent": Decimal("40.00"),
+                }
+            ],
+        )
+
+        self.assertEqual(
+            quotation.sale_mode,
+            CommercialQuotation.SaleMode.CONSIGNMENT,
+        )
+        self.assertEqual(quotation.service_date, date(2027, 1, 20))
+        self.assertIsNone(quotation.fair_start_time)
+        self.assertIsNone(quotation.fair_end_time)
 
     def test_sending_twice_is_idempotent(self):
         quotation = self._create_ready_quotation()
