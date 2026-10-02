@@ -1725,6 +1725,10 @@ class CommercialQuotationReopenSerializer(serializers.Serializer):
 
 class AdoptionItemSerializer(serializers.ModelSerializer):
     product = serializers.SerializerMethodField()
+    product_code_snapshot = serializers.CharField(
+        source="quotation_item.product_code_snapshot",
+        read_only=True,
+    )
 
     class Meta:
         model = AdoptionItem
@@ -1732,6 +1736,7 @@ class AdoptionItemSerializer(serializers.ModelSerializer):
             "id",
             "product",
             "product_name_snapshot",
+            "product_code_snapshot",
             "provider_name_snapshot",
             "level_name_snapshot",
             "grade_name_snapshot",
