@@ -195,6 +195,7 @@ class CRMQuotationFromProjectionTests(TestCase):
         self.assertEqual(item.quantity, 20)
         self.assertEqual(item.pvp, Decimal("100.00"))
         self.assertEqual(item.supplier_cost, Decimal("60.00"))
+        self.assertIsNone(item.supplier_discount_percent)
         self.assertEqual(item.school_discount_percent, Decimal("20.00"))
         self.assertEqual(item.school_price, Decimal("80.00"))
         self.assertEqual(item.parent_price, Decimal("100.00"))
@@ -205,25 +206,38 @@ class CRMQuotationFromProjectionTests(TestCase):
         )
         self.assertEqual(
             item.commercial_margin_unit,
-            Decimal("20.00"),
+            Decimal("0.00"),
         )
         self.assertEqual(
             item.commercial_margin_total,
-            Decimal("400.00"),
+            Decimal("0.00"),
+        )
+        self.assertEqual(
+            item.commercial_margin_percent,
+            Decimal("0.00"),
         )
         self.assertEqual(
             item.profitability_band,
-            item.ProfitabilityBand.AMBER,
+            item.ProfitabilityBand.UNCLASSIFIED,
         )
-        self.assertEqual(
-            item.max_green_discount_percent,
-            Decimal("19.99"),
-        )
-        self.assertEqual(
-            item.green_discount_headroom_points,
-            Decimal("-0.01"),
-        )
+        self.assertIsNone(item.max_green_discount_percent)
+        self.assertIsNone(item.green_discount_headroom_points)
         self.assertFalse(item.uses_reference_price)
+
+    def test_cannot_send_without_editorial_discount(self):
+        quotation = create_commercial_quotation_from_projection(
+            opportunity=self.opportunity,
+            actor=self.advisor,
+        )
+
+        with self.assertRaisesMessage(
+            CommercialQuotationError,
+            "descuento editorial",
+        ):
+            send_commercial_quotation(
+                quotation=quotation,
+                actor=self.advisor,
+            )
 
     def test_discount_over_standard_requires_approval_before_send(self):
         quotation = create_commercial_quotation_from_projection(
