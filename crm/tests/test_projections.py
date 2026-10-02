@@ -570,6 +570,42 @@ class CRMCommercialProjectionTests(TestCase):
             {plan_product.id},
         )
 
+    def test_projection_products_api_shows_classified_product_without_price(self):
+        product_without_price = Product.objects.create(
+            provider=self.provider,
+            name="Texto escolar pendiente de precio",
+            level=self.level,
+            grade=self.grade,
+            area=self.area,
+            commercial_line=Product.CommercialLine.SCHOOL_TEXT,
+            is_active=True,
+        )
+
+        self.client.force_authenticate(user=self.advisor)
+
+        response = self.client.get(
+            reverse(
+                "crm:opportunity-projection-products",
+                args=[self.opportunity.id],
+            ),
+            {
+                "service": self.service.id,
+                "grade": self.grade.id,
+                "commercial_line": "school_text",
+                "product_search": "pendiente de precio",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        result = next(
+            item
+            for item in response.data["results"]
+            if item["id"] == product_without_price.id
+        )
+        self.assertFalse(result["price_available"])
+        self.assertIsNone(result["unit_price"])
+        self.assertTrue(result["price_message"])
+
     def test_projection_products_api_does_not_infer_plan_lector_at_runtime(self):
         plan_area = Area.objects.create(
             name="Plan lector sin clasificar",
