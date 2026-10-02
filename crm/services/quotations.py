@@ -102,6 +102,87 @@ STANDARD_SCHOOL_DISCOUNT = Decimal("20.00")
 MONEY_QUANTUM = Decimal("0.01")
 
 
+def _normalize_sale_schedule(
+    *,
+    sale_mode="",
+    service_date=None,
+    fair_start_time=None,
+    fair_end_time=None,
+):
+    mode = sale_mode or ""
+    valid_modes = {
+        value
+        for value, _label in CommercialQuotation.SaleMode.choices
+    }
+
+    if mode and mode not in valid_modes:
+        raise CommercialQuotationError(
+            "Selecciona una modalidad de venta válida."
+        )
+
+    if not mode:
+        return "", None, None, None
+
+    if mode != CommercialQuotation.SaleMode.FAIR:
+        return mode, service_date, None, None
+
+    if (
+        fair_start_time is not None
+        and fair_end_time is not None
+        and fair_end_time <= fair_start_time
+    ):
+        raise CommercialQuotationError(
+            "La hora de fin de la feria debe ser posterior a la hora de inicio."
+        )
+
+    return (
+        mode,
+        service_date,
+        fair_start_time,
+        fair_end_time,
+    )
+
+
+def _validate_sale_schedule_for_send(quotation):
+    if not quotation.sale_mode:
+        raise CommercialQuotationError(
+            "Selecciona la modalidad de venta antes de enviar la cotización."
+        )
+
+    if quotation.service_date is None:
+        if quotation.sale_mode == CommercialQuotation.SaleMode.FAIR:
+            message = "Registra la fecha de la feria antes de enviar la cotización."
+        elif quotation.sale_mode == CommercialQuotation.SaleMode.CONSIGNMENT:
+            message = (
+                "Registra la fecha de entrega en consignación antes de "
+                "enviar la cotización."
+            )
+        else:
+            message = (
+                "Registra la fecha de abastecimiento antes de enviar "
+                "la cotización."
+            )
+
+        raise CommercialQuotationError(message)
+
+    if quotation.sale_mode == CommercialQuotation.SaleMode.FAIR:
+        if (
+            quotation.fair_start_time is None
+            or quotation.fair_end_time is None
+        ):
+            raise CommercialQuotationError(
+                (
+                    "Registra la hora de inicio y la hora de fin de la "
+                    "feria antes de enviar la cotización."
+                )
+            )
+
+        if quotation.fair_end_time <= quotation.fair_start_time:
+            raise CommercialQuotationError(
+                "La hora de fin de la feria debe ser posterior a la hora de inicio."
+            )
+
+
 def _money(value):
     return value.quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
 
@@ -644,6 +725,10 @@ def create_commercial_quotation_from_projection(
     actor,
     item_adjustments=None,
     notes="",
+    sale_mode="",
+    service_date=None,
+    fair_start_time=None,
+    fair_end_time=None,
 ):
     locked_opportunity = (
         Opportunity.objects
@@ -840,6 +925,18 @@ def create_commercial_quotation_from_projection(
         or 0
     )
 
+    (
+        sale_mode,
+        service_date,
+        fair_start_time,
+        fair_end_time,
+    ) = _normalize_sale_schedule(
+        sale_mode=sale_mode,
+        service_date=service_date,
+        fair_start_time=fair_start_time,
+        fair_end_time=fair_end_time,
+    )
+
     quotation = CommercialQuotation(
         opportunity=locked_opportunity,
         source_projection=projection,
@@ -849,6 +946,10 @@ def create_commercial_quotation_from_projection(
         campaign_name_snapshot=locked_opportunity.campaign.name,
         **_quotation_party_snapshot(locked_opportunity),
         commercial_line=projection.commercial_line,
+        sale_mode=sale_mode,
+        service_date=service_date,
+        fair_start_time=fair_start_time,
+        fair_end_time=fair_end_time,
         notes=(notes or "").strip(),
         requires_discount_approval=requires_approval,
         discount_approval_status=(
@@ -920,6 +1021,10 @@ def update_commercial_quotation_from_projection(
     actor,
     item_adjustments=None,
     notes="",
+    sale_mode="",
+    service_date=None,
+    fair_start_time=None,
+    fair_end_time=None,
 ):
     locked_quotation = (
         CommercialQuotation.objects
@@ -1128,6 +1233,18 @@ def update_commercial_quotation_from_projection(
             }
         )
 
+    (
+        sale_mode,
+        service_date,
+        fair_start_time,
+        fair_end_time,
+    ) = _normalize_sale_schedule(
+        sale_mode=sale_mode,
+        service_date=service_date,
+        fair_start_time=fair_start_time,
+        fair_end_time=fair_end_time,
+    )
+
     locked_quotation.items.all().delete()
 
     for prepared in prepared_items:
@@ -1181,6 +1298,10 @@ def update_commercial_quotation_from_projection(
 
     locked_quotation.notes = (notes or "").strip()
     locked_quotation.commercial_line = projection.commercial_line
+    locked_quotation.sale_mode = sale_mode
+    locked_quotation.service_date = service_date
+    locked_quotation.fair_start_time = fair_start_time
+    locked_quotation.fair_end_time = fair_end_time
     locked_quotation.requires_discount_approval = requires_approval
     locked_quotation.discount_approval_status = (
         CommercialQuotation.DiscountApprovalStatus.PENDING
@@ -1195,6 +1316,10 @@ def update_commercial_quotation_from_projection(
         update_fields=[
             "notes",
             "commercial_line",
+            "sale_mode",
+            "service_date",
+            "fair_start_time",
+            "fair_end_time",
             "requires_discount_approval",
             "discount_approval_status",
             "discount_approved_at",
@@ -1256,6 +1381,10 @@ def create_commercial_quotation(
     actor,
     items,
     notes="",
+    sale_mode="",
+    service_date=None,
+    fair_start_time=None,
+    fair_end_time=None,
 ):
     locked_opportunity = (
         Opportunity.objects
@@ -1304,6 +1433,18 @@ def create_commercial_quotation(
         else OTHER
     )
 
+    (
+        sale_mode,
+        service_date,
+        fair_start_time,
+        fair_end_time,
+    ) = _normalize_sale_schedule(
+        sale_mode=sale_mode,
+        service_date=service_date,
+        fair_start_time=fair_start_time,
+        fair_end_time=fair_end_time,
+    )
+
     quotation = CommercialQuotation(
         opportunity=locked_opportunity,
         version=current_version + 1,
@@ -1312,6 +1453,10 @@ def create_commercial_quotation(
         campaign_name_snapshot=locked_opportunity.campaign.name,
         **_quotation_party_snapshot(locked_opportunity),
         commercial_line=quotation_line,
+        sale_mode=sale_mode,
+        service_date=service_date,
+        fair_start_time=fair_start_time,
+        fair_end_time=fair_end_time,
         notes=(notes or "").strip(),
         created_by=actor,
     )
@@ -1395,6 +1540,8 @@ def send_commercial_quotation(*, quotation, actor):
         raise CommercialQuotationError(
             "No se puede enviar una cotización sin productos."
         )
+
+    _validate_sale_schedule_for_send(locked_quotation)
 
     if locked_quotation.items.filter(
         supplier_discount_percent__isnull=True,
