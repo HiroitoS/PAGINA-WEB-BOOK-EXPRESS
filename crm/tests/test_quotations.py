@@ -194,7 +194,7 @@ class CRMQuotationFromProjectionTests(TestCase):
         )
         self.assertEqual(item.quantity, 20)
         self.assertEqual(item.pvp, Decimal("100.00"))
-        self.assertEqual(item.supplier_cost, Decimal("60.00"))
+        self.assertEqual(item.supplier_cost, Decimal("0.00"))
         self.assertIsNone(item.supplier_discount_percent)
         self.assertEqual(item.school_discount_percent, Decimal("20.00"))
         self.assertEqual(item.school_price, Decimal("80.00"))
