@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, time, timedelta
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
@@ -171,6 +171,14 @@ class CRMAdoptionFlowTests(TestCase):
             }
         ]
 
+    def quotation_schedule(self):
+        return {
+            "sale_mode": CommercialQuotation.SaleMode.FAIR,
+            "service_date": date(2027, 1, 18),
+            "fair_start_time": time(15, 0),
+            "fair_end_time": time(18, 0),
+        }
+
     def define_editorial_condition(self, quotation):
         """
         Los tests de adopción usan el constructor histórico de cotizaciones.
@@ -192,12 +200,14 @@ class CRMAdoptionFlowTests(TestCase):
             opportunity=self.opportunity,
             actor=self.advisor,
             items=self.quotation_items(),
+            **self.quotation_schedule(),
             notes="Primera propuesta.",
         )
         second = create_commercial_quotation(
             opportunity=self.opportunity,
             actor=self.advisor,
             items=self.quotation_items(),
+            **self.quotation_schedule(),
             notes="Segunda propuesta.",
         )
 
@@ -232,6 +242,7 @@ class CRMAdoptionFlowTests(TestCase):
             opportunity=self.opportunity,
             actor=self.advisor,
             items=self.quotation_items(),
+            **self.quotation_schedule(),
         )
 
         quotation = self.define_editorial_condition(quotation)
@@ -262,6 +273,7 @@ class CRMAdoptionFlowTests(TestCase):
             opportunity=self.opportunity,
             actor=self.advisor,
             items=self.quotation_items(),
+            **self.quotation_schedule(),
         )
         quotation = self.define_editorial_condition(quotation)
         quotation = send_commercial_quotation(
@@ -314,6 +326,21 @@ class CRMAdoptionFlowTests(TestCase):
             adoption.advisor_name_snapshot,
             "Asesor Book Express",
         )
+        self.assertEqual(
+            adoption.sale_mode,
+            CommercialQuotation.SaleMode.FAIR,
+        )
+        self.assertEqual(adoption.service_date, date(2027, 1, 18))
+        self.assertEqual(adoption.fair_start_time, time(15, 0))
+        self.assertEqual(adoption.fair_end_time, time(18, 0))
+        self.assertEqual(
+            adoption.authorized_contact_position_snapshot,
+            self.contact.position,
+        )
+        self.assertEqual(
+            adoption.authorized_contact_phone_snapshot,
+            self.contact.whatsapp or self.contact.phone,
+        )
         self.assertTrue(adoption.is_current)
 
         adoption_item = adoption.items.get()
@@ -345,6 +372,7 @@ class CRMAdoptionFlowTests(TestCase):
             opportunity=self.opportunity,
             actor=self.advisor,
             items=self.quotation_items(),
+            **self.quotation_schedule(),
         )
         quotation = self.define_editorial_condition(quotation)
         quotation = send_commercial_quotation(
@@ -386,6 +414,7 @@ class CRMAdoptionFlowTests(TestCase):
             opportunity=self.opportunity,
             actor=self.advisor,
             items=self.quotation_items(),
+            **self.quotation_schedule(),
         )
         quotation = self.define_editorial_condition(quotation)
         quotation = send_commercial_quotation(
