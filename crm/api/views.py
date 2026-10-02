@@ -1978,6 +1978,9 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                 service_date=serializer.validated_data.get(
                     "service_date"
                 ),
+                service_end_date=serializer.validated_data.get(
+                    "service_end_date"
+                ),
                 fair_start_time=serializer.validated_data.get(
                     "fair_start_time"
                 ),
@@ -2058,6 +2061,9 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                 sale_mode=serializer.validated_data.get("sale_mode", ""),
                 service_date=serializer.validated_data.get(
                     "service_date"
+                ),
+                service_end_date=serializer.validated_data.get(
+                    "service_end_date"
                 ),
                 fair_start_time=serializer.validated_data.get(
                     "fair_start_time"
@@ -2147,6 +2153,10 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                 service_date=serializer.validated_data.get(
                     "service_date",
                     quotation.service_date,
+                ),
+                service_end_date=serializer.validated_data.get(
+                    "service_end_date",
+                    quotation.service_end_date,
                 ),
                 fair_start_time=serializer.validated_data.get(
                     "fair_start_time",
