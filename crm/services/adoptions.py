@@ -184,6 +184,9 @@ def confirm_adoption(
             quantity=quotation_item.quantity,
             pvp=quotation_item.pvp,
             supplier_cost=quotation_item.supplier_cost,
+            supplier_discount_percent=(
+                quotation_item.supplier_discount_percent
+            ),
             school_price=quotation_item.school_price,
             parent_price=quotation_item.parent_price,
             school_commission=quotation_item.school_commission,
