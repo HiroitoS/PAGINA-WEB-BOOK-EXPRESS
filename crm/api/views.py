@@ -464,7 +464,11 @@ class SchoolViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         queryset = (
             visible_schools_queryset(self.request.user)
-            .select_related("team", "owner")
+            .select_related(
+                "team",
+                "owner",
+                "owner__book_express_profile",
+            )
             .prefetch_related(
                 "levels",
                 "educational_services__level",
@@ -1391,6 +1395,7 @@ class OpportunityViewSet(viewsets.ModelViewSet):
                 "primary_contact",
                 "team",
                 "owner",
+                "owner__book_express_profile",
                 "created_by",
                 "closed_by",
             )
