@@ -228,11 +228,12 @@ class CRMQuotationFromProjectionTests(TestCase):
     def test_discount_over_standard_requires_approval_before_send(self):
         quotation = create_commercial_quotation_from_projection(
             opportunity=self.opportunity,
-            actor=self.advisor,
+            actor=self.admin,
             item_adjustments=[
                 {
                     "projection_item": self.projection_item,
                     "school_discount_percent": Decimal("25.00"),
+                    "supplier_discount_percent": Decimal("40.00"),
                 }
             ],
         )
@@ -252,7 +253,7 @@ class CRMQuotationFromProjectionTests(TestCase):
         ):
             send_commercial_quotation(
                 quotation=quotation,
-                actor=self.advisor,
+                actor=self.admin,
             )
 
         approved = approve_commercial_quotation_discount(
@@ -296,14 +297,24 @@ class CRMQuotationFromProjectionTests(TestCase):
 
         quotation = create_commercial_quotation_from_projection(
             opportunity=self.opportunity,
-            actor=self.advisor,
+            actor=self.admin,
+            item_adjustments=[
+                {
+                    "projection_item": self.projection_item,
+                    "supplier_discount_percent": Decimal("40.00"),
+                }
+            ],
         )
 
         item = quotation.items.get()
 
         self.assertTrue(item.uses_reference_price)
         self.assertEqual(item.price_year_snapshot, 2026)
-        self.assertEqual(item.supplier_cost, Decimal("55.00"))
+        self.assertEqual(
+            item.supplier_discount_percent,
+            Decimal("40.00"),
+        )
+        self.assertEqual(item.supplier_cost, Decimal("54.00"))
 
         with self.assertRaisesMessage(
             CommercialQuotationError,
@@ -376,6 +387,7 @@ class CRMQuotationFromProjectionTests(TestCase):
                 {
                     "projection_item": self.projection_item,
                     "school_discount_percent": Decimal("25.00"),
+                    "supplier_discount_percent": Decimal("40.00"),
                     "parent_price": Decimal("95.00"),
                     "school_commission": Decimal("5.00"),
                 }
@@ -442,6 +454,7 @@ class CRMQuotationFromProjectionTests(TestCase):
             item_adjustments=[
                 {
                     "projection_item": self.projection_item,
+                    "supplier_discount_percent": Decimal("40.00"),
                     "commission_mode": "total",
                     "commission_amount": Decimal("100.00"),
                 }
@@ -496,6 +509,7 @@ class CRMQuotationFromProjectionTests(TestCase):
             item_adjustments=[
                 {
                     "projection_item": self.projection_item,
+                    "supplier_discount_percent": Decimal("26.00"),
                     "reading_month": 4,
                 }
             ],
@@ -562,11 +576,20 @@ class CRMQuotationFromProjectionTests(TestCase):
         item = quotation.items.get()
         self.assertEqual(item.quantity, 20)
 
-    def test_sending_twice_is_idempotent(self):
-        quotation = create_commercial_quotation_from_projection(
+    def _create_ready_quotation(self):
+        return create_commercial_quotation_from_projection(
             opportunity=self.opportunity,
-            actor=self.advisor,
+            actor=self.admin,
+            item_adjustments=[
+                {
+                    "projection_item": self.projection_item,
+                    "supplier_discount_percent": Decimal("40.00"),
+                }
+            ],
         )
+
+    def test_sending_twice_is_idempotent(self):
+        quotation = self._create_ready_quotation()
 
         first = send_commercial_quotation(
             quotation=quotation,
@@ -594,10 +617,7 @@ class CRMQuotationFromProjectionTests(TestCase):
         )
 
     def test_acceptance_keeps_opportunity_in_quotation_stage(self):
-        quotation = create_commercial_quotation_from_projection(
-            opportunity=self.opportunity,
-            actor=self.advisor,
-        )
+        quotation = self._create_ready_quotation()
         sent = send_commercial_quotation(
             quotation=quotation,
             actor=self.advisor,
@@ -635,10 +655,7 @@ class CRMQuotationFromProjectionTests(TestCase):
         )
 
     def test_accepted_quotation_can_reopen_negotiation_before_adoption(self):
-        quotation = create_commercial_quotation_from_projection(
-            opportunity=self.opportunity,
-            actor=self.advisor,
-        )
+        quotation = self._create_ready_quotation()
         quotation = send_commercial_quotation(
             quotation=quotation,
             actor=self.advisor,
@@ -687,10 +704,7 @@ class CRMQuotationFromProjectionTests(TestCase):
         )
 
     def test_reopen_negotiation_requires_reason(self):
-        quotation = create_commercial_quotation_from_projection(
-            opportunity=self.opportunity,
-            actor=self.advisor,
-        )
+        quotation = self._create_ready_quotation()
         quotation = send_commercial_quotation(
             quotation=quotation,
             actor=self.advisor,
@@ -711,10 +725,7 @@ class CRMQuotationFromProjectionTests(TestCase):
             )
 
     def test_sent_quotation_cannot_be_edited(self):
-        quotation = create_commercial_quotation_from_projection(
-            opportunity=self.opportunity,
-            actor=self.advisor,
-        )
+        quotation = self._create_ready_quotation()
         sent = send_commercial_quotation(
             quotation=quotation,
             actor=self.advisor,
@@ -735,20 +746,24 @@ class CRMQuotationFromProjectionTests(TestCase):
                 ],
             )
 
-    def test_supervisor_can_override_supplier_cost_in_draft(self):
+    def test_supervisor_supplier_discount_calculates_supplier_cost(self):
         quotation = create_commercial_quotation_from_projection(
             opportunity=self.opportunity,
             actor=self.admin,
             item_adjustments=[
                 {
                     "projection_item": self.projection_item,
-                    "supplier_cost": Decimal("70.00"),
+                    "supplier_discount_percent": Decimal("30.00"),
                 }
             ],
         )
 
         item = quotation.items.get()
 
+        self.assertEqual(
+            item.supplier_discount_percent,
+            Decimal("30.00"),
+        )
         self.assertEqual(item.supplier_cost, Decimal("70.00"))
         self.assertEqual(item.school_price, Decimal("80.00"))
         self.assertEqual(item.commercial_margin_unit, Decimal("10.00"))
@@ -757,7 +772,7 @@ class CRMQuotationFromProjectionTests(TestCase):
             item.ProfitabilityBand.RED,
         )
 
-    def test_advisor_cannot_override_supplier_cost(self):
+    def test_advisor_cannot_register_supplier_discount(self):
         with self.assertRaisesMessage(
             CommercialQuotationError,
             "Solo supervisión comercial",
@@ -768,7 +783,7 @@ class CRMQuotationFromProjectionTests(TestCase):
                 item_adjustments=[
                     {
                         "projection_item": self.projection_item,
-                        "supplier_cost": Decimal("70.00"),
+                        "supplier_discount_percent": Decimal("30.00"),
                     }
                 ],
             )
