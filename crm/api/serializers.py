@@ -57,13 +57,31 @@ def _request_can_view_quotation_financials(serializer):
 
 class UserSummarySerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
+    phone = serializers.SerializerMethodField()
+    whatsapp = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ("id", "username", "first_name", "last_name", "full_name")
+        fields = (
+            "id",
+            "username",
+            "first_name",
+            "last_name",
+            "full_name",
+            "phone",
+            "whatsapp",
+        )
 
     def get_full_name(self, obj):
         return obj.get_full_name() or obj.username
+
+    def get_phone(self, obj):
+        profile = getattr(obj, "book_express_profile", None)
+        return getattr(profile, "phone", "") if profile else ""
+
+    def get_whatsapp(self, obj):
+        profile = getattr(obj, "book_express_profile", None)
+        return getattr(profile, "whatsapp", "") if profile else ""
 
 
 class LevelSummarySerializer(serializers.ModelSerializer):
