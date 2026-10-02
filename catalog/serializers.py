@@ -281,6 +281,13 @@ class ProductCatalogReadSerializer(serializers.ModelSerializer):
 
 
 class ProductAdminSerializer(serializers.ModelSerializer):
+    commercial_line = serializers.ChoiceField(
+        choices=(
+            Product.CommercialLine.SCHOOL_TEXT,
+            Product.CommercialLine.READING_PLAN,
+        ),
+        required=True,
+    )
     provider_name = serializers.CharField(source="provider.name", read_only=True)
     series_name = serializers.CharField(source="series.name", read_only=True)
     level_name = serializers.CharField(source="level.name", read_only=True)
