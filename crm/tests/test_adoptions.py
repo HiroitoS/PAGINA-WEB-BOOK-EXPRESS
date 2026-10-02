@@ -171,6 +171,22 @@ class CRMAdoptionFlowTests(TestCase):
             }
         ]
 
+    def define_editorial_condition(self, quotation):
+        """
+        Los tests de adopción usan el constructor histórico de cotizaciones.
+        Desde la regla comercial actual, una cotización no puede enviarse
+        mientras supervisión no haya definido el descuento editorial.
+        """
+        item = quotation.items.get()
+        item.supplier_discount_percent = Decimal("41.67")
+        item.save(
+            update_fields=[
+                "supplier_discount_percent",
+                "updated_at",
+            ]
+        )
+        return quotation
+
     def test_quotation_versions_keep_product_snapshots(self):
         first = create_commercial_quotation(
             opportunity=self.opportunity,
@@ -218,6 +234,7 @@ class CRMAdoptionFlowTests(TestCase):
             items=self.quotation_items(),
         )
 
+        quotation = self.define_editorial_condition(quotation)
         sent = send_commercial_quotation(
             quotation=quotation,
             actor=self.advisor,
@@ -246,6 +263,7 @@ class CRMAdoptionFlowTests(TestCase):
             actor=self.advisor,
             items=self.quotation_items(),
         )
+        quotation = self.define_editorial_condition(quotation)
         quotation = send_commercial_quotation(
             quotation=quotation,
             actor=self.advisor,
@@ -328,6 +346,7 @@ class CRMAdoptionFlowTests(TestCase):
             actor=self.advisor,
             items=self.quotation_items(),
         )
+        quotation = self.define_editorial_condition(quotation)
         quotation = send_commercial_quotation(
             quotation=quotation,
             actor=self.advisor,
@@ -368,6 +387,7 @@ class CRMAdoptionFlowTests(TestCase):
             actor=self.advisor,
             items=self.quotation_items(),
         )
+        quotation = self.define_editorial_condition(quotation)
         quotation = send_commercial_quotation(
             quotation=quotation,
             actor=self.advisor,
