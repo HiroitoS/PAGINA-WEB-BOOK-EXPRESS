@@ -227,9 +227,33 @@ class CommercialTeamViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         user = self.request.user
         queryset = CommercialTeam.objects.filter(is_active=True)
+
         if usuario_es_administrador(user):
             return queryset.order_by("name")
-        return queryset.filter(memberships__user=user, memberships__is_active=True).distinct().order_by("name")
+
+        if usuario_puede_asignar_colegios(user):
+            return (
+                queryset
+                .filter(
+                    memberships__user=user,
+                    memberships__is_active=True,
+                    memberships__role=(
+                        CommercialTeamMembership.Role.SUPERVISOR
+                    ),
+                )
+                .distinct()
+                .order_by("name")
+            )
+
+        return (
+            queryset
+            .filter(
+                memberships__user=user,
+                memberships__is_active=True,
+            )
+            .distinct()
+            .order_by("name")
+        )
 
 
 class SchoolContactViewSet(viewsets.ModelViewSet):
