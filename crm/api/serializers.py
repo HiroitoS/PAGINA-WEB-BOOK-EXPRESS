@@ -815,6 +815,65 @@ class SchoolWriteSerializer(serializers.ModelSerializer):
         )
 
 
+class SchoolAssignmentSerializer(serializers.Serializer):
+    school_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        allow_empty=False,
+        max_length=500,
+    )
+    team = serializers.PrimaryKeyRelatedField(
+        queryset=CommercialTeam.objects.filter(is_active=True),
+        allow_null=True,
+        required=True,
+    )
+    owner = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.filter(is_active=True),
+        allow_null=True,
+        required=True,
+    )
+
+    def validate_school_ids(self, value):
+        unique_ids = list(dict.fromkeys(value))
+
+        if len(unique_ids) != len(value):
+            raise serializers.ValidationError(
+                "Hay colegios repetidos en la selección."
+            )
+
+        return unique_ids
+
+    def validate(self, attrs):
+        team = attrs.get("team")
+        owner = attrs.get("owner")
+
+        if owner is not None and team is None:
+            raise serializers.ValidationError(
+                {
+                    "team": (
+                        "Selecciona un equipo comercial antes de elegir "
+                        "un asesor."
+                    )
+                }
+            )
+
+        if owner is not None and not CommercialTeamMembership.objects.filter(
+            team=team,
+            user=owner,
+            is_active=True,
+            role=CommercialTeamMembership.Role.ADVISOR,
+        ).exists():
+            raise serializers.ValidationError(
+                {
+                    "owner": (
+                        "El asesor seleccionado no pertenece al equipo "
+                        "comercial elegido."
+                    )
+                }
+            )
+
+        return attrs
+
+
 class OpportunityListSerializer(serializers.ModelSerializer):
     school = serializers.SerializerMethodField()
     campaign = serializers.SerializerMethodField()
