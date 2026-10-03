@@ -14,6 +14,7 @@ from .school import (
     SchoolContact,
     SchoolEducationalService,
 )
+from .school_import import SchoolImportBatch, SchoolImportRow
 from .school_intelligence import (
     InformationSource,
     MarketEditorial,
@@ -35,6 +36,8 @@ __all__ = [
     "School",
     "SchoolEducationalService",
     "SchoolContact",
+    "SchoolImportBatch",
+    "SchoolImportRow",
     "SchoolPopulationRecord",
     "SchoolPopulationDetail",
     "SchoolEditorialUsage",
