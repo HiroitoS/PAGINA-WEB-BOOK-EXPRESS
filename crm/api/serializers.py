@@ -433,9 +433,6 @@ class CommercialTeamWriteSerializer(serializers.ModelSerializer):
         for field, value in validated_data.items():
             setattr(instance, field, value)
 
-        if "name" in validated_data:
-            instance.code = self._unique_code(validated_data["name"])
-
         instance.save()
 
         if supervisor_users is not None:
