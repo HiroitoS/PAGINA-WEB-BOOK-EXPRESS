@@ -371,6 +371,10 @@ class SchoolEducationalService(TimeStampedModel):
                 name="crm_service_school_active_idx",
             ),
             models.Index(
+                fields=["campus", "is_active"],
+                name="crm_service_campus_active_idx",
+            ),
+            models.Index(
                 fields=["level", "is_active"],
                 name="crm_service_level_active_idx",
             ),
