@@ -809,6 +809,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
         department = self.request.query_params.get("department", "").strip()
         province = self.request.query_params.get("province", "").strip()
         district = self.request.query_params.get("district", "").strip()
+        assignment = self.request.query_params.get("assignment", "").strip()
         is_active = self.request.query_params.get("is_active")
         if search:
             queryset = queryset.filter(
@@ -831,6 +832,10 @@ class SchoolViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(province__iexact=province)
         if district:
             queryset = queryset.filter(district__iexact=district)
+        if assignment == "unassigned":
+            queryset = queryset.filter(owner__isnull=True)
+        elif assignment == "assigned":
+            queryset = queryset.filter(owner__isnull=False)
         if is_active == "true":
             queryset = queryset.filter(is_active=True)
         elif is_active == "false":
