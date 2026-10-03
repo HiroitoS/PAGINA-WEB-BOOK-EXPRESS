@@ -804,6 +804,29 @@ def create_school_import_preview(
                     ),
                 )
 
+        if (
+            not any(
+                entry["data"].get("institution_code")
+                for entry in entries
+            )
+            and len(
+                {
+                    entry["data"].get("campus_key")
+                    for entry in entries
+                }
+            ) > 1
+        ):
+            for entry in entries:
+                _append_warning(
+                    entry,
+                    (
+                        "Se encontraron varias ubicaciones para un "
+                        "colegio sin Código de institución. Se "
+                        "agruparán provisionalmente como sedes; revise "
+                        "que pertenezcan a la misma institución."
+                    ),
+                )
+
         dependencies = {
             _normalize_value(entry["data"].get("dependency"))
             for entry in entries
@@ -973,6 +996,7 @@ def _next_campus_sequence(school):
 
 def _find_matching_campus(school, data):
     target = _campus_signature(data)
+    empty_location = ("", "", "", "")
 
     for campus in school.campuses.all():
         current = (
@@ -985,6 +1009,24 @@ def _find_matching_campus(school, data):
         if current == target:
             return campus
 
+    if target != empty_location:
+        empty_main = (
+            school.campuses
+            .filter(is_main=True)
+            .order_by("sequence", "id")
+            .first()
+        )
+
+        if empty_main is not None:
+            current = (
+                _normalize_value(empty_main.address),
+                _normalize_value(empty_main.department),
+                _normalize_value(empty_main.province),
+                _normalize_value(empty_main.district),
+            )
+            if current == empty_location:
+                return empty_main
+
     return None
 
 
@@ -993,21 +1035,20 @@ def _campus_from_data(
     school,
     data,
     actor,
+    mark_main=False,
 ):
     campus = _find_matching_campus(school, data)
 
     if campus is None:
         sequence = _next_campus_sequence(school)
-        is_main = not school.campuses.filter(is_main=True).exists()
         campus = SchoolCampus(
             school=school,
             sequence=sequence,
-            name=(
-                "Sede principal"
-                if is_main
-                else f"Sede {sequence}"
+            name=f"Sede {sequence}",
+            is_main=(
+                mark_main
+                and not school.campuses.filter(is_main=True).exists()
             ),
-            is_main=is_main,
             created_by=actor,
         )
 
@@ -1029,6 +1070,14 @@ def _sync_school_main_location(school):
         .order_by("sequence", "id")
         .first()
     )
+
+    if main is None:
+        main = (
+            school.campuses
+            .filter(is_active=True)
+            .order_by("sequence", "id")
+            .first()
+        )
 
     if main is None:
         return
@@ -1243,12 +1292,20 @@ def confirm_school_import(*, batch_id, actor):
 
         imported_levels = []
 
+        has_existing_main = school.campuses.filter(
+            is_main=True
+        ).exists()
+        mark_single_campus_main = (
+            len(campus_rows) == 1 and not has_existing_main
+        )
+
         for campus_group in campus_rows.values():
             campus_group.sort(key=lambda item: item.row_number)
             campus = _campus_from_data(
                 school=school,
                 data=campus_group[0].data,
                 actor=actor,
+                mark_main=mark_single_campus_main,
             )
 
             for row in campus_group:
