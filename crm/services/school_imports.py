@@ -426,6 +426,12 @@ def create_school_import_preview(
             data=data,
         )
 
+    if not excel_rows:
+        return _preview_error_batch(
+            batch,
+            "El archivo no contiene instituciones para importar.",
+        )
+
     total_new = sum(
         1
         for action in school_actions.values()
@@ -622,8 +628,8 @@ def confirm_school_import(*, batch_id, actor):
             level = Level.objects.get(pk=data["level_id"])
             imported_levels.append(level)
 
-            service, _ = (
-                SchoolEducationalService.objects.update_or_create(
+            service, created = (
+                SchoolEducationalService.objects.get_or_create(
                     school=school,
                     level=level,
                     defaults={
@@ -632,17 +638,26 @@ def confirm_school_import(*, batch_id, actor):
                         ),
                         "modality": data.get("level_name", ""),
                         "is_active": True,
-                        "created_by": (
-                            actor
-                            if not SchoolEducationalService.objects.filter(
-                                school=school,
-                                level=level,
-                            ).exists()
-                            else None
-                        ),
+                        "created_by": actor,
                     },
                 )
             )
+
+            if not created:
+                service.modular_code = (
+                    data.get("modular_code") or None
+                )
+                service.modality = data.get("level_name", "")
+                service.is_active = True
+                service.full_clean()
+                service.save(
+                    update_fields=[
+                        "modular_code",
+                        "modality",
+                        "is_active",
+                        "updated_at",
+                    ]
+                )
 
             _upsert_population(
                 service=service,
