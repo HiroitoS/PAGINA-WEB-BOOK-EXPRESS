@@ -1,3 +1,4 @@
+from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Count, Prefetch, Q
 from django.utils import timezone
@@ -87,6 +88,7 @@ from .serializers import (
     CommercialQuotationReopenSerializer,
     CommercialQuotationSerializer,
     CommercialTeamDetailSerializer,
+    CommercialTeamWriteSerializer,
     OpportunityCreateSerializer,
     OpportunityDetailSerializer,
     OpportunityEventCreateSerializer,
@@ -112,6 +114,7 @@ from .serializers import (
     SchoolReminderCreateSerializer,
     SchoolTaskCreateSerializer,
     SchoolWriteSerializer,
+    UserSummarySerializer,
     WorkItemLinkSerializer,
     SchoolEditorialUsageSerializer,
     SchoolEditorialUsageWriteSerializer,
@@ -219,14 +222,79 @@ class PipelineViewSet(viewsets.ReadOnlyModelViewSet):
         return Pipeline.objects.filter(is_active=True).prefetch_related("stages").order_by("-is_default", "name")
 
 
-class CommercialTeamViewSet(viewsets.ReadOnlyModelViewSet):
+class CommercialTeamViewSet(viewsets.ModelViewSet):
     permission_classes = [EsUsuarioCRM]
     pagination_class = None
-    serializer_class = CommercialTeamDetailSerializer
+    http_method_names = [
+        "get",
+        "post",
+        "patch",
+        "head",
+        "options",
+    ]
+
+    def get_serializer_class(self):
+        if self.action in {
+            "create",
+            "partial_update",
+            "update",
+        }:
+            return CommercialTeamWriteSerializer
+
+        return CommercialTeamDetailSerializer
 
     def get_queryset(self):
         user = self.request.user
-        queryset = CommercialTeam.objects.filter(is_active=True)
+        include_inactive = (
+            self.request.query_params.get("include_inactive")
+            == "true"
+        )
+
+        queryset = (
+            CommercialTeam.objects
+            .all()
+            .prefetch_related(
+                "memberships__user",
+                "memberships__user__book_express_profile",
+            )
+            .annotate(
+                active_school_count=Count(
+                    "schools",
+                    filter=Q(schools__is_active=True),
+                    distinct=True,
+                ),
+                active_advisor_count=Count(
+                    "memberships",
+                    filter=Q(
+                        memberships__is_active=True,
+                        memberships__user__is_active=True,
+                        memberships__role=(
+                            CommercialTeamMembership.Role.ADVISOR
+                        ),
+                    ),
+                    distinct=True,
+                ),
+                active_supervisor_count=Count(
+                    "memberships",
+                    filter=Q(
+                        memberships__is_active=True,
+                        memberships__user__is_active=True,
+                        memberships__role=(
+                            CommercialTeamMembership.Role.SUPERVISOR
+                        ),
+                    ),
+                    distinct=True,
+                ),
+            )
+        )
+
+        can_manage = (
+            usuario_es_administrador(user)
+            or usuario_puede_asignar_colegios(user)
+        )
+
+        if not include_inactive or not can_manage:
+            queryset = queryset.filter(is_active=True)
 
         if usuario_es_administrador(user):
             return queryset.order_by("name")
@@ -253,6 +321,128 @@ class CommercialTeamViewSet(viewsets.ReadOnlyModelViewSet):
             )
             .distinct()
             .order_by("name")
+        )
+
+    def _ensure_can_manage_teams(self):
+        user = self.request.user
+        if (
+            usuario_es_administrador(user)
+            or usuario_puede_asignar_colegios(user)
+        ):
+            return
+
+        raise PermissionDenied(
+            "No tienes permiso para gestionar equipos comerciales."
+        )
+
+    def create(self, request, *args, **kwargs):
+        self._ensure_can_manage_teams()
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        if not usuario_es_administrador(request.user):
+            supervisors = serializer.validated_data.setdefault(
+                "_supervisor_users",
+                [],
+            )
+            if request.user not in supervisors:
+                supervisors.append(request.user)
+
+        with transaction.atomic():
+            team = serializer.save()
+
+        return Response(
+            CommercialTeamDetailSerializer(
+                team,
+                context={"request": request},
+            ).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    def partial_update(self, request, *args, **kwargs):
+        self._ensure_can_manage_teams()
+        team = self.get_object()
+
+        serializer = self.get_serializer(
+            team,
+            data=request.data,
+            partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+
+        if (
+            not usuario_es_administrador(request.user)
+            and "_supervisor_users" in serializer.validated_data
+        ):
+            supervisors = serializer.validated_data[
+                "_supervisor_users"
+            ]
+            if request.user not in supervisors:
+                supervisors.append(request.user)
+
+        with transaction.atomic():
+            team = serializer.save()
+
+        return Response(
+            CommercialTeamDetailSerializer(
+                team,
+                context={"request": request},
+            ).data
+        )
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="eligible-members",
+        url_name="eligible-members",
+    )
+    def eligible_members(self, request):
+        self._ensure_can_manage_teams()
+
+        User = get_user_model()
+        supervisors = []
+        advisors = []
+
+        for user in (
+            User.objects
+            .filter(is_active=True)
+            .select_related("book_express_profile")
+            .prefetch_related("groups", "user_permissions")
+            .order_by(
+                "first_name",
+                "last_name",
+                "username",
+            )
+        ):
+            can_supervise = (
+                usuario_es_administrador(user)
+                or usuario_puede_supervisar_crm(user)
+            )
+            can_advise = (
+                usuario_puede_gestionar_oportunidades_propias(user)
+            )
+
+            if can_supervise:
+                supervisors.append(user)
+
+            if can_advise and not can_supervise:
+                advisors.append(user)
+
+        serializer_context = {"request": request}
+        return Response(
+            {
+                "supervisors": UserSummarySerializer(
+                    supervisors,
+                    many=True,
+                    context=serializer_context,
+                ).data,
+                "advisors": UserSummarySerializer(
+                    advisors,
+                    many=True,
+                    context=serializer_context,
+                ).data,
+            }
         )
 
 
