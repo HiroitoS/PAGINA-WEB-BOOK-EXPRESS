@@ -33,6 +33,7 @@ class SchoolImportBatch(TimeStampedModel):
     total_schools = models.PositiveIntegerField(default=0)
     total_new = models.PositiveIntegerField(default=0)
     total_updated = models.PositiveIntegerField(default=0)
+    total_warnings = models.PositiveIntegerField(default=0)
     total_errors = models.PositiveIntegerField(default=0)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -95,10 +96,15 @@ class SchoolImportRow(TimeStampedModel):
         choices=Action.choices,
         verbose_name="Acción",
     )
+    warnings = models.JSONField(
+        default=list,
+        blank=True,
+        verbose_name="Advertencias",
+    )
     errors = models.JSONField(
         default=list,
         blank=True,
-        verbose_name="Observaciones",
+        verbose_name="Errores que requieren revisión",
     )
     data = models.JSONField(
         default=dict,
