@@ -16,7 +16,7 @@ class Migration(migrations.Migration):
                     ("pending", "Pendiente"),
                     ("validated", "Validado"),
                     ("imported", "Importado"),
-                    ("partial", "Importación parcial"),
+                    ("partial", "Importado con pendientes"),
                     ("error", "Revisión pendiente"),
                 ],
                 default="pending",
