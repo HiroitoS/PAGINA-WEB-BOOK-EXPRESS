@@ -1210,15 +1210,23 @@ def confirm_school_import(*, batch_id, actor):
         .get(pk=batch_id)
     )
 
-    if batch.status == SchoolImportBatch.Status.IMPORTED:
+    if batch.status in {
+        SchoolImportBatch.Status.IMPORTED,
+        SchoolImportBatch.Status.PARTIAL,
+    }:
         raise ValueError("Esta importación ya fue confirmada.")
 
-    if batch.total_errors > 0:
+    importable_schools = batch.total_new + batch.total_updated
+    if importable_schools <= 0:
         raise ValueError(
-            "Corrige los errores que requieren revisión antes de confirmar."
+            "No hay colegios listos para importar. "
+            "Revise primero los registros pendientes."
         )
 
-    if batch.status != SchoolImportBatch.Status.VALIDATED:
+    if batch.status not in {
+        SchoolImportBatch.Status.VALIDATED,
+        SchoolImportBatch.Status.ERROR,
+    }:
         raise ValueError(
             "La importación todavía no está lista para confirmar."
         )
@@ -1232,6 +1240,10 @@ def confirm_school_import(*, batch_id, actor):
 
     for rows in grouped_rows.values():
         rows.sort(key=lambda item: item.row_number)
+
+        if any(row.errors for row in rows):
+            continue
+
         import_rows = [
             row
             for row in rows
@@ -1340,7 +1352,11 @@ def confirm_school_import(*, batch_id, actor):
                 update_fields=["processed", "updated_at"]
             )
 
-    batch.status = SchoolImportBatch.Status.IMPORTED
+    batch.status = (
+        SchoolImportBatch.Status.PARTIAL
+        if batch.total_errors > 0
+        else SchoolImportBatch.Status.IMPORTED
+    )
     batch.save(
         update_fields=["status", "updated_at"]
     )
