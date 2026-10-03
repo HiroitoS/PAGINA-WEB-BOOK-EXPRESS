@@ -34,7 +34,10 @@ from crm.models import (
     SchoolPopulationDetail,
     MarketEditorial,
 )
-from crm.permissions import usuario_puede_supervisar_crm
+from crm.permissions import (
+    usuario_puede_gestionar_oportunidades_propias,
+    usuario_puede_supervisar_crm,
+)
 from crm.services.commercial_lines import green_margin_threshold
 from workspaces.models import CalendarEvent, Task, WorkspaceGroup
 
@@ -144,14 +147,312 @@ class CommercialTeamMemberSerializer(serializers.ModelSerializer):
 
 class CommercialTeamDetailSerializer(serializers.ModelSerializer):
     memberships = serializers.SerializerMethodField()
+    school_count = serializers.SerializerMethodField()
+    advisor_count = serializers.SerializerMethodField()
+    supervisor_count = serializers.SerializerMethodField()
 
     class Meta:
         model = CommercialTeam
-        fields = ("id", "code", "name", "description", "is_active", "memberships")
+        fields = (
+            "id",
+            "code",
+            "name",
+            "description",
+            "is_active",
+            "school_count",
+            "advisor_count",
+            "supervisor_count",
+            "memberships",
+        )
 
     def get_memberships(self, obj):
-        queryset = obj.memberships.filter(is_active=True, user__is_active=True).select_related("user")
+        queryset = (
+            obj.memberships
+            .filter(is_active=True, user__is_active=True)
+            .select_related("user", "user__book_express_profile")
+            .order_by("role", "user__first_name", "user__last_name", "user__username")
+        )
         return CommercialTeamMemberSerializer(queryset, many=True).data
+
+    def get_school_count(self, obj):
+        annotated = getattr(obj, "active_school_count", None)
+        if annotated is not None:
+            return annotated
+        return obj.schools.filter(is_active=True).count()
+
+    def get_advisor_count(self, obj):
+        annotated = getattr(obj, "active_advisor_count", None)
+        if annotated is not None:
+            return annotated
+        return obj.memberships.filter(
+            is_active=True,
+            user__is_active=True,
+            role=CommercialTeamMembership.Role.ADVISOR,
+        ).count()
+
+    def get_supervisor_count(self, obj):
+        annotated = getattr(obj, "active_supervisor_count", None)
+        if annotated is not None:
+            return annotated
+        return obj.memberships.filter(
+            is_active=True,
+            user__is_active=True,
+            role=CommercialTeamMembership.Role.SUPERVISOR,
+        ).count()
+
+
+class CommercialTeamWriteSerializer(serializers.ModelSerializer):
+    supervisor_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        required=False,
+        allow_empty=True,
+        write_only=True,
+    )
+    advisor_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        required=False,
+        allow_empty=True,
+        write_only=True,
+    )
+
+    class Meta:
+        model = CommercialTeam
+        fields = (
+            "name",
+            "description",
+            "is_active",
+            "supervisor_ids",
+            "advisor_ids",
+        )
+
+    def validate_name(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError(
+                "Ingresa un nombre para el equipo comercial."
+            )
+        return value
+
+    def _validate_unique_ids(self, field_name, values):
+        if len(values) != len(set(values)):
+            raise serializers.ValidationError(
+                {
+                    field_name: (
+                        "Hay usuarios repetidos en la selección."
+                    )
+                }
+            )
+
+    def validate(self, attrs):
+        supervisor_ids = attrs.get("supervisor_ids")
+        advisor_ids = attrs.get("advisor_ids")
+
+        if supervisor_ids is not None:
+            self._validate_unique_ids("supervisor_ids", supervisor_ids)
+
+        if advisor_ids is not None:
+            self._validate_unique_ids("advisor_ids", advisor_ids)
+
+        if supervisor_ids is not None and advisor_ids is not None:
+            overlap = set(supervisor_ids) & set(advisor_ids)
+            if overlap:
+                raise serializers.ValidationError(
+                    "Una persona no puede figurar como jefe y asesor del mismo equipo."
+                )
+
+        requested_ids = set(supervisor_ids or []) | set(advisor_ids or [])
+        if not requested_ids:
+            return attrs
+
+        users = {
+            user.id: user
+            for user in User.objects.filter(
+                id__in=requested_ids,
+                is_active=True,
+            )
+        }
+
+        missing_ids = requested_ids - set(users)
+        if missing_ids:
+            raise serializers.ValidationError(
+                "Uno o más usuarios seleccionados ya no están disponibles."
+            )
+
+        for user_id in supervisor_ids or []:
+            user = users[user_id]
+            if not (
+                usuario_es_administrador(user)
+                or usuario_puede_supervisar_crm(user)
+            ):
+                raise serializers.ValidationError(
+                    {
+                        "supervisor_ids": (
+                            f"{user.get_full_name() or user.username} "
+                            "no tiene permisos de supervisión comercial."
+                        )
+                    }
+                )
+
+        for user_id in advisor_ids or []:
+            user = users[user_id]
+            if not usuario_puede_gestionar_oportunidades_propias(user):
+                raise serializers.ValidationError(
+                    {
+                        "advisor_ids": (
+                            f"{user.get_full_name() or user.username} "
+                            "no tiene acceso como asesor comercial."
+                        )
+                    }
+                )
+
+        attrs["_supervisor_users"] = [
+            users[user_id]
+            for user_id in supervisor_ids or []
+        ]
+        attrs["_advisor_users"] = [
+            users[user_id]
+            for user_id in advisor_ids or []
+        ]
+        return attrs
+
+    def _unique_code(self, name):
+        base = slugify(name).replace("-", "_").upper()[:32] or "EQUIPO"
+        candidate = base
+        counter = 2
+
+        queryset = CommercialTeam.objects.all()
+        if self.instance is not None:
+            queryset = queryset.exclude(pk=self.instance.pk)
+
+        while queryset.filter(code=candidate).exists():
+            suffix = f"_{counter}"
+            candidate = f"{base[:40 - len(suffix)]}{suffix}"
+            counter += 1
+
+        return candidate
+
+    def _sync_role(self, team, role, users):
+        today = timezone.localdate()
+        selected_ids = {user.id for user in users}
+        request = self.context.get("request")
+        actor = getattr(request, "user", None)
+
+        stale = team.memberships.filter(
+            role=role,
+            is_active=True,
+        )
+        if selected_ids:
+            stale = stale.exclude(user_id__in=selected_ids)
+        stale.update(
+            is_active=False,
+            ended_on=today,
+        )
+
+        for user in users:
+            membership, created = (
+                CommercialTeamMembership.objects.get_or_create(
+                    team=team,
+                    user=user,
+                    defaults={
+                        "role": role,
+                        "is_active": True,
+                        "joined_on": today,
+                        "created_by": (
+                            actor
+                            if actor is not None
+                            and actor.is_authenticated
+                            else None
+                        ),
+                    },
+                )
+            )
+
+            membership.role = role
+            membership.is_active = True
+            membership.ended_on = None
+
+            if membership.joined_on is None:
+                membership.joined_on = today
+
+            update_fields = [
+                "role",
+                "is_active",
+                "ended_on",
+                "joined_on",
+                "updated_at",
+            ]
+
+            if (
+                not created
+                and membership.created_by_id is None
+                and actor is not None
+                and actor.is_authenticated
+            ):
+                membership.created_by = actor
+                update_fields.append("created_by")
+
+            membership.save(update_fields=update_fields)
+
+    def create(self, validated_data):
+        supervisor_users = validated_data.pop("_supervisor_users", [])
+        advisor_users = validated_data.pop("_advisor_users", [])
+        validated_data.pop("supervisor_ids", None)
+        validated_data.pop("advisor_ids", None)
+
+        request = self.context.get("request")
+        actor = getattr(request, "user", None)
+
+        team = CommercialTeam.objects.create(
+            code=self._unique_code(validated_data["name"]),
+            created_by=(
+                actor
+                if actor is not None and actor.is_authenticated
+                else None
+            ),
+            **validated_data,
+        )
+
+        self._sync_role(
+            team,
+            CommercialTeamMembership.Role.SUPERVISOR,
+            supervisor_users,
+        )
+        self._sync_role(
+            team,
+            CommercialTeamMembership.Role.ADVISOR,
+            advisor_users,
+        )
+        return team
+
+    def update(self, instance, validated_data):
+        supervisor_users = validated_data.pop("_supervisor_users", None)
+        advisor_users = validated_data.pop("_advisor_users", None)
+        validated_data.pop("supervisor_ids", None)
+        validated_data.pop("advisor_ids", None)
+
+        for field, value in validated_data.items():
+            setattr(instance, field, value)
+
+        if "name" in validated_data:
+            instance.code = self._unique_code(validated_data["name"])
+
+        instance.save()
+
+        if supervisor_users is not None:
+            self._sync_role(
+                instance,
+                CommercialTeamMembership.Role.SUPERVISOR,
+                supervisor_users,
+            )
+
+        if advisor_users is not None:
+            self._sync_role(
+                instance,
+                CommercialTeamMembership.Role.ADVISOR,
+                advisor_users,
+            )
+
+        return instance
 
 
 class SchoolContactSerializer(serializers.ModelSerializer):
