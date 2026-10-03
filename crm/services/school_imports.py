@@ -261,9 +261,12 @@ def create_school_import_preview(
     )
 
     try:
-        excel_rows = _read_rows(batch.file.path)
+        batch.file.open("rb")
+        excel_rows = _read_rows(batch.file)
     except Exception as error:
         return _preview_error_batch(batch, str(error))
+    finally:
+        batch.file.close()
 
     seen_school_level = set()
     seen_modular_codes = {}
