@@ -89,11 +89,14 @@ def _clean_text(value):
     return str(value).strip()
 
 
-def _clean_code(value):
+def _clean_code(value, width=None):
     text = _clean_text(value)
 
     if text.endswith(".0") and text[:-2].isdigit():
-        return text[:-2]
+        text = text[:-2]
+
+    if width and text.isdigit():
+        return text.zfill(width)
 
     return text
 
@@ -246,10 +249,12 @@ def _read_rows(file_path):
 
         data = {
             "institution_code": _clean_code(
-                _cell(row, columns, "institution_code")
+                _cell(row, columns, "institution_code"),
+                width=8,
             ),
             "modular_code": _clean_code(
-                _cell(row, columns, "modular_code")
+                _cell(row, columns, "modular_code"),
+                width=7,
             ),
             "school_name": _clean_text(
                 _cell(row, columns, "school_name")
