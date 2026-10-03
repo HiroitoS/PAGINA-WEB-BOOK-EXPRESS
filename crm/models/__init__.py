@@ -11,6 +11,7 @@ from .projection import (
 )
 from .school import (
     School,
+    SchoolCampus,
     SchoolContact,
     SchoolEducationalService,
 )
@@ -34,6 +35,7 @@ __all__ = [
     "CommercialTeam",
     "CommercialTeamMembership",
     "School",
+    "SchoolCampus",
     "SchoolEducationalService",
     "SchoolContact",
     "SchoolImportBatch",
