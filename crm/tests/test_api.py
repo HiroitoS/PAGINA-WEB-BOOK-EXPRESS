@@ -860,6 +860,104 @@ class CRMApiTests(TestCase):
         response = self.client.delete(reverse("crm:school-detail", args=[self.school.id]))
         self.assertEqual(response.status_code, 405)
 
+    def test_admin_can_create_commercial_team_with_members(self):
+        self.authenticate(self.admin)
+
+        response = self.client.post(
+            reverse("crm:commercial-team-list"),
+            {
+                "name": "Equipo Centro",
+                "description": "Equipo comercial de prueba.",
+                "is_active": True,
+                "supervisor_ids": [self.supervisor.id],
+                "advisor_ids": [self.advisor.id],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["name"], "Equipo Centro")
+        self.assertEqual(response.data["advisor_count"], 1)
+        self.assertEqual(response.data["supervisor_count"], 1)
+
+        team = CommercialTeam.objects.get(pk=response.data["id"])
+        self.assertTrue(
+            team.memberships.filter(
+                user=self.supervisor,
+                role=CommercialTeamMembership.Role.SUPERVISOR,
+                is_active=True,
+            ).exists()
+        )
+        self.assertTrue(
+            team.memberships.filter(
+                user=self.advisor,
+                role=CommercialTeamMembership.Role.ADVISOR,
+                is_active=True,
+            ).exists()
+        )
+
+    def test_supervisor_creating_team_is_kept_as_supervisor(self):
+        self.authenticate(self.supervisor)
+
+        response = self.client.post(
+            reverse("crm:commercial-team-list"),
+            {
+                "name": "Equipo Supervisor",
+                "description": "",
+                "is_active": True,
+                "supervisor_ids": [],
+                "advisor_ids": [self.advisor.id],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        team = CommercialTeam.objects.get(pk=response.data["id"])
+        self.assertTrue(
+            team.memberships.filter(
+                user=self.supervisor,
+                role=CommercialTeamMembership.Role.SUPERVISOR,
+                is_active=True,
+            ).exists()
+        )
+
+    def test_advisor_cannot_create_commercial_team(self):
+        self.authenticate(self.advisor)
+
+        response = self.client.post(
+            reverse("crm:commercial-team-list"),
+            {
+                "name": "Equipo no permitido",
+                "is_active": True,
+                "supervisor_ids": [],
+                "advisor_ids": [],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_team_eligible_members_separates_supervisors_and_advisors(self):
+        self.authenticate(self.admin)
+
+        response = self.client.get(
+            reverse("crm:commercial-team-eligible-members")
+        )
+
+        self.assertEqual(response.status_code, 200)
+        supervisor_ids = {
+            user["id"]
+            for user in response.data["supervisors"]
+        }
+        advisor_ids = {
+            user["id"]
+            for user in response.data["advisors"]
+        }
+
+        self.assertIn(self.supervisor.id, supervisor_ids)
+        self.assertIn(self.advisor.id, advisor_ids)
+        self.assertNotIn(self.supervisor.id, advisor_ids)
+
     def test_admin_can_assign_school_portfolio(self):
         self.authenticate(self.admin)
 
