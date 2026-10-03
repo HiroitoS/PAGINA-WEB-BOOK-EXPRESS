@@ -169,10 +169,17 @@ class CRMPlanningTests(TestCase):
         )
 
     def test_reminder_rejects_task_from_another_opportunity(self):
+        other_campaign = Campaign.objects.create(
+            code="CRM-PLAN-2028-OTHER",
+            name="Campaña CRM 2028",
+            year=2028,
+            status=Campaign.Status.PLANNING,
+            created_by=self.admin,
+        )
         other_opportunity = create_opportunity(
             title="Otra oportunidad",
             school=self.school,
-            campaign=self.campaign,
+            campaign=other_campaign,
             pipeline=self.pipeline,
             created_by=self.admin,
         )

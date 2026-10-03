@@ -1,0 +1,773 @@
+from decimal import Decimal
+
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Permission
+from django.test import TestCase
+from django.urls import reverse
+from rest_framework.test import APIClient
+
+from catalog.models import (
+    Area,
+    Grade,
+    Level,
+    Product,
+    ProductPrice,
+    Provider,
+)
+from crm.models import (
+    Campaign,
+    CommercialProjection,
+    CommercialTeam,
+    CommercialTeamMembership,
+    Opportunity,
+    Pipeline,
+    PipelineStage,
+    School,
+    SchoolEducationalService,
+    SchoolPopulationDetail,
+    SchoolPopulationRecord,
+)
+from crm.services import (
+    CommercialProjectionError,
+    create_commercial_projection_revision,
+)
+
+
+User = get_user_model()
+
+
+def grant_permission(user, codename):
+    permission = Permission.objects.get(
+        content_type__app_label="crm",
+        codename=codename,
+    )
+    user.user_permissions.add(permission)
+
+
+class CRMCommercialProjectionTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+
+        self.admin = User.objects.create_superuser(
+            username="crm-projection-admin",
+            email="projection-admin@example.com",
+            password="test-password",
+        )
+        self.advisor = User.objects.create_user(
+            username="crm-projection-advisor",
+            password="test-password",
+        )
+        grant_permission(self.advisor, "view_crm")
+        grant_permission(
+            self.advisor,
+            "manage_own_opportunities",
+        )
+
+        self.team = CommercialTeam.objects.create(
+            code="CRM-PROJ-TEAM",
+            name="Equipo proyección",
+            created_by=self.admin,
+        )
+        CommercialTeamMembership.objects.create(
+            team=self.team,
+            user=self.advisor,
+            role=CommercialTeamMembership.Role.ADVISOR,
+            created_by=self.admin,
+        )
+
+        self.school = School.objects.create(
+            name="Colegio Proyección",
+            team=self.team,
+            owner=self.advisor,
+            created_by=self.admin,
+        )
+
+        self.level = Level.objects.create(
+            name="Primaria Proyección",
+            is_active=True,
+        )
+        self.grade = Grade.objects.create(
+            name="4to Primaria Proyección",
+            order=4,
+            is_active=True,
+        )
+        self.other_grade = Grade.objects.create(
+            name="5to Primaria Proyección",
+            order=5,
+            is_active=True,
+        )
+        self.area = Area.objects.create(
+            name="Matemática Proyección",
+            is_active=True,
+        )
+
+        self.service = SchoolEducationalService.objects.create(
+            school=self.school,
+            level=self.level,
+            is_active=True,
+            created_by=self.admin,
+        )
+
+        self.population = SchoolPopulationRecord.objects.create(
+            service=self.service,
+            year=2026,
+            student_count=60,
+            is_current=True,
+            recorded_by=self.admin,
+        )
+        SchoolPopulationDetail.objects.create(
+            population=self.population,
+            grade=self.grade,
+            section_count=2,
+            students_per_section=30,
+        )
+
+        self.campaign = Campaign.objects.create(
+            code="CRM-PROJ-2027",
+            name="Campaña escolar 2027",
+            year=2027,
+            campaign_type=Campaign.CampaignType.SCHOOL,
+            status=Campaign.Status.ACTIVE,
+            created_by=self.admin,
+        )
+
+        self.pipeline = Pipeline.objects.create(
+            code="CRM-PROJ-PIPE",
+            name="Pipeline proyección",
+            is_default=True,
+            created_by=self.admin,
+        )
+        self.stage = PipelineStage.objects.create(
+            pipeline=self.pipeline,
+            code="proyeccion_ventas",
+            name="Proyección de ventas",
+            order=10,
+            category=PipelineStage.Category.OPEN,
+            is_initial=True,
+            created_by=self.admin,
+        )
+
+        self.opportunity = Opportunity.objects.create(
+            title="Campaña escolar 2027 - Colegio Proyección",
+            school=self.school,
+            campaign=self.campaign,
+            pipeline=self.pipeline,
+            stage=self.stage,
+            team=self.team,
+            owner=self.advisor,
+            created_by=self.admin,
+        )
+
+        self.provider = Provider.objects.create(
+            name="Editorial Proyección",
+            is_active=True,
+        )
+        self.product = Product.objects.create(
+            provider=self.provider,
+            name="Matemática 4 Proyección",
+            level=self.level,
+            grade=self.grade,
+            area=self.area,
+            commercial_line=Product.CommercialLine.SCHOOL_TEXT,
+            is_active=True,
+        )
+        ProductPrice.objects.create(
+            product=self.product,
+            year=2027,
+            campaign="Campaña escolar",
+            price=Decimal("50.00"),
+            cost_price=Decimal("30.00"),
+            is_active=True,
+        )
+
+    def _create_projection(self, **overrides):
+        grade_lines = overrides.pop(
+            "grade_lines",
+            [
+                {
+                    "service": self.service,
+                    "grade": self.grade,
+                }
+            ],
+        )
+        items = overrides.pop(
+            "items",
+            [
+                {
+                    "service": self.service,
+                    "grade": self.grade,
+                    "product": self.product,
+                }
+            ],
+        )
+
+        return create_commercial_projection_revision(
+            opportunity=self.opportunity,
+            actor=self.advisor,
+            grade_lines=grade_lines,
+            items=items,
+            **overrides,
+        )
+
+    def test_projection_uses_current_population_and_campaign_price(self):
+        projection = self._create_projection()
+
+        grade_line = projection.grades.get()
+        item = projection.items.get()
+
+        self.assertEqual(projection.version, 1)
+        self.assertTrue(projection.is_current)
+        self.assertEqual(grade_line.section_count, 2)
+        self.assertEqual(grade_line.student_count, 60)
+        self.assertEqual(item.quantity, 60)
+        self.assertEqual(item.unit_price, Decimal("50.00"))
+        self.assertEqual(item.subtotal, Decimal("3000.00"))
+        self.assertEqual(
+            item.price_campaign_snapshot,
+            "Campaña escolar",
+        )
+
+    def test_projection_rejects_quantity_different_from_grade_population(self):
+        with self.assertRaisesMessage(
+            CommercialProjectionError,
+            "debe coincidir con los 60 alumnos proyectados",
+        ):
+            self._create_projection(
+                items=[
+                    {
+                        "service": self.service,
+                        "grade": self.grade,
+                        "product": self.product,
+                        "quantity": 59,
+                    }
+                ],
+            )
+
+    def test_projection_revision_preserves_previous_version(self):
+        first = self._create_projection()
+
+        second = self._create_projection(
+            grade_lines=[
+                {
+                    "service": self.service,
+                    "grade": self.grade,
+                    "section_count": 2,
+                    "student_count": 55,
+                }
+            ],
+            items=[
+                {
+                    "service": self.service,
+                    "grade": self.grade,
+                    "product": self.product,
+                    "quantity": 55,
+                }
+            ],
+        )
+
+        first.refresh_from_db()
+
+        self.assertFalse(first.is_current)
+        self.assertTrue(second.is_current)
+        self.assertEqual(second.version, 2)
+        self.assertEqual(
+            CommercialProjection.objects.filter(
+                opportunity=self.opportunity,
+            ).count(),
+            2,
+        )
+
+    def test_projection_rejects_product_from_another_grade(self):
+        wrong_product = Product.objects.create(
+            provider=self.provider,
+            name="Matemática 5 Proyección",
+            level=self.level,
+            grade=self.other_grade,
+            area=self.area,
+            is_active=True,
+        )
+        ProductPrice.objects.create(
+            product=wrong_product,
+            year=2027,
+            campaign="Campaña escolar",
+            price=Decimal("55.00"),
+            is_active=True,
+        )
+
+        with self.assertRaisesMessage(
+            CommercialProjectionError,
+            "no corresponde al grado",
+        ):
+            self._create_projection(
+                items=[
+                    {
+                        "service": self.service,
+                        "grade": self.grade,
+                        "product": wrong_product,
+                    }
+                ],
+            )
+
+    def test_projection_rejects_product_without_campaign_price(self):
+        product_without_price = Product.objects.create(
+            provider=self.provider,
+            name="Producto sin precio Proyección",
+            level=self.level,
+            grade=self.grade,
+            area=self.area,
+            is_active=True,
+        )
+
+        with self.assertRaisesMessage(
+            CommercialProjectionError,
+            "no tiene precio activo",
+        ):
+            self._create_projection(
+                items=[
+                    {
+                        "service": self.service,
+                        "grade": self.grade,
+                        "product": product_without_price,
+                    }
+                ],
+            )
+
+    def test_projection_products_api_uses_campaign_price(self):
+        self.client.force_authenticate(user=self.advisor)
+
+        response = self.client.get(
+            reverse(
+                "crm:opportunity-projection-products",
+                args=[self.opportunity.id],
+            ),
+            {
+                "service": self.service.id,
+                "grade": self.grade.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data["results"]), 1)
+        self.assertEqual(
+            response.data["results"][0]["id"],
+            self.product.id,
+        )
+        self.assertEqual(
+            response.data["results"][0]["editorial"]["name"],
+            "Editorial Proyección",
+        )
+        self.assertEqual(
+            response.data["results"][0]["unit_price"],
+            "50.00",
+        )
+        self.assertEqual(
+            response.data["results"][0]["price_year"],
+            2027,
+        )
+        self.assertFalse(
+            response.data["results"][0]["price_is_reference"],
+        )
+
+    def test_projection_products_api_uses_previous_year_as_reference(self):
+        previous_price_product = Product.objects.create(
+            provider=self.provider,
+            name="Inglés Inicial 4 Proyección",
+            level=self.level,
+            grade=self.grade,
+            area=self.area,
+            is_active=True,
+        )
+        ProductPrice.objects.create(
+            product=previous_price_product,
+            year=2026,
+            campaign="Campaña escolar",
+            price=Decimal("42.00"),
+            is_active=True,
+        )
+
+        self.client.force_authenticate(user=self.advisor)
+
+        response = self.client.get(
+            reverse(
+                "crm:opportunity-projection-products",
+                args=[self.opportunity.id],
+            ),
+            {
+                "service": self.service.id,
+                "grade": self.grade.id,
+                "product_search": "Inicial",
+                "editorial": self.provider.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        result = next(
+            item
+            for item in response.data["results"]
+            if item["id"] == previous_price_product.id
+        )
+        self.assertEqual(result["unit_price"], "42.00")
+        self.assertEqual(result["price_year"], 2026)
+        self.assertTrue(result["price_is_reference"])
+
+        projection = self._create_projection(
+            items=[
+                {
+                    "service": self.service,
+                    "grade": self.grade,
+                    "product": previous_price_product,
+                }
+            ],
+        )
+
+        item = projection.items.get(
+            product=previous_price_product,
+        )
+        self.assertEqual(item.price_year_snapshot, 2026)
+        self.assertEqual(item.unit_price, Decimal("42.00"))
+
+    def test_projection_products_api_filters_catalog_without_filtering_opportunity(self):
+        second_provider = Provider.objects.create(
+            name="Otra Editorial Proyección",
+            is_active=True,
+        )
+        second_product = Product.objects.create(
+            provider=second_provider,
+            name="Comunicación 4 Proyección",
+            level=self.level,
+            grade=self.grade,
+            area=self.area,
+            is_active=True,
+        )
+        ProductPrice.objects.create(
+            product=second_product,
+            year=2027,
+            campaign="Campaña escolar",
+            price=Decimal("45.00"),
+            is_active=True,
+        )
+
+        self.client.force_authenticate(user=self.advisor)
+
+        response = self.client.get(
+            reverse(
+                "crm:opportunity-projection-products",
+                args=[self.opportunity.id],
+            ),
+            {
+                "service": self.service.id,
+                "grade": self.grade.id,
+                "product_search": "Matemática",
+                "editorial": self.provider.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data["results"][0]["id"],
+            self.product.id,
+        )
+        self.assertEqual(len(response.data["results"]), 1)
+        self.assertEqual(
+            {item["id"] for item in response.data["editorials"]},
+            {self.provider.id, second_provider.id},
+        )
+
+    def test_projection_rejects_product_from_other_commercial_line(self):
+        plan_product = Product.objects.create(
+            provider=self.provider,
+            name="Obra plan lector incompatible",
+            level=self.level,
+            grade=self.grade,
+            area=self.area,
+            commercial_line=Product.CommercialLine.READING_PLAN,
+            is_active=True,
+        )
+        ProductPrice.objects.create(
+            product=plan_product,
+            year=2027,
+            campaign="Campaña escolar",
+            price=Decimal("35.00"),
+            cost_price=Decimal("20.00"),
+            is_active=True,
+        )
+
+        with self.assertRaisesMessage(
+            CommercialProjectionError,
+            "no corresponde a la línea comercial",
+        ):
+            self._create_projection(
+                commercial_line="school_text",
+                items=[
+                    {
+                        "service": self.service,
+                        "grade": self.grade,
+                        "product": plan_product,
+                    }
+                ],
+            )
+
+    def test_projection_products_api_filters_by_commercial_line(self):
+        plan_area = Area.objects.create(
+            name="Plan lector",
+            is_active=True,
+        )
+        plan_product = Product.objects.create(
+            provider=self.provider,
+            name="Obra literaria de prueba",
+            level=self.level,
+            grade=self.grade,
+            area=plan_area,
+            commercial_line=Product.CommercialLine.READING_PLAN,
+            is_active=True,
+        )
+        ProductPrice.objects.create(
+            product=plan_product,
+            year=2027,
+            campaign="Campaña escolar",
+            price=Decimal("35.00"),
+            cost_price=Decimal("20.00"),
+            is_active=True,
+        )
+
+        self.client.force_authenticate(user=self.advisor)
+
+        school_response = self.client.get(
+            reverse(
+                "crm:opportunity-projection-products",
+                args=[self.opportunity.id],
+            ),
+            {
+                "service": self.service.id,
+                "grade": self.grade.id,
+                "commercial_line": "school_text",
+            },
+        )
+        reading_response = self.client.get(
+            reverse(
+                "crm:opportunity-projection-products",
+                args=[self.opportunity.id],
+            ),
+            {
+                "service": self.service.id,
+                "grade": self.grade.id,
+                "commercial_line": "reading_plan",
+            },
+        )
+
+        self.assertEqual(school_response.status_code, 200)
+        self.assertEqual(reading_response.status_code, 200)
+        self.assertIn(
+            self.product.id,
+            {item["id"] for item in school_response.data["results"]},
+        )
+        self.assertNotIn(
+            plan_product.id,
+            {item["id"] for item in school_response.data["results"]},
+        )
+        self.assertEqual(
+            {item["id"] for item in reading_response.data["results"]},
+            {plan_product.id},
+        )
+
+    def test_projection_products_api_shows_classified_product_without_price(self):
+        product_without_price = Product.objects.create(
+            provider=self.provider,
+            name="Texto escolar pendiente de precio",
+            level=self.level,
+            grade=self.grade,
+            area=self.area,
+            commercial_line=Product.CommercialLine.SCHOOL_TEXT,
+            is_active=True,
+        )
+
+        self.client.force_authenticate(user=self.advisor)
+
+        response = self.client.get(
+            reverse(
+                "crm:opportunity-projection-products",
+                args=[self.opportunity.id],
+            ),
+            {
+                "service": self.service.id,
+                "grade": self.grade.id,
+                "commercial_line": "school_text",
+                "product_search": "pendiente de precio",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        result = next(
+            item
+            for item in response.data["results"]
+            if item["id"] == product_without_price.id
+        )
+        self.assertFalse(result["price_available"])
+        self.assertIsNone(result["unit_price"])
+        self.assertTrue(result["price_message"])
+
+    def test_projection_products_api_does_not_infer_plan_lector_at_runtime(self):
+        plan_area = Area.objects.create(
+            name="Plan lector sin clasificar",
+            is_active=True,
+        )
+        unclassified_product = Product.objects.create(
+            provider=self.provider,
+            name="Obra pendiente de clasificación",
+            level=self.level,
+            grade=self.grade,
+            area=plan_area,
+            commercial_line=Product.CommercialLine.OTHER,
+            is_active=True,
+        )
+        ProductPrice.objects.create(
+            product=unclassified_product,
+            year=2027,
+            campaign="Campaña escolar",
+            price=Decimal("30.00"),
+            cost_price=Decimal("18.00"),
+            is_active=True,
+        )
+
+        self.client.force_authenticate(user=self.advisor)
+
+        response = self.client.get(
+            reverse(
+                "crm:opportunity-projection-products",
+                args=[self.opportunity.id],
+            ),
+            {
+                "service": self.service.id,
+                "grade": self.grade.id,
+                "commercial_line": "reading_plan",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(
+            unclassified_product.id,
+            {item["id"] for item in response.data["results"]},
+        )
+
+    def test_projection_rejects_unclassified_product_for_new_line(self):
+        unclassified_product = Product.objects.create(
+            provider=self.provider,
+            name="Producto pendiente de clasificación",
+            level=self.level,
+            grade=self.grade,
+            area=self.area,
+            commercial_line=Product.CommercialLine.OTHER,
+            is_active=True,
+        )
+        ProductPrice.objects.create(
+            product=unclassified_product,
+            year=2027,
+            campaign="Campaña escolar",
+            price=Decimal("40.00"),
+            cost_price=Decimal("25.00"),
+            is_active=True,
+        )
+
+        with self.assertRaisesMessage(
+            CommercialProjectionError,
+            "no tiene una línea comercial",
+        ):
+            self._create_projection(
+                commercial_line="school_text",
+                items=[
+                    {
+                        "service": self.service,
+                        "grade": self.grade,
+                        "product": unclassified_product,
+                    }
+                ],
+            )
+
+    def test_projection_api_creates_reads_and_exposes_base_population(self):
+        self.client.force_authenticate(user=self.advisor)
+
+        base_response = self.client.get(
+            reverse(
+                "crm:opportunity-projection-base",
+                args=[self.opportunity.id],
+            )
+        )
+
+        self.assertEqual(base_response.status_code, 200)
+        self.assertEqual(
+            base_response.data["campaign"]["year"],
+            2027,
+        )
+        self.assertEqual(
+            base_response.data["services"][0][
+                "latest_population"
+            ]["details"][0]["student_count"],
+            60,
+        )
+
+        create_response = self.client.post(
+            reverse(
+                "crm:opportunity-projection",
+                args=[self.opportunity.id],
+            ),
+            {
+                "commercial_line": "school_text",
+                "grades": [
+                    {
+                        "service": self.service.id,
+                        "grade": self.grade.id,
+                    }
+                ],
+                "items": [
+                    {
+                        "service": self.service.id,
+                        "grade": self.grade.id,
+                        "product": self.product.id,
+                    }
+                ],
+                "notes": "Proyección inicial",
+            },
+            format="json",
+        )
+
+        self.assertEqual(create_response.status_code, 201)
+        self.assertEqual(create_response.data["version"], 1)
+        self.assertEqual(
+            create_response.data["commercial_line"],
+            "school_text",
+        )
+        self.assertEqual(
+            create_response.data["total_students"],
+            60,
+        )
+        self.assertEqual(
+            create_response.data["total_amount"],
+            "3000.00",
+        )
+        self.assertEqual(
+            create_response.data["editorial_totals"][0],
+            {
+                "editorial": "Editorial Proyección",
+                "amount": "3000.00",
+            },
+        )
+
+        get_response = self.client.get(
+            reverse(
+                "crm:opportunity-projection",
+                args=[self.opportunity.id],
+            )
+        )
+
+        self.assertEqual(get_response.status_code, 200)
+        self.assertEqual(get_response.data["version"], 1)
+
+        history_response = self.client.get(
+            reverse(
+                "crm:opportunity-projection-history",
+                args=[self.opportunity.id],
+            )
+        )
+
+        self.assertEqual(history_response.status_code, 200)
+        self.assertEqual(len(history_response.data), 1)

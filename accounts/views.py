@@ -64,6 +64,7 @@ class LogoutView(APIView):
 class AdminUserViewSet(viewsets.ModelViewSet):
     queryset = (
         User.objects
+        .select_related("book_express_profile")
         .prefetch_related(
             "groups",
             "groups__permissions__content_type",

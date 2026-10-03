@@ -1,4 +1,5 @@
 from .activities import CommercialActivityError, record_commercial_activity
+from .adoptions import AdoptionError, confirm_adoption
 from .opportunities import (
     OpportunityTransitionError,
     create_opportunity,
@@ -10,10 +11,48 @@ from .planning import (
     create_opportunity_event,
     create_opportunity_reminder,
     create_opportunity_task,
+    create_school_event,
+    create_school_reminder,
+    create_school_task,
 )
-from .work_items import CRMWorkItemLinkError, link_work_item_to_opportunity
+from .projections import (
+    CommercialProjectionError,
+    create_commercial_projection_revision,
+    resolve_projection_price,
+)
+from .quotations import (
+    CommercialQuotationError,
+    accept_commercial_quotation,
+    approve_commercial_quotation_discount,
+    create_commercial_quotation,
+    create_commercial_quotation_from_projection,
+    preview_commercial_quotation_financials,
+    reopen_commercial_quotation_negotiation,
+    send_commercial_quotation,
+    update_commercial_quotation_from_projection,
+)
+from .work_items import (
+    CRMWorkItemLinkError,
+    link_crm_work_item,
+    link_work_item_to_opportunity,
+    link_work_item_to_school,
+)
 
 __all__ = [
+    "AdoptionError",
+    "confirm_adoption",
+    "CommercialProjectionError",
+    "create_commercial_projection_revision",
+    "resolve_projection_price",
+    "CommercialQuotationError",
+    "create_commercial_quotation",
+    "create_commercial_quotation_from_projection",
+    "preview_commercial_quotation_financials",
+    "update_commercial_quotation_from_projection",
+    "approve_commercial_quotation_discount",
+    "send_commercial_quotation",
+    "accept_commercial_quotation",
+    "reopen_commercial_quotation_negotiation",
     "CommercialActivityError",
     "record_commercial_activity",
     "OpportunityTransitionError",
@@ -24,6 +63,11 @@ __all__ = [
     "create_opportunity_task",
     "create_opportunity_event",
     "create_opportunity_reminder",
+    "create_school_task",
+    "create_school_event",
+    "create_school_reminder",
     "CRMWorkItemLinkError",
+    "link_crm_work_item",
+    "link_work_item_to_school",
     "link_work_item_to_opportunity",
 ]

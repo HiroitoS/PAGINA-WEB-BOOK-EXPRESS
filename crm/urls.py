@@ -8,6 +8,9 @@ from crm.api.views import (
     OpportunityViewSet,
     PipelineViewSet,
     SchoolViewSet,
+    SchoolImportViewSet,
+    SchoolContactViewSet,
+    MarketEditorialViewSet,
 )
 
 
@@ -17,7 +20,18 @@ router = DefaultRouter()
 router.register(r"campaigns", CampaignViewSet, basename="campaign")
 router.register(r"pipelines", PipelineViewSet, basename="pipeline")
 router.register(r"commercial-teams", CommercialTeamViewSet, basename="commercial-team")
+router.register(
+    r"editorials",
+    MarketEditorialViewSet,
+    basename="market-editorial",
+)
 router.register(r"schools", SchoolViewSet, basename="school")
+router.register(
+    r"school-imports",
+    SchoolImportViewSet,
+    basename="school-import",
+)
+router.register(r"contacts", SchoolContactViewSet, basename="contact")
 router.register(r"opportunities", OpportunityViewSet, basename="opportunity")
 
 urlpatterns = [
