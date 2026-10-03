@@ -14,10 +14,11 @@ class School(TimeStampedModel):
     Institución educativa entendida como cliente/prospecto comercial.
 
     Cada School representa una institución educativa dentro del CRM.
-    Sus niveles o servicios educativos dependen directamente del colegio,
-    sin una capa intermedia de sedes.
+    Una institución puede operar en una o varias sedes físicas. Los
+    servicios educativos conservan además la relación directa al colegio
+    por compatibilidad, pero su ubicación vigente se registra en campus.
 
-    Los campos modular_code, estimated_students y levels se mantienen
+    Los campos de dirección, modular_code, estimated_students y levels se mantienen
     temporalmente por compatibilidad mientras el frontend y las
     importaciones terminan de migrar al nuevo modelo.
     """
@@ -306,10 +307,11 @@ class SchoolCampus(TimeStampedModel):
 
 class SchoolEducationalService(TimeStampedModel):
     """
-    Servicio o nivel educativo ofrecido directamente por el colegio.
+    Servicio o nivel educativo ofrecido por una sede del colegio.
 
-    Aquí vive el código modular porque identifica el servicio educativo
-    correspondiente, no necesariamente a toda la institución.
+    Aquí vive el código modular porque identifica el servicio educativo.
+    La relación school se conserva para consultas comerciales y
+    compatibilidad; campus permite diferenciar sedes físicas.
     """
 
     school = models.ForeignKey(
