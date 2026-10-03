@@ -553,6 +553,63 @@ class SchoolImportApiTests(TestCase):
         self.assertEqual(campus.district, "El Tambo")
         self.assertEqual(service.modular_code, "0918706")
 
+    def test_partial_import_keeps_pending_schools_out(self):
+        preview = self.preview(
+            [
+                [
+                    "7000001",
+                    "26570001",
+                    "Colegio Listo",
+                    "Primaria",
+                    "Particular",
+                    "Jr. Listo 100",
+                    "Junín",
+                    "Huancayo",
+                    "El Tambo",
+                    140,
+                ],
+                [
+                    "7000002",
+                    "26570002",
+                    "Colegio Pendiente",
+                    "Primaria",
+                    "Particular",
+                    "Jr. Pendiente 200",
+                    "Junín",
+                    "Huancayo",
+                    "El Tambo",
+                    "",
+                ],
+            ]
+        )
+
+        self.assertEqual(preview.status_code, 201)
+        self.assertEqual(preview.data["status"], "error")
+        self.assertEqual(preview.data["total_new"], 1)
+        self.assertGreater(preview.data["total_errors"], 0)
+
+        response = self.confirm(preview)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["status"], "partial")
+        self.assertTrue(
+            School.objects.filter(
+                institution_code="26570001"
+            ).exists()
+        )
+        self.assertFalse(
+            School.objects.filter(
+                institution_code="26570002"
+            ).exists()
+        )
+
+        pending_row = next(
+            row
+            for row in response.data["rows"]
+            if row["institution_code"] == "26570002"
+        )
+        self.assertFalse(pending_row["processed"])
+
     def test_advisor_cannot_import_schools(self):
         response = self.preview(
             [
