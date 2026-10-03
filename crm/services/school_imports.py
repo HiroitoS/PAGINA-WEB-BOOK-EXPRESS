@@ -442,7 +442,12 @@ def _validate_group_duplicates(entries):
         if len(bucket) <= 1:
             continue
 
-        bucket.sort(key=lambda item: item["row_number"])
+        bucket.sort(
+            key=lambda item: (
+                item["data"].get("students") is None,
+                item["row_number"],
+            )
+        )
         canonical = bucket[0]
 
         for entry in bucket[1:]:
@@ -473,10 +478,7 @@ def _validate_group_duplicates(entries):
                 entry["data"].get("modular_code")
             )
             for entry in active
-            if (
-            entry["data"].get("modular_code")
-            and not entry["data"].get("modular_code_pending_review")
-        )
+            if entry["data"].get("modular_code")
         }
         student_counts = {
             entry["data"].get("students")
