@@ -473,7 +473,10 @@ def _validate_group_duplicates(entries):
                 entry["data"].get("modular_code")
             )
             for entry in active
-            if entry["data"].get("modular_code")
+            if (
+            entry["data"].get("modular_code")
+            and not entry["data"].get("modular_code_pending_review")
+        )
         }
         student_counts = {
             entry["data"].get("students")
@@ -543,12 +546,14 @@ def _validate_modular_locations(entries):
         )
 
         for entry in bucket:
-            _append_error(
+            entry["data"]["modular_code_pending_review"] = True
+            _append_warning(
                 entry,
                 (
                     "El mismo Código modular aparece en más de una "
-                    f"sede (filas {rows}). Revise si se trata de una "
-                    "sede distinta o de una dirección anterior."
+                    f"sede (filas {rows}). Se conservarán las sedes y "
+                    "el nivel, pero el Código modular quedará pendiente "
+                    "de validar antes de asociarlo definitivamente."
                 ),
             )
 
@@ -612,7 +617,10 @@ def _validate_existing_modular_codes(groups):
 
         for entry in entries:
             modular_code = entry["data"].get("modular_code")
-            if not modular_code:
+            if (
+                not modular_code
+                or entry["data"].get("modular_code_pending_review")
+            ):
                 continue
 
             service = existing_by_code.get(
@@ -747,8 +755,12 @@ def create_school_import_preview(
             errors.append(str(error))
 
         if students is None:
-            errors.append(
-                "La cantidad de alumnos del nivel es obligatoria."
+            warnings.append(
+                (
+                    "Cantidad de alumnos no registrada. "
+                    "El colegio y el nivel podrán importarse, pero la "
+                    "población quedará pendiente de completar."
+                )
             )
 
         data["students"] = students
@@ -959,6 +971,7 @@ def _update_school_from_rows(
         if (
             row.data.get("modular_code")
             and not row.data.get("skip_import")
+            and not row.data.get("modular_code_pending_review")
         )
     }
     school.modular_code = (
@@ -1153,7 +1166,11 @@ def _resolve_service(
     data,
     actor,
 ):
-    modular_code = data.get("modular_code") or None
+    modular_code = (
+        None
+        if data.get("modular_code_pending_review")
+        else data.get("modular_code") or None
+    )
 
     service = None
     if modular_code:
@@ -1333,13 +1350,14 @@ def confirm_school_import(*, batch_id, actor):
                     actor=actor,
                 )
 
-                _upsert_population(
-                    service=service,
-                    student_count=data["students"],
-                    population_year=batch.population_year,
-                    actor=actor,
-                    source_detail=source_detail,
-                )
+                if data["students"] is not None:
+                    _upsert_population(
+                        service=service,
+                        student_count=data["students"],
+                        population_year=batch.population_year,
+                        actor=actor,
+                        source_detail=source_detail,
+                    )
 
         if imported_levels:
             school.levels.add(*imported_levels)
