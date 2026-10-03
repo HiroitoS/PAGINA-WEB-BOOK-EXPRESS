@@ -843,6 +843,104 @@ class CRMApiTests(TestCase):
         response = self.client.delete(reverse("crm:school-detail", args=[self.school.id]))
         self.assertEqual(response.status_code, 405)
 
+    def test_admin_can_assign_school_portfolio(self):
+        self.authenticate(self.admin)
+
+        response = self.client.post(
+            reverse("crm:school-assign-portfolio"),
+            {
+                "school_ids": [self.school.id],
+                "team": self.other_team.id,
+                "owner": self.other_advisor.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["updated"], 1)
+
+        self.school.refresh_from_db()
+        self.assertEqual(self.school.team_id, self.other_team.id)
+        self.assertEqual(self.school.owner_id, self.other_advisor.id)
+
+    def test_supervisor_can_assign_visible_school_inside_own_team(self):
+        second_advisor = User.objects.create_user(
+            username="crm-api-second-advisor",
+            password="test-password",
+        )
+        grant_permission(second_advisor, "view_crm")
+        grant_permission(second_advisor, "manage_schools")
+        grant_permission(second_advisor, "manage_own_opportunities")
+        CommercialTeamMembership.objects.create(
+            team=self.team,
+            user=second_advisor,
+            role=CommercialTeamMembership.Role.ADVISOR,
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.supervisor)
+
+        response = self.client.post(
+            reverse("crm:school-assign-portfolio"),
+            {
+                "school_ids": [self.school.id],
+                "team": self.team.id,
+                "owner": second_advisor.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.school.refresh_from_db()
+        self.assertEqual(self.school.team_id, self.team.id)
+        self.assertEqual(self.school.owner_id, second_advisor.id)
+
+    def test_supervisor_cannot_assign_school_to_unsupervised_team(self):
+        self.authenticate(self.supervisor)
+
+        response = self.client.post(
+            reverse("crm:school-assign-portfolio"),
+            {
+                "school_ids": [self.school.id],
+                "team": self.other_team.id,
+                "owner": self.other_advisor.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_advisor_cannot_assign_school_portfolio(self):
+        self.authenticate(self.advisor)
+
+        response = self.client.post(
+            reverse("crm:school-assign-portfolio"),
+            {
+                "school_ids": [self.school.id],
+                "team": self.team.id,
+                "owner": self.advisor.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_school_assignment_rejects_owner_outside_selected_team(self):
+        self.authenticate(self.admin)
+
+        response = self.client.post(
+            reverse("crm:school-assign-portfolio"),
+            {
+                "school_ids": [self.school.id],
+                "team": self.team.id,
+                "owner": self.other_advisor.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("owner", response.data)
+
     def test_advisor_can_create_school_educational_service(self):
         level = Level.objects.create(
             name="Primaria servicio CRM",
