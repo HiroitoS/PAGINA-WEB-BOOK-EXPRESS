@@ -1547,8 +1547,20 @@ class CommercialProjectionGradeSerializer(serializers.ModelSerializer):
         )
 
     def get_service(self, obj):
+        campus = obj.service.campus
+
         return {
             "id": obj.service_id,
+            "campus": (
+                {
+                    "id": campus.id,
+                    "name": campus.name,
+                    "book_express_code": campus.book_express_code,
+                    "address": campus.address,
+                }
+                if campus is not None
+                else None
+            ),
             "level": {
                 "id": obj.service.level_id,
                 "name": obj.service.level.name,
