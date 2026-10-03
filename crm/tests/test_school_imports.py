@@ -378,6 +378,37 @@ class SchoolImportApiTests(TestCase):
         service = school.educational_services.get()
         self.assertIsNone(service.modular_code)
 
+    def test_missing_population_is_warning_and_school_is_imported(self):
+        preview = self.preview(
+            [
+                [
+                    "5200001",
+                    "26552001",
+                    "Colegio Población Pendiente",
+                    "Primaria",
+                    "Particular",
+                    "Av. Pendiente 100",
+                    "Junín",
+                    "Huancayo",
+                    "El Tambo",
+                    "",
+                ],
+            ]
+        )
+
+        self.assertEqual(preview.status_code, 201)
+        self.assertEqual(preview.data["status"], "validated")
+        self.assertEqual(preview.data["total_errors"], 0)
+        self.assertGreater(preview.data["total_warnings"], 0)
+
+        response = self.confirm(preview)
+
+        self.assertEqual(response.status_code, 200)
+        school = School.objects.get(institution_code="26552001")
+        self.assertIsNone(school.estimated_students)
+        service = school.educational_services.get()
+        self.assertFalse(service.population_records.exists())
+
     def test_exact_duplicate_is_warning_and_is_imported_once(self):
         row = [
             "5100001",
@@ -462,7 +493,7 @@ class SchoolImportApiTests(TestCase):
         )
         self.assertEqual(populations, [90, 120])
 
-    def test_same_modular_code_in_two_addresses_requires_review(self):
+    def test_same_modular_code_in_two_addresses_is_imported_as_pending(self):
         preview = self.preview(
             [
                 [
@@ -493,15 +524,28 @@ class SchoolImportApiTests(TestCase):
         )
 
         self.assertEqual(preview.status_code, 201)
-        self.assertEqual(preview.data["status"], "error")
-        self.assertGreaterEqual(preview.data["total_errors"], 2)
+        self.assertEqual(preview.data["status"], "validated")
+        self.assertEqual(preview.data["total_errors"], 0)
+        self.assertGreaterEqual(preview.data["total_warnings"], 2)
         self.assertIn(
-            "más de una sede",
-            " ".join(preview.data["rows"][0]["errors"]),
+            "pendiente de validar",
+            " ".join(preview.data["rows"][0]["warnings"]),
         )
 
         response = self.confirm(preview)
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["status"], "imported")
+
+        school = School.objects.get(institution_code="26522382")
+        self.assertEqual(school.campuses.count(), 2)
+        self.assertEqual(school.educational_services.count(), 2)
+        self.assertTrue(
+            all(
+                service.modular_code is None
+                for service in school.educational_services.all()
+            )
+        )
+        self.assertEqual(school.estimated_students, 1081)
 
     def test_real_excel_header_style_and_leading_zero_modular_code(self):
         headers = [
@@ -553,7 +597,7 @@ class SchoolImportApiTests(TestCase):
         self.assertEqual(campus.district, "El Tambo")
         self.assertEqual(service.modular_code, "0918706")
 
-    def test_partial_import_keeps_pending_schools_out(self):
+    def test_partial_import_keeps_conflicting_school_out(self):
         preview = self.preview(
             [
                 [
@@ -578,7 +622,19 @@ class SchoolImportApiTests(TestCase):
                     "Junín",
                     "Huancayo",
                     "El Tambo",
-                    "",
+                    100,
+                ],
+                [
+                    "7000002",
+                    "26570002",
+                    "Colegio Pendiente",
+                    "Primaria",
+                    "Particular",
+                    "Jr. Pendiente 200",
+                    "Junín",
+                    "Huancayo",
+                    "El Tambo",
+                    120,
                 ],
             ]
         )
