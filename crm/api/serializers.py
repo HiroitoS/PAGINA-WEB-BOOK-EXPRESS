@@ -1085,7 +1085,6 @@ class SchoolDetailSerializer(SchoolListSerializer):
         fields = SchoolListSerializer.Meta.fields + (
             "address",
             "reference",
-            "dependency",
             "notes",
             "contacts",
             "educational_services",
