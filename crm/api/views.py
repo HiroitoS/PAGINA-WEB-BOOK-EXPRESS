@@ -22,6 +22,7 @@ from crm.models import (
     Pipeline,
     PipelineStage,
     School,
+    SchoolCampus,
     SchoolImportBatch,
 )
 from crm.permissions import (
@@ -774,6 +775,35 @@ class SchoolImportViewSet(viewsets.ReadOnlyModelViewSet):
         )
 
 
+def _sync_main_campus_from_school(*, school, actor):
+    campus = (
+        school.campuses
+        .filter(is_main=True)
+        .order_by("sequence", "id")
+        .first()
+    )
+
+    if campus is None:
+        campus = SchoolCampus(
+            school=school,
+            sequence=1,
+            name="Sede principal",
+            is_main=True,
+            created_by=actor,
+        )
+
+    campus.address = school.address or ""
+    campus.reference = school.reference or ""
+    campus.department = school.department or ""
+    campus.province = school.province or ""
+    campus.district = school.district or ""
+    campus.is_active = True
+    campus.full_clean()
+    campus.save()
+
+    return campus
+
+
 class SchoolViewSet(viewsets.ModelViewSet):
     permission_classes = [EsUsuarioCRM]
     pagination_class = CRMPageNumberPagination
@@ -789,6 +819,8 @@ class SchoolViewSet(viewsets.ModelViewSet):
             )
             .prefetch_related(
                 "levels",
+                "campuses",
+                "educational_services__campus",
                 "educational_services__level",
                 "educational_services__population_records",
                 "educational_services__population_records__details__grade",
@@ -814,6 +846,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
         if search:
             queryset = queryset.filter(
                 Q(name__icontains=search)
+                | Q(book_express_code__icontains=search)
                 | Q(institution_code__icontains=search)
                 | Q(modular_code__icontains=search)
                 | Q(educational_services__modular_code__icontains=search)
@@ -821,17 +854,25 @@ class SchoolViewSet(viewsets.ModelViewSet):
                 | Q(phone__icontains=search) | Q(whatsapp__icontains=search) | Q(email__icontains=search)
                 | Q(owner__username__icontains=search) | Q(owner__first_name__icontains=search)
                 | Q(owner__last_name__icontains=search)
+                | Q(campuses__address__icontains=search)
+                | Q(campuses__district__icontains=search)
             )
         if team:
             queryset = queryset.filter(team_id=team)
         if owner:
             queryset = queryset.filter(owner_id=owner)
         if department:
-            queryset = queryset.filter(department__iexact=department)
+            queryset = queryset.filter(
+                campuses__department__iexact=department
+            )
         if province:
-            queryset = queryset.filter(province__iexact=province)
+            queryset = queryset.filter(
+                campuses__province__iexact=province
+            )
         if district:
-            queryset = queryset.filter(district__iexact=district)
+            queryset = queryset.filter(
+                campuses__district__iexact=district
+            )
         if assignment == "unassigned":
             queryset = queryset.filter(owner__isnull=True)
         elif assignment == "assigned":
@@ -870,9 +911,19 @@ class SchoolViewSet(viewsets.ModelViewSet):
         school = School(**data, created_by=request.user)
         school.full_clean()
         school.save()
+        _sync_main_campus_from_school(
+            school=school,
+            actor=request.user,
+        )
         if levels:
             school.levels.set(levels)
-        return Response(SchoolDetailSerializer(school).data, status=status.HTTP_201_CREATED)
+        return Response(
+            SchoolDetailSerializer(
+                school,
+                context={"request": request},
+            ).data,
+            status=status.HTTP_201_CREATED,
+        )
 
     def partial_update(self, request, *args, **kwargs):
         if not usuario_puede_gestionar_colegios(request.user):
@@ -942,9 +993,18 @@ class SchoolViewSet(viewsets.ModelViewSet):
             setattr(school, field, value)
         school.full_clean()
         school.save()
+        _sync_main_campus_from_school(
+            school=school,
+            actor=request.user,
+        )
         if levels is not None:
             school.levels.set(levels)
-        return Response(SchoolDetailSerializer(school).data)
+        return Response(
+            SchoolDetailSerializer(
+                school,
+                context={"request": request},
+            ).data
+        )
 
     @action(
         detail=False,
@@ -1022,6 +1082,8 @@ class SchoolViewSet(viewsets.ModelViewSet):
             )
             .prefetch_related(
                 "levels",
+                "campuses",
+                "educational_services__campus",
                 "educational_services__level",
                 "educational_services__population_records",
                 "educational_services__population_records__details__grade",
@@ -1051,12 +1113,16 @@ class SchoolViewSet(viewsets.ModelViewSet):
         if request.method == "GET":
             services = (
                 school.educational_services
-                .select_related("level")
+                .select_related("campus", "level")
                 .prefetch_related(
                     "population_records",
                     "population_records__details__grade",
                 )
-                .order_by("level__name", "id")
+                .order_by(
+                    "campus__sequence",
+                    "level__name",
+                    "id",
+                )
             )
 
             return Response(
@@ -1108,7 +1174,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
 
         service = (
             school.educational_services
-            .select_related("level")
+            .select_related("campus", "level")
             .filter(pk=service_id)
             .first()
         )
