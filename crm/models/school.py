@@ -74,6 +74,11 @@ class School(TimeStampedModel):
         blank=True,
         verbose_name="Referencia",
     )
+    dependency = models.CharField(
+        max_length=120,
+        blank=True,
+        verbose_name="Dependencia",
+    )
     department = models.CharField(
         max_length=100,
         blank=True,
