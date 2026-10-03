@@ -26,6 +26,7 @@ from crm.models import (
     Pipeline,
     PipelineStage,
     School,
+    SchoolCampus,
     SchoolCommercialProfile,
     SchoolContact,
     SchoolEditorialUsage,
@@ -626,14 +627,36 @@ class SchoolPopulationRecordWriteSerializer(serializers.ModelSerializer):
         return population
 
 
+class SchoolCampusSerializer(serializers.ModelSerializer):
+    book_express_code = serializers.ReadOnlyField()
+
+    class Meta:
+        model = SchoolCampus
+        fields = (
+            "id",
+            "book_express_code",
+            "sequence",
+            "name",
+            "address",
+            "reference",
+            "department",
+            "province",
+            "district",
+            "is_main",
+            "is_active",
+        )
+
+
 class SchoolEducationalServiceSerializer(serializers.ModelSerializer):
     level = LevelSummarySerializer(read_only=True)
+    campus = SchoolCampusSerializer(read_only=True)
     latest_population = serializers.SerializerMethodField()
 
     class Meta:
         model = SchoolEducationalService
         fields = (
             "id",
+            "campus",
             "level",
             "modular_code",
             "modality",
@@ -657,6 +680,11 @@ class SchoolEducationalServiceSerializer(serializers.ModelSerializer):
         return SchoolPopulationRecordSerializer(record).data
 
 class SchoolEducationalServiceWriteSerializer(serializers.ModelSerializer):
+    campus = serializers.PrimaryKeyRelatedField(
+        queryset=SchoolCampus.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
     level = serializers.PrimaryKeyRelatedField(
         queryset=Level.objects.filter(is_active=True),
     )
@@ -664,6 +692,7 @@ class SchoolEducationalServiceWriteSerializer(serializers.ModelSerializer):
     class Meta:
         model = SchoolEducationalService
         fields = (
+            "campus",
             "level",
             "modular_code",
             "modality",
@@ -692,11 +721,50 @@ class SchoolEducationalServiceWriteSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         school = self.context.get("school")
-        level = attrs.get("level")
+        level = attrs.get(
+            "level",
+            getattr(self.instance, "level", None),
+        )
+        campus = attrs.get(
+            "campus",
+            getattr(self.instance, "campus", None),
+        )
+
+        if school is not None and campus is None:
+            campus = (
+                school.campuses
+                .filter(is_active=True, is_main=True)
+                .order_by("sequence", "id")
+                .first()
+            )
+            if campus is None:
+                campus = (
+                    school.campuses
+                    .filter(is_active=True)
+                    .order_by("sequence", "id")
+                    .first()
+                )
+
+            if campus is not None:
+                attrs["campus"] = campus
+
+        if (
+            school is not None
+            and campus is not None
+            and campus.school_id != school.id
+        ):
+            raise serializers.ValidationError(
+                {
+                    "campus": (
+                        "La sede seleccionada no pertenece a este colegio."
+                    )
+                }
+            )
 
         if school is not None and level is not None:
             queryset = SchoolEducationalService.objects.filter(
                 school=school,
+                campus=campus,
                 level=level,
             )
 
@@ -708,7 +776,7 @@ class SchoolEducationalServiceWriteSerializer(serializers.ModelSerializer):
                     {
                         "level": (
                             "Este nivel educativo ya está registrado "
-                            "en el colegio."
+                            "en la sede seleccionada."
                         )
                     }
                 )
@@ -1025,6 +1093,7 @@ class SchoolListSerializer(serializers.ModelSerializer):
         model = School
         fields = (
             "id",
+            "book_express_code",
             "institution_code",
             "name",
             "modular_code",
@@ -1070,6 +1139,7 @@ class SchoolListSerializer(serializers.ModelSerializer):
 
 
 class SchoolDetailSerializer(SchoolListSerializer):
+    campuses = SchoolCampusSerializer(many=True, read_only=True)
     contacts = SchoolContactSerializer(many=True, read_only=True)
     educational_services = SchoolEducationalServiceSerializer(
         many=True,
@@ -1086,6 +1156,7 @@ class SchoolDetailSerializer(SchoolListSerializer):
             "address",
             "reference",
             "notes",
+            "campuses",
             "contacts",
             "educational_services",
             "editorial_usages",
@@ -1210,6 +1281,7 @@ class SchoolImportRowSerializer(serializers.ModelSerializer):
             "level_name",
             "action",
             "action_display",
+            "warnings",
             "errors",
             "processed",
         )
@@ -1239,6 +1311,7 @@ class SchoolImportBatchSerializer(serializers.ModelSerializer):
             "total_schools",
             "total_new",
             "total_updated",
+            "total_warnings",
             "total_errors",
             "rows",
             "created_at",
