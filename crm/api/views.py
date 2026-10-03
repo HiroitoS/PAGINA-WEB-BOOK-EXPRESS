@@ -22,6 +22,7 @@ from crm.models import (
     Pipeline,
     PipelineStage,
     School,
+    SchoolImportBatch,
 )
 from crm.permissions import (
     EsUsuarioCRM,
@@ -71,6 +72,10 @@ from crm.services import (
 )
 
 from crm.services.commercial_lines import VALID_PROJECTION_LINES
+from crm.services.school_imports import (
+    confirm_school_import,
+    create_school_import_preview,
+)
 
 from .pagination import CRMPageNumberPagination
 from .serializers import (
@@ -109,6 +114,9 @@ from .serializers import (
     SchoolEventCreateSerializer,
     SchoolListSerializer,
     SchoolAssignmentSerializer,
+    SchoolImportBatchListSerializer,
+    SchoolImportBatchSerializer,
+    SchoolImportPreviewSerializer,
     SchoolPopulationRecordSerializer,
     SchoolPopulationRecordWriteSerializer,
     SchoolReminderCreateSerializer,
@@ -670,6 +678,101 @@ class MarketEditorialViewSet(viewsets.ModelViewSet):
             MarketEditorialSerializer(editorial).data,
             status=status.HTTP_201_CREATED,
         )
+
+class SchoolImportViewSet(viewsets.ReadOnlyModelViewSet):
+    permission_classes = [EsUsuarioCRM]
+    pagination_class = None
+
+    def get_queryset(self):
+        self._ensure_can_import()
+        return (
+            SchoolImportBatch.objects
+            .select_related("created_by")
+            .prefetch_related("rows")
+            .order_by("-created_at")
+        )
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return SchoolImportBatchListSerializer
+
+        return SchoolImportBatchSerializer
+
+    def _ensure_can_import(self):
+        user = self.request.user
+
+        if (
+            usuario_es_administrador(user)
+            or usuario_puede_supervisar_crm(user)
+        ):
+            return
+
+        raise PermissionDenied(
+            "No tienes permiso para importar colegios."
+        )
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="preview",
+        url_name="preview",
+    )
+    def preview(self, request):
+        self._ensure_can_import()
+
+        serializer = SchoolImportPreviewSerializer(
+            data=request.data
+        )
+        serializer.is_valid(raise_exception=True)
+
+        batch = create_school_import_preview(
+            file=serializer.validated_data["file"],
+            population_year=serializer.validated_data[
+                "population_year"
+            ],
+            actor=request.user,
+        )
+
+        return Response(
+            SchoolImportBatchSerializer(
+                batch,
+                context={"request": request},
+            ).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="confirm",
+        url_name="confirm",
+    )
+    def confirm(self, request, pk=None):
+        self._ensure_can_import()
+
+        try:
+            batch = confirm_school_import(
+                batch_id=pk,
+                actor=request.user,
+            )
+        except SchoolImportBatch.DoesNotExist:
+            return Response(
+                {"detail": "La importación no existe."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except ValueError as error:
+            return Response(
+                {"detail": str(error)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            SchoolImportBatchSerializer(
+                batch,
+                context={"request": request},
+            ).data
+        )
+
 
 class SchoolViewSet(viewsets.ModelViewSet):
     permission_classes = [EsUsuarioCRM]
