@@ -1,4 +1,5 @@
 from datetime import timedelta
+from decimal import Decimal
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.test import TestCase
@@ -135,6 +136,20 @@ class CRMApiTests(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 201)
+
+        # Este helper conserva la cobertura del endpoint histórico de
+        # creación manual, pero deja el registro listo para probar el
+        # ciclo enviar/aceptar/reabrir con la regla comercial vigente:
+        # antes de enviar, supervisión ya debe haber definido el
+        # descuento editorial.
+        quotation = self.opportunity.quotations.get(
+            pk=response.data["id"],
+        )
+        quotation.items.update(
+            supplier_discount_percent=Decimal("40.00"),
+            supplier_cost=Decimal("72.00"),
+        )
+
         return response
 
     def test_advisor_can_create_and_list_opportunity_quotation(self):
