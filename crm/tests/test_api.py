@@ -118,6 +118,8 @@ class CRMApiTests(TestCase):
             ),
             {
                 "notes": "Propuesta comercial API.",
+                "sale_mode": "point_of_sale",
+                "service_date": "2027-01-15",
                 "items": [
                     {
                         "product": product.id,
