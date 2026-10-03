@@ -106,6 +106,7 @@ from .serializers import (
     SchoolEducationalServiceWriteSerializer,
     SchoolEventCreateSerializer,
     SchoolListSerializer,
+    SchoolAssignmentSerializer,
     SchoolPopulationRecordSerializer,
     SchoolPopulationRecordWriteSerializer,
     SchoolReminderCreateSerializer,
@@ -558,12 +559,62 @@ class SchoolViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(school, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         data = dict(serializer.validated_data)
-        can_assign = usuario_es_administrador(request.user) or usuario_puede_asignar_colegios(request.user)
+        can_assign = (
+            usuario_es_administrador(request.user)
+            or usuario_puede_asignar_colegios(request.user)
+        )
         if not can_assign:
             if "owner" in data and data["owner"] != school.owner:
                 raise PermissionDenied("No puedes reasignar el colegio.")
             if "team" in data and data["team"] != school.team:
-                raise PermissionDenied("No puedes cambiar el equipo comercial del colegio.")
+                raise PermissionDenied(
+                    "No puedes cambiar el equipo comercial del colegio."
+                )
+        else:
+            target_team = data.get("team", school.team)
+            target_owner = data.get("owner", school.owner)
+
+            if target_owner is not None and target_team is None:
+                raise serializers.ValidationError(
+                    {
+                        "team": (
+                            "Selecciona un equipo comercial antes de elegir "
+                            "un asesor."
+                        )
+                    }
+                )
+
+            if target_owner is not None and not (
+                CommercialTeamMembership.objects.filter(
+                    team=target_team,
+                    user=target_owner,
+                    is_active=True,
+                    role=CommercialTeamMembership.Role.ADVISOR,
+                ).exists()
+            ):
+                raise serializers.ValidationError(
+                    {
+                        "owner": (
+                            "El asesor seleccionado no pertenece al equipo "
+                            "comercial elegido."
+                        )
+                    }
+                )
+
+            if (
+                target_team is not None
+                and not usuario_es_administrador(request.user)
+                and not CommercialTeamMembership.objects.filter(
+                    team=target_team,
+                    user=request.user,
+                    is_active=True,
+                    role=CommercialTeamMembership.Role.SUPERVISOR,
+                ).exists()
+            ):
+                raise PermissionDenied(
+                    "Solo puedes asignar colegios dentro de tus equipos."
+                )
+
         levels = data.pop("levels", None)
         for field, value in data.items():
             setattr(school, field, value)
@@ -572,6 +623,99 @@ class SchoolViewSet(viewsets.ModelViewSet):
         if levels is not None:
             school.levels.set(levels)
         return Response(SchoolDetailSerializer(school).data)
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="assign-portfolio",
+        url_name="assign-portfolio",
+    )
+    def assign_portfolio(self, request):
+        if not (
+            usuario_es_administrador(request.user)
+            or usuario_puede_asignar_colegios(request.user)
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para asignar la cartera de colegios."
+            )
+
+        serializer = SchoolAssignmentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        school_ids = serializer.validated_data["school_ids"]
+        team = serializer.validated_data["team"]
+        owner = serializer.validated_data["owner"]
+
+        if (
+            team is not None
+            and not usuario_es_administrador(request.user)
+            and not CommercialTeamMembership.objects.filter(
+                team=team,
+                user=request.user,
+                is_active=True,
+                role=CommercialTeamMembership.Role.SUPERVISOR,
+            ).exists()
+        ):
+            raise PermissionDenied(
+                "Solo puedes asignar colegios dentro de tus equipos."
+            )
+
+        visible_ids = set(
+            visible_schools_queryset(request.user)
+            .filter(id__in=school_ids)
+            .values_list("id", flat=True)
+        )
+
+        if visible_ids != set(school_ids):
+            raise PermissionDenied(
+                "Uno o más colegios seleccionados no están disponibles para tu gestión."
+            )
+
+        with transaction.atomic():
+            schools = list(
+                School.objects
+                .select_for_update()
+                .filter(id__in=school_ids)
+                .order_by("name", "id")
+            )
+
+            for school in schools:
+                school.team = team
+                school.owner = owner
+                school.save(
+                    update_fields=[
+                        "team",
+                        "owner",
+                        "updated_at",
+                    ]
+                )
+
+        refreshed = (
+            School.objects
+            .filter(id__in=school_ids)
+            .select_related(
+                "team",
+                "owner",
+                "owner__book_express_profile",
+            )
+            .prefetch_related(
+                "levels",
+                "educational_services__level",
+                "educational_services__population_records",
+                "educational_services__population_records__details__grade",
+            )
+            .order_by("name", "id")
+        )
+
+        return Response(
+            {
+                "updated": len(schools),
+                "schools": SchoolListSerializer(
+                    refreshed,
+                    many=True,
+                ).data,
+            }
+        )
 
     @action(
         detail=True,
