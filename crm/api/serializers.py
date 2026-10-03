@@ -30,6 +30,8 @@ from crm.models import (
     SchoolContact,
     SchoolEditorialUsage,
     SchoolEducationalService,
+    SchoolImportBatch,
+    SchoolImportRow,
     SchoolPopulationRecord,
     SchoolPopulationDetail,
     MarketEditorial,
@@ -1033,6 +1035,7 @@ class SchoolListSerializer(serializers.ModelSerializer):
             "department",
             "province",
             "district",
+            "dependency",
             "estimated_students",
             "current_population_total",
             "segment",
@@ -1082,6 +1085,7 @@ class SchoolDetailSerializer(SchoolListSerializer):
         fields = SchoolListSerializer.Meta.fields + (
             "address",
             "reference",
+            "dependency",
             "notes",
             "contacts",
             "educational_services",
@@ -1108,7 +1112,7 @@ class SchoolWriteSerializer(serializers.ModelSerializer):
         model = School
         fields = (
             "institution_code", "name", "modular_code", "ruc", "phone", "whatsapp", "email", "address",
-            "reference", "department", "province", "district", "estimated_students",
+            "reference", "department", "province", "district", "dependency", "estimated_students",
             "levels", "team", "owner", "notes", "is_active",
         )
 
@@ -1170,6 +1174,94 @@ class SchoolAssignmentSerializer(serializers.Serializer):
             )
 
         return attrs
+
+
+class SchoolImportPreviewSerializer(serializers.Serializer):
+    file = serializers.FileField()
+    population_year = serializers.IntegerField(
+        min_value=2020,
+        max_value=2100,
+    )
+
+    def validate_file(self, value):
+        file_name = value.name.lower()
+
+        if not file_name.endswith(".xlsx"):
+            raise serializers.ValidationError(
+                "Selecciona un archivo Excel .xlsx."
+            )
+
+        return value
+
+
+class SchoolImportRowSerializer(serializers.ModelSerializer):
+    action_display = serializers.CharField(
+        source="get_action_display",
+        read_only=True,
+    )
+
+    class Meta:
+        model = SchoolImportRow
+        fields = (
+            "id",
+            "row_number",
+            "institution_code",
+            "modular_code",
+            "school_name",
+            "level_name",
+            "action",
+            "action_display",
+            "errors",
+            "processed",
+        )
+
+
+class SchoolImportBatchSerializer(serializers.ModelSerializer):
+    status_display = serializers.CharField(
+        source="get_status_display",
+        read_only=True,
+    )
+    file_name = serializers.SerializerMethodField()
+    rows = SchoolImportRowSerializer(
+        many=True,
+        read_only=True,
+    )
+
+    class Meta:
+        model = SchoolImportBatch
+        fields = (
+            "id",
+            "file_name",
+            "population_year",
+            "sheet_name",
+            "status",
+            "status_display",
+            "total_rows",
+            "total_schools",
+            "total_new",
+            "total_updated",
+            "total_errors",
+            "rows",
+            "created_at",
+            "updated_at",
+        )
+
+    def get_file_name(self, obj):
+        if not obj.file:
+            return ""
+
+        return obj.file.name.rsplit("/", 1)[-1]
+
+
+class SchoolImportBatchListSerializer(
+    SchoolImportBatchSerializer
+):
+    class Meta(SchoolImportBatchSerializer.Meta):
+        fields = tuple(
+            field
+            for field in SchoolImportBatchSerializer.Meta.fields
+            if field != "rows"
+        )
 
 
 class OpportunityListSerializer(serializers.ModelSerializer):
