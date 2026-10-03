@@ -14,6 +14,7 @@ from crm.models import (
     CommercialTeam,
     CommercialTeamMembership,
     School,
+    SchoolCampus,
     SchoolEducationalService,
 )
 
@@ -30,6 +31,19 @@ def grant_permission(user, codename):
 
 
 class SchoolImportApiTests(TestCase):
+    DEFAULT_HEADERS = [
+        "Código modular",
+        "Código de institución",
+        "Nombre de IE",
+        "Nivel/Modalidad",
+        "Dependencia",
+        "Dirección",
+        "Departamento",
+        "Provincia",
+        "Distrito",
+        "Alumnos",
+    ]
+
     def setUp(self):
         self.client = APIClient()
         self.admin = User.objects.create_superuser(
@@ -80,24 +94,11 @@ class SchoolImportApiTests(TestCase):
     def authenticate(self, user):
         self.client.force_authenticate(user=user)
 
-    def build_excel(self, rows):
+    def build_excel(self, rows, headers=None):
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = "Instituciones"
-        sheet.append(
-            [
-                "Código modular",
-                "Código de institución",
-                "Nombre de IE",
-                "Nivel/Modalidad",
-                "Dependencia",
-                "Dirección",
-                "Departamento",
-                "Provincia",
-                "Distrito",
-                "Alumnos",
-            ]
-        )
+        sheet.append(headers or self.DEFAULT_HEADERS)
 
         for row in rows:
             sheet.append(row)
@@ -115,15 +116,25 @@ class SchoolImportApiTests(TestCase):
             ),
         )
 
-    def preview(self, rows, user=None):
+    def preview(self, rows, user=None, headers=None):
         self.authenticate(user or self.admin)
         return self.client.post(
             reverse("crm:school-import-preview"),
             {
-                "file": self.build_excel(rows),
+                "file": self.build_excel(rows, headers=headers),
                 "population_year": 2027,
             },
             format="multipart",
+        )
+
+    def confirm(self, preview):
+        return self.client.post(
+            reverse(
+                "crm:school-import-confirm",
+                args=[preview.data["id"]],
+            ),
+            {},
+            format="json",
         )
 
     def test_preview_groups_levels_under_one_school(self):
@@ -173,10 +184,11 @@ class SchoolImportApiTests(TestCase):
         self.assertEqual(response.data["total_schools"], 1)
         self.assertEqual(response.data["total_new"], 1)
         self.assertEqual(response.data["total_updated"], 0)
+        self.assertEqual(response.data["total_warnings"], 0)
         self.assertEqual(response.data["total_errors"], 0)
         self.assertEqual(response.data["status"], "validated")
 
-    def test_confirm_creates_school_levels_and_population(self):
+    def test_confirm_creates_school_campus_levels_and_population(self):
         preview = self.preview(
             [
                 [
@@ -208,21 +220,13 @@ class SchoolImportApiTests(TestCase):
 
         self.assertEqual(preview.status_code, 201)
 
-        response = self.client.post(
-            reverse(
-                "crm:school-import-confirm",
-                args=[preview.data["id"]],
-            ),
-            {},
-            format="json",
-        )
+        response = self.confirm(preview)
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["status"], "imported")
 
-        school = School.objects.get(
-            institution_code="IE-002"
-        )
+        school = School.objects.get(institution_code="IE-002")
+        self.assertTrue(school.book_express_code.startswith("BE-IE-"))
         self.assertEqual(school.name, "Colegio Confirmado")
         self.assertEqual(school.dependency, "Privada")
         self.assertEqual(school.department, "Junín")
@@ -230,13 +234,24 @@ class SchoolImportApiTests(TestCase):
         self.assertEqual(school.district, "El Tambo")
         self.assertEqual(school.estimated_students, 180)
 
+        campus = school.campuses.get()
+        self.assertTrue(campus.is_main)
+        self.assertEqual(campus.address, "Jr. Dos 456")
+        self.assertEqual(campus.district, "El Tambo")
+        self.assertTrue(
+            campus.book_express_code.endswith("-S01")
+        )
+
         services = (
             SchoolEducationalService.objects
             .filter(school=school)
-            .select_related("level")
+            .select_related("campus", "level")
             .order_by("level__name")
         )
         self.assertEqual(services.count(), 2)
+        self.assertTrue(
+            all(service.campus_id == campus.id for service in services)
+        )
 
         populations = {
             service.level.name: service.population_records.get(
@@ -281,14 +296,7 @@ class SchoolImportApiTests(TestCase):
         self.assertEqual(preview.status_code, 201)
         self.assertEqual(preview.data["total_updated"], 1)
 
-        response = self.client.post(
-            reverse(
-                "crm:school-import-confirm",
-                args=[preview.data["id"]],
-            ),
-            {},
-            format="json",
-        )
+        response = self.confirm(preview)
         self.assertEqual(response.status_code, 200)
 
         school.refresh_from_db()
@@ -299,7 +307,7 @@ class SchoolImportApiTests(TestCase):
         self.assertEqual(school.team_id, self.team.id)
         self.assertEqual(school.owner_id, self.advisor.id)
 
-    def test_duplicate_school_level_blocks_confirmation(self):
+    def test_same_campus_and_level_conflict_blocks_confirmation(self):
         preview = self.preview(
             [
                 [
@@ -331,16 +339,219 @@ class SchoolImportApiTests(TestCase):
 
         self.assertEqual(preview.status_code, 201)
         self.assertGreater(preview.data["total_errors"], 0)
+        self.assertEqual(preview.data["status"], "error")
 
-        response = self.client.post(
-            reverse(
-                "crm:school-import-confirm",
-                args=[preview.data["id"]],
-            ),
-            {},
-            format="json",
-        )
+        response = self.confirm(preview)
         self.assertEqual(response.status_code, 400)
+
+    def test_missing_official_codes_are_warnings_not_errors(self):
+        preview = self.preview(
+            [
+                [
+                    "",
+                    "",
+                    "Colegio Sin Códigos",
+                    "Primaria",
+                    "Privada",
+                    "Av. Libre 100",
+                    "Junín",
+                    "Huancayo",
+                    "El Tambo",
+                    80,
+                ],
+            ]
+        )
+
+        self.assertEqual(preview.status_code, 201)
+        self.assertEqual(preview.data["total_errors"], 0)
+        self.assertGreater(preview.data["total_warnings"], 0)
+        self.assertEqual(preview.data["status"], "validated")
+        self.assertTrue(preview.data["rows"][0]["warnings"])
+
+        response = self.confirm(preview)
+        self.assertEqual(response.status_code, 200)
+
+        school = School.objects.get(name="Colegio Sin Códigos")
+        self.assertIsNone(school.institution_code)
+        self.assertTrue(school.book_express_code.startswith("BE-IE-"))
+
+        service = school.educational_services.get()
+        self.assertIsNone(service.modular_code)
+
+    def test_exact_duplicate_is_warning_and_is_imported_once(self):
+        row = [
+            "5100001",
+            "26550001",
+            "Colegio Repetido",
+            "Primaria",
+            "Particular",
+            "Jr. Repetido 100",
+            "Junín",
+            "Huancayo",
+            "El Tambo",
+            140,
+        ]
+        preview = self.preview([row, list(row)])
+
+        self.assertEqual(preview.status_code, 201)
+        self.assertEqual(preview.data["total_errors"], 0)
+        self.assertGreater(preview.data["total_warnings"], 0)
+        self.assertEqual(preview.data["status"], "validated")
+
+        response = self.confirm(preview)
+        self.assertEqual(response.status_code, 200)
+
+        school = School.objects.get(institution_code="26550001")
+        self.assertEqual(school.campuses.count(), 1)
+        self.assertEqual(school.educational_services.count(), 1)
+        self.assertEqual(school.estimated_students, 140)
+
+    def test_two_campuses_with_distinct_modular_codes_are_preserved(self):
+        preview = self.preview(
+            [
+                [
+                    "6100001",
+                    "26560001",
+                    "Colegio Dos Sedes",
+                    "Primaria",
+                    "Particular",
+                    "Jr. Sede Uno 100",
+                    "Junín",
+                    "Huancayo",
+                    "Huancayo",
+                    120,
+                ],
+                [
+                    "6100002",
+                    "26560001",
+                    "Colegio Dos Sedes",
+                    "Primaria",
+                    "Particular",
+                    "Av. Sede Dos 200",
+                    "Junín",
+                    "Huancayo",
+                    "El Tambo",
+                    90,
+                ],
+            ]
+        )
+
+        self.assertEqual(preview.status_code, 201)
+        self.assertEqual(preview.data["total_errors"], 0)
+        self.assertEqual(preview.data["status"], "validated")
+
+        response = self.confirm(preview)
+        self.assertEqual(response.status_code, 200)
+
+        school = School.objects.get(institution_code="26560001")
+        campuses = list(school.campuses.order_by("sequence"))
+        self.assertEqual(len(campuses), 2)
+        self.assertEqual(
+            {campus.address for campus in campuses},
+            {"Jr. Sede Uno 100", "Av. Sede Dos 200"},
+        )
+        self.assertEqual(school.educational_services.count(), 2)
+        self.assertEqual(school.estimated_students, 210)
+
+        populations = sorted(
+            record.student_count
+            for service in school.educational_services.all()
+            for record in service.population_records.filter(
+                is_current=True
+            )
+        )
+        self.assertEqual(populations, [90, 120])
+
+    def test_same_modular_code_in_two_addresses_requires_review(self):
+        preview = self.preview(
+            [
+                [
+                    "1255710",
+                    "26522382",
+                    "PRAXIS LA ESPERANZA",
+                    "Secundaria",
+                    "Particular",
+                    "JIRON PUNO 180",
+                    "Junín",
+                    "Huancayo",
+                    "Huancayo",
+                    500,
+                ],
+                [
+                    "1255710",
+                    "26522382",
+                    "PRAXIS LA ESPERANZA",
+                    "Secundaria",
+                    "Particular",
+                    "JIRON PACHACUTEC 550",
+                    "Junín",
+                    "Huancayo",
+                    "El Tambo",
+                    581,
+                ],
+            ]
+        )
+
+        self.assertEqual(preview.status_code, 201)
+        self.assertEqual(preview.data["status"], "error")
+        self.assertGreaterEqual(preview.data["total_errors"], 2)
+        self.assertIn(
+            "más de una sede",
+            " ".join(preview.data["rows"][0]["errors"]),
+        )
+
+        response = self.confirm(preview)
+        self.assertEqual(response.status_code, 400)
+
+    def test_real_excel_header_style_and_leading_zero_modular_code(self):
+        headers = [
+            "Código modular",
+            "Código de institución",
+            "Nombre de IE",
+            "Nivel / Modalidad",
+            "Dependencia",
+            "Dirección de IE",
+            "Departamento / Provincia / Distrito",
+            "Alumnos (Censo educativo 2026)",
+        ]
+        preview = self.preview(
+            [
+                [
+                    918706,
+                    26522382,
+                    "PRAXIS LA ESPERANZA",
+                    "Primaria",
+                    "Particular",
+                    "JIRON PACHACUTEC 550",
+                    "Junín / Huancayo / El Tambo",
+                    363,
+                ],
+            ],
+            headers=headers,
+        )
+
+        self.assertEqual(preview.status_code, 201)
+        self.assertEqual(preview.data["total_errors"], 0)
+        self.assertEqual(
+            preview.data["rows"][0]["modular_code"],
+            "0918706",
+        )
+        self.assertEqual(
+            preview.data["rows"][0]["institution_code"],
+            "26522382",
+        )
+
+        response = self.confirm(preview)
+        self.assertEqual(response.status_code, 200)
+
+        school = School.objects.get(institution_code="26522382")
+        campus = school.campuses.get()
+        service = school.educational_services.get()
+
+        self.assertEqual(campus.department, "Junín")
+        self.assertEqual(campus.province, "Huancayo")
+        self.assertEqual(campus.district, "El Tambo")
+        self.assertEqual(service.modular_code, "0918706")
 
     def test_advisor_cannot_import_schools(self):
         response = self.preview(
