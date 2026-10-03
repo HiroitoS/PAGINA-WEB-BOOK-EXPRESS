@@ -958,6 +958,47 @@ class CRMApiTests(TestCase):
         self.assertIn(self.advisor.id, advisor_ids)
         self.assertNotIn(self.supervisor.id, advisor_ids)
 
+    def test_admin_can_assign_multiple_schools_in_one_request(self):
+        extra_school = School.objects.create(
+            name="Colegio API adicional",
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.admin)
+
+        response = self.client.post(
+            reverse("crm:school-assign-portfolio"),
+            {
+                "school_ids": [
+                    self.school.id,
+                    extra_school.id,
+                ],
+                "team": self.other_team.id,
+                "owner": self.other_advisor.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["updated"], 2)
+
+        self.school.refresh_from_db()
+        extra_school.refresh_from_db()
+
+        self.assertEqual(self.school.team_id, self.other_team.id)
+        self.assertEqual(
+            self.school.owner_id,
+            self.other_advisor.id,
+        )
+        self.assertEqual(
+            extra_school.team_id,
+            self.other_team.id,
+        )
+        self.assertEqual(
+            extra_school.owner_id,
+            self.other_advisor.id,
+        )
+
     def test_admin_can_assign_school_portfolio(self):
         self.authenticate(self.admin)
 
