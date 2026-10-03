@@ -2070,11 +2070,15 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         services = (
             opportunity.school.educational_services
             .filter(is_active=True)
-            .select_related("level")
+            .select_related("campus", "level")
             .prefetch_related(
                 "population_records__details__grade",
             )
-            .order_by("level__name", "id")
+            .order_by(
+                "campus__sequence",
+                "level__name",
+                "id",
+            )
         )
 
         return Response(
@@ -2130,7 +2134,7 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         service = (
             opportunity.school.educational_services
             .filter(pk=service_id, is_active=True)
-            .select_related("level")
+            .select_related("campus", "level")
             .first()
         )
 
