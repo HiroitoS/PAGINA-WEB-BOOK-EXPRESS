@@ -9,7 +9,8 @@ class SchoolImportBatch(TimeStampedModel):
         PENDING = "pending", "Pendiente"
         VALIDATED = "validated", "Validado"
         IMPORTED = "imported", "Importado"
-        ERROR = "error", "Con errores"
+        PARTIAL = "partial", "Importación parcial"
+        ERROR = "error", "Revisión pendiente"
 
     file = models.FileField(
         upload_to="crm/importaciones/colegios/",
