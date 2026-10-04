@@ -23,6 +23,7 @@ from crm.models import (
     PipelineStage,
     School,
     SchoolCampus,
+    SchoolCommercialProfile,
     SchoolEducationalService,
     SchoolImportBatch,
     SchoolPopulationDetail,
@@ -112,6 +113,8 @@ from .serializers import (
     SchoolCommercialActivityCreateSerializer,
     SchoolContactCRMSerializer,
     SchoolContactSerializer,
+    SchoolCommercialProfileSerializer,
+    SchoolCommercialProfileWriteSerializer,
     SchoolDetailSerializer,
     SchoolEducationalServiceSerializer,
     SchoolEducationalServiceWriteSerializer,
@@ -1009,6 +1012,85 @@ class SchoolViewSet(viewsets.ModelViewSet):
                 school,
                 context={"request": request},
             ).data
+        )
+
+    @action(
+        detail=True,
+        methods=["patch"],
+        url_path="commercial-profile",
+        url_name="commercial-profile",
+    )
+    def commercial_profile(self, request, pk=None):
+        school = self.get_object()
+
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para modificar el perfil comercial."
+            )
+
+        serializer = SchoolCommercialProfileWriteSerializer(
+            data=request.data,
+        )
+        serializer.is_valid(raise_exception=True)
+
+        campaign = serializer.validated_data["campaign"]
+        population_rows = build_school_institutional_population(school)
+        known_population = [
+            item["student_count"]
+            for item in population_rows
+            if item["status"] == "known"
+            and item["student_count"] is not None
+        ]
+        population_total = (
+            sum(known_population)
+            if known_population
+            else None
+        )
+
+        profile, _created = SchoolCommercialProfile.objects.get_or_create(
+            school=school,
+            campaign=campaign,
+            defaults={
+                "population_total": population_total or 0,
+            },
+        )
+
+        changed_fields = []
+
+        if "monthly_tuition" in serializer.validated_data:
+            profile.monthly_tuition = serializer.validated_data[
+                "monthly_tuition"
+            ]
+            changed_fields.append("monthly_tuition")
+
+        if "textbook_usage" in serializer.validated_data:
+            profile.textbook_usage = serializer.validated_data[
+                "textbook_usage"
+            ]
+            changed_fields.append("textbook_usage")
+
+        if population_total is not None:
+            profile.population_total = population_total
+            changed_fields.append("population_total")
+
+        if changed_fields:
+            profile.priority_score = 0
+            profile.priority = SchoolCommercialProfile.Priority.UNDEFINED
+            profile.score_reasons = []
+            profile.scored_at = None
+            changed_fields.extend(
+                [
+                    "priority_score",
+                    "priority",
+                    "score_reasons",
+                    "scored_at",
+                    "updated_at",
+                ]
+            )
+            profile.save(update_fields=list(dict.fromkeys(changed_fields)))
+
+        return Response(
+            SchoolCommercialProfileSerializer(profile).data
         )
 
     @action(
