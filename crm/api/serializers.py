@@ -1307,6 +1307,10 @@ class SchoolCommercialProfileSerializer(serializers.ModelSerializer):
         source="get_textbook_usage_display",
         read_only=True,
     )
+    commercial_affinity_display = serializers.CharField(
+        source="get_commercial_affinity_display",
+        read_only=True,
+    )
 
     class Meta:
         model = SchoolCommercialProfile
@@ -1319,6 +1323,8 @@ class SchoolCommercialProfileSerializer(serializers.ModelSerializer):
             "textbook_usage",
             "textbook_usage_display",
             "monthly_tuition",
+            "commercial_affinity",
+            "commercial_affinity_display",
             "priority",
             "priority_display",
             "priority_score",
@@ -1345,6 +1351,10 @@ class SchoolCommercialProfileWriteSerializer(serializers.Serializer):
     )
     textbook_usage = serializers.ChoiceField(
         choices=SchoolCommercialProfile.TextbookUsage.choices,
+        required=False,
+    )
+    commercial_affinity = serializers.ChoiceField(
+        choices=SchoolCommercialProfile.CommercialAffinity.choices,
         required=False,
     )
 
