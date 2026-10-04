@@ -1746,6 +1746,59 @@ class CRMApiTests(TestCase):
         self.assertEqual(contact.relationship_level, 4)
 
 
+    def test_advisor_can_update_school_commercial_signals(self):
+        self.authenticate(self.advisor)
+
+        response = self.client.patch(
+            reverse(
+                "crm:school-commercial-profile",
+                args=[self.school.id],
+            ),
+            {
+                "campaign": self.campaign.id,
+                "monthly_tuition": "450.00",
+                "textbook_usage": "core",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["monthly_tuition"], "450.00")
+        self.assertEqual(response.data["textbook_usage"], "core")
+        self.assertEqual(
+            response.data["textbook_usage_display"],
+            "Utiliza textos principales",
+        )
+        self.assertEqual(response.data["priority"], "undefined")
+        self.assertEqual(response.data["priority_score"], 0)
+        self.assertIsNone(response.data["scored_at"])
+
+        profile = self.school.commercial_profiles.get(
+            campaign=self.campaign,
+        )
+        self.assertEqual(profile.monthly_tuition, Decimal("450.00"))
+        self.assertEqual(profile.textbook_usage, "core")
+
+    def test_school_commercial_signals_allow_unknown_tuition(self):
+        self.authenticate(self.advisor)
+
+        response = self.client.patch(
+            reverse(
+                "crm:school-commercial-profile",
+                args=[self.school.id],
+            ),
+            {
+                "campaign": self.campaign.id,
+                "monthly_tuition": None,
+                "textbook_usage": "unknown",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.data["monthly_tuition"])
+        self.assertEqual(response.data["textbook_usage"], "unknown")
+
     def test_new_primary_contact_replaces_previous_primary(self):
         previous = self.school.contacts.create(
             full_name="Director anterior",
