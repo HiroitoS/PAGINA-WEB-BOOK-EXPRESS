@@ -61,16 +61,21 @@ def _relationship_score(primary_contact):
     if not primary_contact.decision_role:
         return None, "Rol en la decisión sin clasificar"
 
-    relationship_points = {
-        1: 0,
-        2: 2,
-        3: 4,
-        4: 6,
-        5: 8,
-    }.get(primary_contact.relationship_level)
+    relationship_scores = {
+        1: (0, "Contacto inicial"),
+        2: (2, "Relación en desarrollo"),
+        3: (4, "Buena relación"),
+        4: (6, "Relación sólida"),
+        5: (8, "Relación estratégica"),
+    }
+    relationship_data = relationship_scores.get(
+        primary_contact.relationship_level
+    )
 
-    if relationship_points is None:
+    if relationship_data is None:
         return None, "Relacionamiento fuera de rango"
+
+    relationship_points, relationship_label = relationship_data
 
     role_points = {
         primary_contact.DecisionRole.DECISION_MAKER: 12,
@@ -83,10 +88,7 @@ def _relationship_score(primary_contact):
 
     return (
         relationship_points + role_points,
-        (
-            f"{primary_contact.get_relationship_level_display() if hasattr(primary_contact, 'get_relationship_level_display') else 'Nivel de relación'}"
-            f" · {primary_contact.get_decision_role_display()}"
-        ),
+        f"{relationship_label} · {primary_contact.get_decision_role_display()}",
     )
 
 
@@ -293,4 +295,28 @@ def recalculate_active_school_profile(school):
     if len(profiles) != 1:
         return None
 
-    return recalculate_school_commercial_profile(profiles[0])
+    profile = profiles[0]
+    institutional_records = (
+        school.educational_services.filter(
+            campus__isnull=True,
+            is_active=True,
+            population_records__is_current=True,
+        )
+        .values_list("population_records__student_count", flat=True)
+    )
+    institutional_total = sum(institutional_records)
+
+    if institutional_total != profile.population_total:
+        profile.population_total = institutional_total
+        profile.segment = SchoolCommercialProfile.segment_for_population(
+            institutional_total
+        )
+        profile.save(
+            update_fields=[
+                "population_total",
+                "segment",
+                "updated_at",
+            ]
+        )
+
+    return recalculate_school_commercial_profile(profile)
