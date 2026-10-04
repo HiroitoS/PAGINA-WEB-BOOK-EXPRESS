@@ -1333,6 +1333,7 @@ class SchoolCommercialProfileWriteSerializer(serializers.Serializer):
     campaign = serializers.PrimaryKeyRelatedField(
         queryset=Campaign.objects.filter(
             campaign_type=Campaign.CampaignType.SCHOOL,
+            status=Campaign.Status.ACTIVE,
         ),
     )
     monthly_tuition = serializers.DecimalField(
@@ -1467,7 +1468,19 @@ class SchoolDetailSerializer(SchoolListSerializer):
         ).data
 
     def get_commercial_profile(self, obj):
-        profile = next(iter(obj.commercial_profiles.all()), None)
+        profiles = list(obj.commercial_profiles.all())
+        profile = next(
+            (
+                candidate
+                for candidate in profiles
+                if (
+                    candidate.campaign.campaign_type
+                    == Campaign.CampaignType.SCHOOL
+                    and candidate.campaign.status == Campaign.Status.ACTIVE
+                )
+            ),
+            profiles[0] if profiles else None,
+        )
 
         if profile is None:
             return None
