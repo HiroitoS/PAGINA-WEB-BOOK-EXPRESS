@@ -406,6 +406,14 @@ class SchoolCommercialProfile(TimeStampedModel):
         default=TextbookUsage.UNKNOWN,
         verbose_name="Uso de textos",
     )
+    monthly_tuition = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        verbose_name="Pensión mensual referencial",
+    )
 
     priority_score = models.PositiveSmallIntegerField(
         default=0,
