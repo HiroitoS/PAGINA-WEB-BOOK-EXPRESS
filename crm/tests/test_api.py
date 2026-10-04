@@ -1519,7 +1519,7 @@ class CRMApiTests(TestCase):
             )
 
         self.authenticate(self.admin)
-        update_response = self.client.put(
+        update_response = self.client.patch(
             reverse(
                 "crm:school-institutional-population",
                 args=[self.school.id],
@@ -1584,7 +1584,7 @@ class CRMApiTests(TestCase):
         )
 
         self.authenticate(self.admin)
-        update_response = self.client.put(
+        update_response = self.client.patch(
             reverse(
                 "crm:school-institutional-population",
                 args=[self.school.id],
@@ -1643,7 +1643,7 @@ class CRMApiTests(TestCase):
         self.school.save(update_fields=["estimated_students", "updated_at"])
 
         self.authenticate(self.admin)
-        update_response = self.client.put(
+        update_response = self.client.patch(
             reverse(
                 "crm:school-institutional-population",
                 args=[self.school.id],
