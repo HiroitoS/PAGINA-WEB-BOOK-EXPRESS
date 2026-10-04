@@ -68,6 +68,8 @@ from crm.services import (
     create_school_reminder,
     create_school_task,
     record_commercial_activity,
+    recalculate_active_school_profile,
+    recalculate_school_commercial_profile,
     reopen_commercial_quotation_negotiation,
     send_commercial_quotation,
     update_commercial_quotation_from_projection,
@@ -556,6 +558,8 @@ class SchoolContactViewSet(viewsets.ModelViewSet):
                 school=contact.school,
                 contact=contact,
             )
+
+        recalculate_active_school_profile(contact.school)
 
         return Response(
             self.get_serializer(contact).data
@@ -1073,21 +1077,23 @@ class SchoolViewSet(viewsets.ModelViewSet):
             profile.population_total = population_total
             changed_fields.append("population_total")
 
-        if changed_fields:
-            profile.priority_score = 0
-            profile.priority = SchoolCommercialProfile.Priority.UNDEFINED
-            profile.score_reasons = []
-            profile.scored_at = None
-            changed_fields.extend(
-                [
-                    "priority_score",
-                    "priority",
-                    "score_reasons",
-                    "scored_at",
-                    "updated_at",
-                ]
+        if "commercial_affinity" in serializer.validated_data:
+            profile.commercial_affinity = serializer.validated_data[
+                "commercial_affinity"
+            ]
+            changed_fields.append("commercial_affinity")
+
+        if population_total is not None:
+            profile.segment = SchoolCommercialProfile.segment_for_population(
+                population_total
             )
+            changed_fields.append("segment")
+
+        if changed_fields:
+            changed_fields.append("updated_at")
             profile.save(update_fields=list(dict.fromkeys(changed_fields)))
+
+        profile = recalculate_school_commercial_profile(profile)
 
         return Response(
             SchoolCommercialProfileSerializer(profile).data
@@ -1503,6 +1509,8 @@ class SchoolViewSet(viewsets.ModelViewSet):
             .get(pk=school.pk)
         )
 
+        recalculate_active_school_profile(refreshed_school)
+
         return Response(
             build_school_institutional_population(refreshed_school)
         )
@@ -1570,6 +1578,8 @@ class SchoolViewSet(viewsets.ModelViewSet):
                 school=school,
                 contact=contact,
             )
+
+        recalculate_active_school_profile(school)
 
         return Response(
             SchoolContactSerializer(contact).data,
@@ -1654,6 +1664,8 @@ class SchoolViewSet(viewsets.ModelViewSet):
                 school=school,
                 contact=contact,
             )
+
+        recalculate_active_school_profile(school)
 
         return Response(
             SchoolContactSerializer(contact).data
