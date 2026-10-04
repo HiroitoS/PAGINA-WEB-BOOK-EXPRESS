@@ -1405,10 +1405,7 @@ class SchoolDetailSerializer(SchoolListSerializer):
     campuses = SchoolCampusSerializer(many=True, read_only=True)
     contacts = SchoolContactSerializer(many=True, read_only=True)
     institutional_population = serializers.SerializerMethodField()
-    educational_services = SchoolEducationalServiceSerializer(
-        many=True,
-        read_only=True,
-    )
+    educational_services = serializers.SerializerMethodField()
     editorial_usages = SchoolEditorialUsageSerializer(
         many=True,
         read_only=True,
@@ -1431,6 +1428,20 @@ class SchoolDetailSerializer(SchoolListSerializer):
 
     def get_institutional_population(self, obj):
         return build_school_institutional_population(obj)
+
+    def get_educational_services(self, obj):
+        services = list(obj.educational_services.all())
+        physical_services = [
+            service
+            for service in services
+            if service.campus_id is not None
+        ]
+        visible_services = physical_services or services
+
+        return SchoolEducationalServiceSerializer(
+            visible_services,
+            many=True,
+        ).data
 
     def get_commercial_profile(self, obj):
         profile = next(iter(obj.commercial_profiles.all()), None)
