@@ -1289,7 +1289,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
 
     @action(
         detail=True,
-        methods=["get", "put"],
+        methods=["get", "patch"],
         url_path="institutional-population",
         url_name="institutional-population",
     )
