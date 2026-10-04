@@ -376,6 +376,12 @@ class SchoolCommercialProfile(TimeStampedModel):
         COMPLEMENTARY = "complementary", "Solo áreas complementarias"
         NONE = "none", "No utiliza textos escolares"
 
+    class CommercialAffinity(models.TextChoices):
+        UNKNOWN = "unknown", "Sin evaluar"
+        PEDAGOGICAL = "pedagogical", "Pedagógica"
+        MIXED = "mixed", "Mixta"
+        COMMERCIAL = "commercial", "Comercial"
+
     school = models.ForeignKey(
         School,
         on_delete=models.CASCADE,
@@ -413,6 +419,12 @@ class SchoolCommercialProfile(TimeStampedModel):
         blank=True,
         validators=[MinValueValidator(0)],
         verbose_name="Pensión mensual referencial",
+    )
+    commercial_affinity = models.CharField(
+        max_length=20,
+        choices=CommercialAffinity.choices,
+        default=CommercialAffinity.UNKNOWN,
+        verbose_name="Afinidad pedagógica/comercial",
     )
 
     priority_score = models.PositiveSmallIntegerField(
