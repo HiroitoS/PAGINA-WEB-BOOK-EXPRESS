@@ -1799,6 +1799,62 @@ class CRMApiTests(TestCase):
         self.assertIsNone(response.data["monthly_tuition"])
         self.assertEqual(response.data["textbook_usage"], "unknown")
 
+    def test_school_commercial_signals_reject_inactive_campaign(self):
+        closed_campaign = Campaign.objects.create(
+            code="API-CLOSED-2026",
+            name="Campaña cerrada 2026",
+            year=2026,
+            status=Campaign.Status.CLOSED,
+            created_by=self.admin,
+        )
+        self.authenticate(self.advisor)
+
+        response = self.client.patch(
+            reverse(
+                "crm:school-commercial-profile",
+                args=[self.school.id],
+            ),
+            {
+                "campaign": closed_campaign.id,
+                "monthly_tuition": "400.00",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_school_detail_prefers_active_commercial_profile(self):
+        previous_campaign = Campaign.objects.create(
+            code="API-HISTORY-2026",
+            name="Campaña histórica 2026",
+            year=2026,
+            status=Campaign.Status.CLOSED,
+            created_by=self.admin,
+        )
+        self.school.commercial_profiles.create(
+            campaign=previous_campaign,
+            monthly_tuition=Decimal("300.00"),
+        )
+        self.school.commercial_profiles.create(
+            campaign=self.campaign,
+            monthly_tuition=Decimal("450.00"),
+        )
+
+        self.authenticate(self.advisor)
+        response = self.client.get(
+            reverse("crm:school-detail", args=[self.school.id])
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data["commercial_profile"]["campaign"]["id"],
+            self.campaign.id,
+        )
+        self.assertEqual(
+            response.data["commercial_profile"]["monthly_tuition"],
+            "450.00",
+        )
+
     def test_new_primary_contact_replaces_previous_primary(self):
         previous = self.school.contacts.create(
             full_name="Director anterior",
