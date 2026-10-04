@@ -627,6 +627,279 @@ class SchoolPopulationRecordWriteSerializer(serializers.ModelSerializer):
         return population
 
 
+
+def _population_record_key(record):
+    return (
+        record.year,
+        record.created_at,
+        record.id,
+    )
+
+
+def _latest_current_population(service):
+    current_records = [
+        record
+        for record in service.population_records.all()
+        if record.is_current
+    ]
+
+    if not current_records:
+        return None
+
+    return max(
+        current_records,
+        key=_population_record_key,
+    )
+
+
+def _population_details_data(record):
+    if record is None:
+        return []
+
+    return SchoolPopulationDetailSerializer(
+        record.details.all(),
+        many=True,
+    ).data
+
+
+def build_school_institutional_population(school):
+    """
+    Resume la población comercial por colegio y nivel, sin obligar a
+    distribuirla por sede.
+
+    Si existe un servicio institucional (campus=None), ese registro es la
+    fuente oficial. Mientras no exista, se consolida la información importada
+    de las sedes. Cuando un mismo código modular aparece en más de una sede,
+    se toma una sola vez para evitar duplicar alumnos por variaciones de
+    dirección.
+    """
+
+    services = list(school.educational_services.all())
+    buckets = {}
+
+    for service in services:
+        level_id = service.level_id
+        bucket = buckets.setdefault(
+            level_id,
+            {
+                "level": service.level,
+                "institutional": None,
+                "campus_services": [],
+            },
+        )
+
+        if service.campus_id is None:
+            current = bucket["institutional"]
+            if current is None or service.id < current.id:
+                bucket["institutional"] = service
+        else:
+            bucket["campus_services"].append(service)
+
+    rows = []
+
+    for bucket in buckets.values():
+        level = bucket["level"]
+        institutional_service = bucket["institutional"]
+        campus_services = bucket["campus_services"]
+
+        if institutional_service is not None:
+            record = _latest_current_population(institutional_service)
+
+            if not institutional_service.is_active:
+                status_value = "not_applicable"
+                student_count = None
+                year = record.year if record is not None else None
+                details = []
+            elif record is None:
+                status_value = "pending"
+                student_count = None
+                year = None
+                details = []
+            else:
+                status_value = "known"
+                student_count = record.student_count
+                year = record.year
+                details = _population_details_data(record)
+
+            rows.append(
+                {
+                    "service_id": institutional_service.id,
+                    "level": LevelSummarySerializer(level).data,
+                    "year": year,
+                    "student_count": student_count,
+                    "status": status_value,
+                    "is_active": institutional_service.is_active,
+                    "has_pending_data": False,
+                    "details": details,
+                    "source": "institutional",
+                }
+            )
+            continue
+
+        active_services = [
+            service
+            for service in campus_services
+            if service.is_active
+        ]
+
+        if not active_services:
+            continue
+
+        records_by_reference = {}
+        has_pending_data = False
+
+        for service in active_services:
+            record = _latest_current_population(service)
+
+            if record is None:
+                has_pending_data = True
+                continue
+
+            modular_code = (service.modular_code or "").strip()
+
+            if modular_code:
+                reference_key = ("modular", modular_code.casefold())
+            else:
+                reference_key = ("service", service.id)
+
+            previous = records_by_reference.get(reference_key)
+
+            if (
+                previous is None
+                or record.student_count > previous.student_count
+                or (
+                    record.student_count == previous.student_count
+                    and _population_record_key(record)
+                    > _population_record_key(previous)
+                )
+            ):
+                records_by_reference[reference_key] = record
+
+        consolidated_records = list(records_by_reference.values())
+
+        if consolidated_records:
+            latest_record = max(
+                consolidated_records,
+                key=_population_record_key,
+            )
+            student_count = sum(
+                record.student_count
+                for record in consolidated_records
+            )
+            year = max(record.year for record in consolidated_records)
+            status_value = "known"
+
+            details = (
+                _population_details_data(consolidated_records[0])
+                if len(consolidated_records) == 1
+                else []
+            )
+        else:
+            latest_record = None
+            student_count = None
+            year = None
+            status_value = "pending"
+            details = []
+
+        rows.append(
+            {
+                "service_id": None,
+                "level": LevelSummarySerializer(level).data,
+                "year": year,
+                "student_count": student_count,
+                "status": status_value,
+                "is_active": True,
+                "has_pending_data": has_pending_data,
+                "details": details,
+                "source": "consolidated",
+                "source_record_id": (
+                    latest_record.id
+                    if latest_record is not None
+                    else None
+                ),
+            }
+        )
+
+    return sorted(
+        rows,
+        key=lambda item: (
+            item["level"].get("order") or 0,
+            item["level"].get("name") or "",
+            item["level"].get("id") or 0,
+        ),
+    )
+
+
+class SchoolInstitutionalPopulationLevelWriteSerializer(
+    serializers.Serializer
+):
+    level = serializers.PrimaryKeyRelatedField(
+        queryset=Level.objects.filter(is_active=True),
+    )
+    year = serializers.IntegerField(
+        min_value=2000,
+        max_value=2100,
+    )
+    is_active = serializers.BooleanField(
+        default=True,
+    )
+    student_count = serializers.IntegerField(
+        min_value=0,
+        required=False,
+        allow_null=True,
+    )
+    details = SchoolPopulationDetailWriteSerializer(
+        many=True,
+        required=False,
+    )
+
+    def validate(self, attrs):
+        details = attrs.get("details", [])
+        is_active = attrs.get("is_active", True)
+
+        if details:
+            grade_ids = [detail["grade"].id for detail in details]
+
+            if len(grade_ids) != len(set(grade_ids)):
+                raise serializers.ValidationError(
+                    {
+                        "details": (
+                            "No puedes registrar dos veces el mismo grado "
+                            "en un nivel."
+                        )
+                    }
+                )
+
+            attrs["student_count"] = sum(
+                detail["section_count"]
+                * detail["students_per_section"]
+                for detail in details
+            )
+        elif not is_active:
+            attrs["student_count"] = None
+
+        return attrs
+
+
+class SchoolInstitutionalPopulationWriteSerializer(
+    serializers.Serializer
+):
+    levels = SchoolInstitutionalPopulationLevelWriteSerializer(
+        many=True,
+        allow_empty=False,
+    )
+
+    def validate_levels(self, value):
+        level_ids = [item["level"].id for item in value]
+
+        if len(level_ids) != len(set(level_ids)):
+            raise serializers.ValidationError(
+                "No puedes registrar dos veces el mismo nivel educativo."
+            )
+
+        return value
+
+
 class SchoolCampusSerializer(serializers.ModelSerializer):
     book_express_code = serializers.ReadOnlyField()
 
@@ -1052,34 +1325,24 @@ class SchoolCommercialProfileSerializer(serializers.ModelSerializer):
 
 
 def _latest_population_for_service(service):
-    current_records = [
-        record
-        for record in service.population_records.all()
-        if record.is_current
-    ]
-
-    if not current_records:
-        return None
-
-    return max(
-        current_records,
-        key=lambda record: (record.year, record.created_at, record.id),
-    )
+    return _latest_current_population(service)
 
 
 def _current_population_total(school):
-    total = 0
+    known_rows = [
+        item
+        for item in build_school_institutional_population(school)
+        if item["status"] == "known"
+        and item["student_count"] is not None
+    ]
 
-    for service in school.educational_services.all():
-        if not service.is_active:
-            continue
+    if not known_rows:
+        return None
 
-        record = _latest_population_for_service(service)
-
-        if record is not None:
-            total += record.student_count
-
-    return total
+    return sum(
+        item["student_count"]
+        for item in known_rows
+    )
 
 
 class SchoolListSerializer(serializers.ModelSerializer):
@@ -1118,7 +1381,7 @@ class SchoolListSerializer(serializers.ModelSerializer):
     def get_current_population_total(self, obj):
         total = _current_population_total(obj)
 
-        if total > 0:
+        if total is not None:
             return total
 
         return obj.estimated_students
@@ -1141,6 +1404,7 @@ class SchoolListSerializer(serializers.ModelSerializer):
 class SchoolDetailSerializer(SchoolListSerializer):
     campuses = SchoolCampusSerializer(many=True, read_only=True)
     contacts = SchoolContactSerializer(many=True, read_only=True)
+    institutional_population = serializers.SerializerMethodField()
     educational_services = SchoolEducationalServiceSerializer(
         many=True,
         read_only=True,
@@ -1158,11 +1422,15 @@ class SchoolDetailSerializer(SchoolListSerializer):
             "notes",
             "campuses",
             "contacts",
+            "institutional_population",
             "educational_services",
             "editorial_usages",
             "commercial_profile",
             "created_at",
         )
+
+    def get_institutional_population(self, obj):
+        return build_school_institutional_population(obj)
 
     def get_commercial_profile(self, obj):
         profile = next(iter(obj.commercial_profiles.all()), None)
