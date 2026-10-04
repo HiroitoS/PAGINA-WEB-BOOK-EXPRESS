@@ -11,6 +11,7 @@ from rest_framework.test import APIClient
 from catalog.models import Area, Grade, Level, Product, Provider
 from crm.models import (
     Campaign,
+    CommercialQuotation,
     CommercialTeam,
     CommercialTeamMembership,
     CRMWorkItemLink,
@@ -1942,6 +1943,104 @@ class CRMApiTests(TestCase):
                 "history": 0,
                 "affinity": 15,
             },
+        )
+
+    def test_school_score_rewards_previous_accepted_quotation(self):
+        previous_campaign = Campaign.objects.create(
+            code="API-SCORE-HISTORY-2026",
+            name="Campaña score histórica 2026",
+            year=2026,
+            status=Campaign.Status.CLOSED,
+            created_by=self.admin,
+        )
+        previous_opportunity = Opportunity.objects.create(
+            title="Oportunidad histórica score",
+            school=self.school,
+            campaign=previous_campaign,
+            pipeline=self.pipeline,
+            stage=self.initial_stage,
+            team=self.team,
+            owner=self.advisor,
+            created_by=self.admin,
+        )
+        CommercialQuotation.objects.create(
+            opportunity=previous_opportunity,
+            version=1,
+            status=CommercialQuotation.Status.ACCEPTED,
+            school_name_snapshot=self.school.name,
+            campaign_name_snapshot=previous_campaign.name,
+            accepted_at=timezone.now(),
+            created_by=self.admin,
+        )
+
+        primary, _ = Level.objects.get_or_create(
+            name="Primaria historial score API",
+            defaults={
+                "is_active": True,
+            },
+        )
+
+        self.authenticate(self.advisor)
+        population_response = self.client.patch(
+            reverse(
+                "crm:school-institutional-population",
+                args=[self.school.id],
+            ),
+            {
+                "levels": [
+                    {
+                        "level": primary.id,
+                        "year": 2027,
+                        "is_active": True,
+                        "student_count": 600,
+                        "details": [],
+                    }
+                ]
+            },
+            format="json",
+        )
+        self.assertEqual(population_response.status_code, 200)
+
+        contact_response = self.client.post(
+            reverse(
+                "crm:school-contacts",
+                args=[self.school.id],
+            ),
+            {
+                "full_name": "Director historial score",
+                "position": "Director",
+                "decision_role": "decision_maker",
+                "relationship_level": 4,
+                "is_primary": True,
+                "is_active": True,
+            },
+            format="json",
+        )
+        self.assertEqual(contact_response.status_code, 201)
+
+        score_response = self.client.patch(
+            reverse(
+                "crm:school-commercial-profile",
+                args=[self.school.id],
+            ),
+            {
+                "campaign": self.campaign.id,
+                "monthly_tuition": "650.00",
+                "commercial_affinity": "pedagogical",
+            },
+            format="json",
+        )
+
+        self.assertEqual(score_response.status_code, 200)
+        self.assertEqual(score_response.data["priority_score"], 87)
+        components = {
+            item["key"]: item
+            for item in score_response.data["score_reasons"]["components"]
+        }
+        self.assertEqual(components["history"]["points"], 12)
+        self.assertEqual(
+            components["history"]["detail"],
+            "Cotización aceptada en campaña anterior",
         )
 
     def test_new_primary_contact_replaces_previous_primary(self):
