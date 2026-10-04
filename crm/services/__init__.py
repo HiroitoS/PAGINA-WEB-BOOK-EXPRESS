@@ -70,4 +70,11 @@ __all__ = [
     "link_crm_work_item",
     "link_work_item_to_school",
     "link_work_item_to_opportunity",
+    "recalculate_active_school_profile",
+    "recalculate_school_commercial_profile",
 ]
+
+from .school_scoring import (
+    recalculate_active_school_profile,
+    recalculate_school_commercial_profile,
+)
