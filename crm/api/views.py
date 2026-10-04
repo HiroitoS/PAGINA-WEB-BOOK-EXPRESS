@@ -23,7 +23,10 @@ from crm.models import (
     PipelineStage,
     School,
     SchoolCampus,
+    SchoolEducationalService,
     SchoolImportBatch,
+    SchoolPopulationDetail,
+    SchoolPopulationRecord,
 )
 from crm.permissions import (
     EsUsuarioCRM,
@@ -118,6 +121,7 @@ from .serializers import (
     SchoolImportBatchListSerializer,
     SchoolImportBatchSerializer,
     SchoolImportPreviewSerializer,
+    SchoolInstitutionalPopulationWriteSerializer,
     SchoolPopulationRecordSerializer,
     SchoolPopulationRecordWriteSerializer,
     SchoolReminderCreateSerializer,
@@ -129,6 +133,7 @@ from .serializers import (
     SchoolEditorialUsageWriteSerializer,
     MarketEditorialCreateSerializer,
     MarketEditorialSerializer,
+    build_school_institutional_population,
 )
 
 
@@ -1280,6 +1285,108 @@ class SchoolViewSet(viewsets.ModelViewSet):
         return Response(
             SchoolPopulationRecordSerializer(population).data,
             status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["get", "put"],
+        url_path="institutional-population",
+        url_name="institutional-population",
+    )
+    def institutional_population(self, request, pk=None):
+        school = self.get_object()
+
+        if request.method == "GET":
+            return Response(
+                build_school_institutional_population(school)
+            )
+
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para gestionar la población del colegio."
+            )
+
+        serializer = SchoolInstitutionalPopulationWriteSerializer(
+            data=request.data,
+        )
+        serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            for item in serializer.validated_data["levels"]:
+                level = item["level"]
+                year = item["year"]
+                is_active = item.get("is_active", True)
+                student_count = item.get("student_count")
+                details = item.get("details", [])
+
+                service, _created = (
+                    SchoolEducationalService.objects
+                    .select_for_update()
+                    .get_or_create(
+                        school=school,
+                        campus=None,
+                        level=level,
+                        defaults={
+                            "is_active": is_active,
+                            "created_by": request.user,
+                        },
+                    )
+                )
+
+                if service.is_active != is_active:
+                    service.is_active = is_active
+                    service.save()
+
+                current_records = service.population_records.filter(
+                    is_current=True,
+                )
+
+                if not is_active or student_count is None:
+                    current_records.update(
+                        is_current=False,
+                    )
+                    continue
+
+                current_records.update(
+                    is_current=False,
+                )
+
+                population = SchoolPopulationRecord.objects.create(
+                    service=service,
+                    year=year,
+                    student_count=student_count,
+                    source="manual",
+                    source_detail="Población institucional",
+                    is_current=True,
+                    recorded_by=request.user,
+                )
+
+                SchoolPopulationDetail.objects.bulk_create(
+                    [
+                        SchoolPopulationDetail(
+                            population=population,
+                            grade=detail["grade"],
+                            section_count=detail["section_count"],
+                            students_per_section=detail[
+                                "students_per_section"
+                            ],
+                        )
+                        for detail in details
+                    ]
+                )
+
+        refreshed_school = (
+            School.objects
+            .prefetch_related(
+                "educational_services__level",
+                "educational_services__population_records",
+                "educational_services__population_records__details__grade",
+            )
+            .get(pk=school.pk)
+        )
+
+        return Response(
+            build_school_institutional_population(refreshed_school)
         )
 
     @action(
