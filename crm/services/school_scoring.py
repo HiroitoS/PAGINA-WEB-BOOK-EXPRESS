@@ -296,7 +296,7 @@ def recalculate_active_school_profile(school):
         return None
 
     profile = profiles[0]
-    institutional_records = (
+    institutional_records = list(
         school.educational_services.filter(
             campus__isnull=True,
             is_active=True,
@@ -304,19 +304,21 @@ def recalculate_active_school_profile(school):
         )
         .values_list("population_records__student_count", flat=True)
     )
-    institutional_total = sum(institutional_records)
 
-    if institutional_total != profile.population_total:
-        profile.population_total = institutional_total
-        profile.segment = SchoolCommercialProfile.segment_for_population(
-            institutional_total
-        )
-        profile.save(
-            update_fields=[
-                "population_total",
-                "segment",
-                "updated_at",
-            ]
-        )
+    if institutional_records:
+        institutional_total = sum(institutional_records)
+
+        if institutional_total != profile.population_total:
+            profile.population_total = institutional_total
+            profile.segment = SchoolCommercialProfile.segment_for_population(
+                institutional_total
+            )
+            profile.save(
+                update_fields=[
+                    "population_total",
+                    "segment",
+                    "updated_at",
+                ]
+            )
 
     return recalculate_school_commercial_profile(profile)
