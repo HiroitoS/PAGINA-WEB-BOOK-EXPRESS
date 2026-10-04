@@ -18,6 +18,7 @@ from crm.models import (
     Pipeline,
     PipelineStage,
     School,
+    SchoolCampus,
     SchoolContact,
     SchoolEducationalService,
     SchoolPopulationRecord,
@@ -1393,6 +1394,289 @@ class CRMApiTests(TestCase):
             response.data["segment"],
             "A",
         )
+
+    def test_school_detail_consolidates_physical_population_by_level(self):
+        primary = Level.objects.create(
+            name="Primaria consolidada CRM",
+            is_active=True,
+        )
+        main_campus = SchoolCampus.objects.create(
+            school=self.school,
+            sequence=1,
+            name="Sede principal",
+            address="Jr. Principal 100",
+            is_main=True,
+            created_by=self.admin,
+        )
+        second_campus = SchoolCampus.objects.create(
+            school=self.school,
+            sequence=2,
+            name="Sede 2",
+            address="Av. Secundaria 200",
+            created_by=self.admin,
+        )
+        main_service = SchoolEducationalService.objects.create(
+            school=self.school,
+            campus=main_campus,
+            level=primary,
+            modular_code="7777001",
+            created_by=self.admin,
+        )
+        second_service = SchoolEducationalService.objects.create(
+            school=self.school,
+            campus=second_campus,
+            level=primary,
+            modular_code="7777002",
+            created_by=self.admin,
+        )
+
+        SchoolPopulationRecord.objects.create(
+            service=main_service,
+            year=2027,
+            student_count=300,
+            source="import",
+            is_current=True,
+            recorded_by=self.admin,
+        )
+        SchoolPopulationRecord.objects.create(
+            service=second_service,
+            year=2027,
+            student_count=120,
+            source="import",
+            is_current=True,
+            recorded_by=self.admin,
+        )
+
+        self.authenticate(self.admin)
+        response = self.client.get(
+            reverse(
+                "crm:school-detail",
+                args=[self.school.id],
+            )
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data["current_population_total"],
+            420,
+        )
+        self.assertEqual(response.data["segment"], "B")
+        self.assertEqual(
+            len(response.data["institutional_population"]),
+            1,
+        )
+        self.assertEqual(
+            response.data["institutional_population"][0]["student_count"],
+            420,
+        )
+        self.assertEqual(
+            response.data["institutional_population"][0]["source"],
+            "consolidated",
+        )
+
+    def test_institutional_population_overrides_physical_fallback(self):
+        primary = Level.objects.create(
+            name="Primaria institucional CRM",
+            is_active=True,
+        )
+        main_campus = SchoolCampus.objects.create(
+            school=self.school,
+            sequence=1,
+            name="Sede principal",
+            address="Jr. Principal 100",
+            is_main=True,
+            created_by=self.admin,
+        )
+        second_campus = SchoolCampus.objects.create(
+            school=self.school,
+            sequence=2,
+            name="Sede 2",
+            address="Av. Secundaria 200",
+            created_by=self.admin,
+        )
+
+        for index, (campus, students) in enumerate(
+            (
+                (main_campus, 300),
+                (second_campus, 120),
+            ),
+            start=1,
+        ):
+            service = SchoolEducationalService.objects.create(
+                school=self.school,
+                campus=campus,
+                level=primary,
+                modular_code=f"888800{index}",
+                created_by=self.admin,
+            )
+            SchoolPopulationRecord.objects.create(
+                service=service,
+                year=2027,
+                student_count=students,
+                source="import",
+                is_current=True,
+                recorded_by=self.admin,
+            )
+
+        self.authenticate(self.admin)
+        update_response = self.client.put(
+            reverse(
+                "crm:school-institutional-population",
+                args=[self.school.id],
+            ),
+            {
+                "levels": [
+                    {
+                        "level": primary.id,
+                        "year": 2027,
+                        "is_active": True,
+                        "student_count": 390,
+                        "details": [],
+                    }
+                ]
+            },
+            format="json",
+        )
+
+        self.assertEqual(update_response.status_code, 200)
+        self.assertEqual(
+            update_response.data[0]["student_count"],
+            390,
+        )
+        self.assertEqual(
+            update_response.data[0]["source"],
+            "institutional",
+        )
+
+        detail_response = self.client.get(
+            reverse(
+                "crm:school-detail",
+                args=[self.school.id],
+            )
+        )
+
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(
+            detail_response.data["current_population_total"],
+            390,
+        )
+        self.assertEqual(detail_response.data["segment"], "B")
+        self.assertEqual(
+            len(detail_response.data["educational_services"]),
+            2,
+        )
+        self.assertTrue(
+            SchoolEducationalService.objects.filter(
+                school=self.school,
+                campus__isnull=True,
+                level=primary,
+            ).exists()
+        )
+
+    def test_pending_population_is_not_treated_as_zero(self):
+        primary = Level.objects.create(
+            name="Primaria pendiente CRM",
+            is_active=True,
+        )
+        secondary = Level.objects.create(
+            name="Secundaria pendiente CRM",
+            is_active=True,
+        )
+
+        self.authenticate(self.admin)
+        update_response = self.client.put(
+            reverse(
+                "crm:school-institutional-population",
+                args=[self.school.id],
+            ),
+            {
+                "levels": [
+                    {
+                        "level": primary.id,
+                        "year": 2027,
+                        "is_active": True,
+                        "student_count": 300,
+                        "details": [],
+                    },
+                    {
+                        "level": secondary.id,
+                        "year": 2027,
+                        "is_active": True,
+                        "student_count": None,
+                        "details": [],
+                    },
+                ]
+            },
+            format="json",
+        )
+
+        self.assertEqual(update_response.status_code, 200)
+
+        detail_response = self.client.get(
+            reverse(
+                "crm:school-detail",
+                args=[self.school.id],
+            )
+        )
+
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(
+            detail_response.data["current_population_total"],
+            300,
+        )
+        self.assertEqual(detail_response.data["segment"], "B")
+
+        pending_level = next(
+            item
+            for item in detail_response.data["institutional_population"]
+            if item["level"]["id"] == secondary.id
+        )
+        self.assertEqual(pending_level["status"], "pending")
+        self.assertIsNone(pending_level["student_count"])
+
+    def test_confirmed_zero_population_does_not_use_legacy_estimate(self):
+        primary = Level.objects.create(
+            name="Primaria cero CRM",
+            is_active=True,
+        )
+        self.school.estimated_students = 999
+        self.school.save(update_fields=["estimated_students", "updated_at"])
+
+        self.authenticate(self.admin)
+        update_response = self.client.put(
+            reverse(
+                "crm:school-institutional-population",
+                args=[self.school.id],
+            ),
+            {
+                "levels": [
+                    {
+                        "level": primary.id,
+                        "year": 2027,
+                        "is_active": True,
+                        "student_count": 0,
+                        "details": [],
+                    }
+                ]
+            },
+            format="json",
+        )
+
+        self.assertEqual(update_response.status_code, 200)
+
+        detail_response = self.client.get(
+            reverse(
+                "crm:school-detail",
+                args=[self.school.id],
+            )
+        )
+
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(
+            detail_response.data["current_population_total"],
+            0,
+        )
+        self.assertEqual(detail_response.data["segment"], "OUT")
 
     def test_advisor_can_create_primary_school_contact(self):
         self.authenticate(self.advisor)
