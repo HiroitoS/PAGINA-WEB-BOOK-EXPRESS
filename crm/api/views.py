@@ -1339,12 +1339,48 @@ class SchoolViewSet(viewsets.ModelViewSet):
 
                 current_records = service.population_records.filter(
                     is_current=True,
+                ).prefetch_related("details__grade")
+
+                current_population = (
+                    current_records
+                    .order_by("-year", "-created_at", "-id")
+                    .first()
                 )
 
                 if not is_active or student_count is None:
                     current_records.update(
                         is_current=False,
                     )
+                    continue
+
+                desired_details = sorted(
+                    (
+                        detail["grade"].id,
+                        detail["section_count"],
+                        detail["students_per_section"],
+                    )
+                    for detail in details
+                )
+
+                current_details = (
+                    sorted(
+                        (
+                            detail.grade_id,
+                            detail.section_count,
+                            detail.students_per_section,
+                        )
+                        for detail in current_population.details.all()
+                    )
+                    if current_population is not None
+                    else []
+                )
+
+                if (
+                    current_population is not None
+                    and current_population.year == year
+                    and current_population.student_count == student_count
+                    and current_details == desired_details
+                ):
                     continue
 
                 current_records.update(
