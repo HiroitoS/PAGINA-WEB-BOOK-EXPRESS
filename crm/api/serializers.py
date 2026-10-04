@@ -1329,20 +1329,24 @@ def _latest_population_for_service(service):
 
 
 def _current_population_total(school):
+    population_rows = build_school_institutional_population(school)
     known_rows = [
         item
-        for item in build_school_institutional_population(school)
+        for item in population_rows
         if item["status"] == "known"
         and item["student_count"] is not None
     ]
 
-    if not known_rows:
+    if known_rows:
+        return sum(
+            item["student_count"]
+            for item in known_rows
+        )
+
+    if population_rows:
         return None
 
-    return sum(
-        item["student_count"]
-        for item in known_rows
-    )
+    return school.estimated_students
 
 
 class SchoolListSerializer(serializers.ModelSerializer):
@@ -1379,12 +1383,7 @@ class SchoolListSerializer(serializers.ModelSerializer):
         )
 
     def get_current_population_total(self, obj):
-        total = _current_population_total(obj)
-
-        if total is not None:
-            return total
-
-        return obj.estimated_students
+        return _current_population_total(obj)
 
     def get_segment(self, obj):
         population = self.get_current_population_total(obj)
