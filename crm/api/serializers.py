@@ -1318,6 +1318,7 @@ class SchoolCommercialProfileSerializer(serializers.ModelSerializer):
             "segment_display",
             "textbook_usage",
             "textbook_usage_display",
+            "monthly_tuition",
             "priority",
             "priority_display",
             "priority_score",
@@ -1326,6 +1327,25 @@ class SchoolCommercialProfileSerializer(serializers.ModelSerializer):
             "scored_at",
             "updated_at",
         )
+
+
+class SchoolCommercialProfileWriteSerializer(serializers.Serializer):
+    campaign = serializers.PrimaryKeyRelatedField(
+        queryset=Campaign.objects.filter(
+            campaign_type=Campaign.CampaignType.SCHOOL,
+        ),
+    )
+    monthly_tuition = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        min_value=0,
+        required=False,
+        allow_null=True,
+    )
+    textbook_usage = serializers.ChoiceField(
+        choices=SchoolCommercialProfile.TextbookUsage.choices,
+        required=False,
+    )
 
 
 def _latest_population_for_service(service):
