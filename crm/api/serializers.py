@@ -971,6 +971,10 @@ class SchoolEducationalServiceWriteSerializer(serializers.ModelSerializer):
             "modality",
             "is_active",
         )
+        # Las restricciones condicionales dependen de `school`, que se
+        # inyecta desde la URL y no forma parte del payload. La validación
+        # se realiza abajo con el colegio real del contexto.
+        validators = []
 
     def validate_modular_code(self, value):
         modular_code = (value or "").strip()
