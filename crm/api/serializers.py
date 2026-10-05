@@ -465,6 +465,8 @@ class SchoolContactSerializer(serializers.ModelSerializer):
         model = SchoolContact
         fields = (
             "id",
+            "first_name",
+            "last_name",
             "full_name",
             "position",
             "decision_role",
@@ -480,6 +482,112 @@ class SchoolContactSerializer(serializers.ModelSerializer):
             "updated_at",
         )
         read_only_fields = ("id", "created_at", "updated_at")
+        extra_kwargs = {
+            "first_name": {"required": False, "allow_blank": True},
+            "last_name": {"required": False, "allow_blank": True},
+            "full_name": {"required": False, "allow_blank": True},
+        }
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+
+        first_name = str(
+            attrs.get(
+                "first_name",
+                getattr(self.instance, "first_name", ""),
+            )
+            or ""
+        ).strip()
+        last_name = str(
+            attrs.get(
+                "last_name",
+                getattr(self.instance, "last_name", ""),
+            )
+            or ""
+        ).strip()
+        legacy_full_name = str(
+            attrs.get(
+                "full_name",
+                getattr(self.instance, "full_name", ""),
+            )
+            or ""
+        ).strip()
+
+        if not first_name and not last_name and legacy_full_name:
+            parts = legacy_full_name.split(maxsplit=1)
+            first_name = parts[0]
+            last_name = parts[1] if len(parts) > 1 else ""
+            attrs["first_name"] = first_name
+            attrs["last_name"] = last_name
+
+        uses_new_contact_form = (
+            "first_name" in self.initial_data
+            or "last_name" in self.initial_data
+        )
+
+        if uses_new_contact_form:
+            required_values = {
+                "first_name": first_name,
+                "last_name": last_name,
+                "position": str(
+                    attrs.get(
+                        "position",
+                        getattr(self.instance, "position", ""),
+                    )
+                    or ""
+                ).strip(),
+                "whatsapp": str(
+                    attrs.get(
+                        "whatsapp",
+                        getattr(self.instance, "whatsapp", ""),
+                    )
+                    or ""
+                ).strip(),
+                "email": str(
+                    attrs.get(
+                        "email",
+                        getattr(self.instance, "email", ""),
+                    )
+                    or ""
+                ).strip(),
+                "decision_role": str(
+                    attrs.get(
+                        "decision_role",
+                        getattr(self.instance, "decision_role", ""),
+                    )
+                    or ""
+                ).strip(),
+                "relationship_level": attrs.get(
+                    "relationship_level",
+                    getattr(self.instance, "relationship_level", None),
+                ),
+            }
+            errors = {}
+            labels = {
+                "first_name": "Ingresa el nombre.",
+                "last_name": "Ingresa el apellido.",
+                "position": "Selecciona el cargo o función.",
+                "whatsapp": "Ingresa el celular o WhatsApp.",
+                "email": "Ingresa el correo.",
+                "decision_role": "Selecciona el rol en la decisión.",
+                "relationship_level": "Selecciona el relacionamiento.",
+            }
+
+            for field, value in required_values.items():
+                if value in ("", None):
+                    errors[field] = labels[field]
+
+            if errors:
+                raise serializers.ValidationError(errors)
+
+        if first_name or last_name:
+            attrs["first_name"] = first_name
+            attrs["last_name"] = last_name
+            attrs["full_name"] = " ".join(
+                value for value in [first_name, last_name] if value
+            )
+
+        return attrs
 
 
 class SchoolContactCRMSerializer(SchoolContactSerializer):
