@@ -347,6 +347,101 @@ class CRMApiTests(TestCase):
         self.assertEqual(response.data["count"], 1)
         self.assertEqual(response.data["results"][0]["id"], self.opportunity.id)
 
+    def test_school_location_filters_ignore_accents_and_case(self):
+        SchoolCampus.objects.create(
+            school=self.school,
+            sequence=1,
+            name="Sede principal",
+            department="Junín",
+            province="Huancayo",
+            district="El Tambo",
+            is_main=True,
+            created_by=self.admin,
+        )
+        self.authenticate(self.advisor)
+
+        response = self.client.get(
+            reverse("crm:school-list"),
+            {
+                "department": "JUNIN",
+                "province": "huancayo",
+                "district": "EL TAMBO",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["id"], self.school.id)
+
+    def test_school_location_options_follow_loaded_geography(self):
+        SchoolCampus.objects.create(
+            school=self.school,
+            sequence=1,
+            name="Sede principal",
+            department="Junín",
+            province="Huancayo",
+            district="El Tambo",
+            is_main=True,
+            created_by=self.admin,
+        )
+        self.authenticate(self.advisor)
+
+        response = self.client.get(
+            reverse("crm:school-location-options"),
+            {
+                "department": "junin",
+                "province": "HUANCAYO",
+                "is_active": "true",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["departments"], ["Junín"])
+        self.assertEqual(response.data["provinces"], ["Huancayo"])
+        self.assertEqual(response.data["districts"], ["El Tambo"])
+
+    def test_new_contact_form_requires_commercial_fields(self):
+        self.authenticate(self.advisor)
+
+        response = self.client.post(
+            reverse("crm:school-contacts", args=[self.school.id]),
+            {
+                "first_name": "María",
+                "last_name": "Pérez",
+                "position": "Director(a)",
+                "whatsapp": "999888777",
+                "email": "maria.perez@example.com",
+                "decision_role": "decision_maker",
+                "relationship_level": 3,
+                "is_primary": True,
+                "is_active": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["first_name"], "María")
+        self.assertEqual(response.data["last_name"], "Pérez")
+        self.assertEqual(response.data["full_name"], "María Pérez")
+        self.assertEqual(response.data["phone"], "")
+
+        invalid_response = self.client.post(
+            reverse("crm:school-contacts", args=[self.school.id]),
+            {
+                "first_name": "Luis",
+                "last_name": "Rojas",
+                "position": "Coordinador(a)",
+                "whatsapp": "999111222",
+                "email": "",
+                "decision_role": "influencer",
+                "relationship_level": 2,
+            },
+            format="json",
+        )
+
+        self.assertEqual(invalid_response.status_code, 400)
+        self.assertIn("email", invalid_response.data)
+
     def test_supervisor_sees_supervised_team_only(self):
         self.authenticate(self.supervisor)
         response = self.client.get(reverse("crm:opportunity-list"))
