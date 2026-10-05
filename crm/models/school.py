@@ -436,6 +436,16 @@ class SchoolContact(TimeStampedModel):
         related_name="contacts",
         verbose_name="Colegio",
     )
+    first_name = models.CharField(
+        max_length=100,
+        blank=True,
+        verbose_name="Nombre",
+    )
+    last_name = models.CharField(
+        max_length=100,
+        blank=True,
+        verbose_name="Apellido",
+    )
     full_name = models.CharField(
         max_length=180,
         verbose_name="Nombre completo",
@@ -510,6 +520,19 @@ class SchoolContact(TimeStampedModel):
                 name="crm_contact_school_main_idx",
             ),
         ]
+
+    def save(self, *args, **kwargs):
+        first_name = (self.first_name or "").strip()
+        last_name = (self.last_name or "").strip()
+
+        if first_name or last_name:
+            self.first_name = first_name
+            self.last_name = last_name
+            self.full_name = " ".join(
+                value for value in [first_name, last_name] if value
+            )
+
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.full_name} - {self.school.name}"
