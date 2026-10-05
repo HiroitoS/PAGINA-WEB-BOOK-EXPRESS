@@ -922,17 +922,51 @@ class SchoolViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(team_id=team)
         if owner:
             queryset = queryset.filter(owner_id=owner)
+        location_campuses = SchoolCampus.objects.filter(
+            school__in=queryset,
+            is_active=True,
+        )
+
         if department:
-            queryset = queryset.filter(
-                campuses__department__iexact=department
+            department_values = _matching_location_values(
+                location_campuses,
+                "department",
+                department,
             )
+            if not department_values:
+                return queryset.none()
+            queryset = queryset.filter(
+                campuses__department__in=department_values
+            )
+            location_campuses = location_campuses.filter(
+                department__in=department_values
+            )
+
         if province:
-            queryset = queryset.filter(
-                campuses__province__iexact=province
+            province_values = _matching_location_values(
+                location_campuses,
+                "province",
+                province,
             )
-        if district:
+            if not province_values:
+                return queryset.none()
             queryset = queryset.filter(
-                campuses__district__iexact=district
+                campuses__province__in=province_values
+            )
+            location_campuses = location_campuses.filter(
+                province__in=province_values
+            )
+
+        if district:
+            district_values = _matching_location_values(
+                location_campuses,
+                "district",
+                district,
+            )
+            if not district_values:
+                return queryset.none()
+            queryset = queryset.filter(
+                campuses__district__in=district_values
             )
         if assignment == "unassigned":
             queryset = queryset.filter(owner__isnull=True)
@@ -950,6 +984,72 @@ class SchoolViewSet(viewsets.ModelViewSet):
         if self.action == "retrieve":
             return SchoolDetailSerializer
         return SchoolWriteSerializer
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="location-options",
+        url_name="location-options",
+    )
+    def location_options(self, request):
+        schools = visible_schools_queryset(request.user)
+        is_active = request.query_params.get("is_active")
+
+        if is_active == "true":
+            schools = schools.filter(is_active=True)
+        elif is_active == "false":
+            schools = schools.filter(is_active=False)
+
+        campuses = SchoolCampus.objects.filter(
+            school__in=schools,
+            is_active=True,
+        )
+        departments = _location_values(campuses, "department")
+
+        department = request.query_params.get(
+            "department",
+            "",
+        ).strip()
+        province = request.query_params.get(
+            "province",
+            "",
+        ).strip()
+
+        if department:
+            department_values = _matching_location_values(
+                campuses,
+                "department",
+                department,
+            )
+            campuses = (
+                campuses.filter(department__in=department_values)
+                if department_values
+                else campuses.none()
+            )
+
+        provinces = _location_values(campuses, "province")
+
+        if province:
+            province_values = _matching_location_values(
+                campuses,
+                "province",
+                province,
+            )
+            campuses = (
+                campuses.filter(province__in=province_values)
+                if province_values
+                else campuses.none()
+            )
+
+        districts = _location_values(campuses, "district")
+
+        return Response(
+            {
+                "departments": departments,
+                "provinces": provinces,
+                "districts": districts,
+            }
+        )
 
     def create(self, request, *args, **kwargs):
         if not usuario_puede_gestionar_colegios(request.user):
