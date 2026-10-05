@@ -1,3 +1,5 @@
+import unicodedata
+
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Count, Prefetch, Q
@@ -149,6 +151,53 @@ def _raise_service_validation_error(exc):
     if messages:
         raise serializers.ValidationError({"detail": messages})
     raise serializers.ValidationError({"detail": str(exc)})
+
+
+def _normalize_location_token(value):
+    normalized = unicodedata.normalize(
+        "NFKD",
+        str(value or "").strip(),
+    )
+    without_accents = "".join(
+        character
+        for character in normalized
+        if not unicodedata.combining(character)
+    )
+    return " ".join(without_accents.casefold().split())
+
+
+def _location_values(queryset, field_name):
+    raw_values = (
+        queryset.exclude(**{field_name: ""})
+        .values_list(field_name, flat=True)
+        .distinct()
+    )
+    values_by_key = {}
+
+    for raw_value in raw_values:
+        clean_value = " ".join(str(raw_value or "").split())
+        key = _normalize_location_token(clean_value)
+
+        if key and key not in values_by_key:
+            values_by_key[key] = clean_value
+
+    return sorted(
+        values_by_key.values(),
+        key=_normalize_location_token,
+    )
+
+
+def _matching_location_values(queryset, field_name, requested_value):
+    requested_key = _normalize_location_token(requested_value)
+
+    if not requested_key:
+        return []
+
+    return [
+        value
+        for value in _location_values(queryset, field_name)
+        if _normalize_location_token(value) == requested_key
+    ]
 
 
 def _user_can_manage_visible_opportunity(user, opportunity):
