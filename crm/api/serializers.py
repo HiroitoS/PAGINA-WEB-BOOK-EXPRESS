@@ -1,4 +1,5 @@
 from decimal import Decimal
+from pathlib import Path
 
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
@@ -13,6 +14,7 @@ from crm.models import (
     AdoptionItem,
     Campaign,
     CommercialActivity,
+    CommercialActivityEvidence,
     CommercialQuotation,
     CommercialQuotationItem,
     CommercialProjection,
@@ -2994,17 +2996,192 @@ class CRMCommercialHistoryEventSerializer(serializers.Serializer):
     source_id = serializers.IntegerField(required=False, allow_null=True)
 
 
+class CommercialActivityEvidenceSerializer(serializers.ModelSerializer):
+    evidence_type_display = serializers.CharField(
+        source="get_evidence_type_display",
+        read_only=True,
+    )
+    uploaded_by = UserSummarySerializer(read_only=True)
+    file_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CommercialActivityEvidence
+        fields = (
+            "id",
+            "evidence_type",
+            "evidence_type_display",
+            "original_name",
+            "mime_type",
+            "size_bytes",
+            "note",
+            "latitude",
+            "longitude",
+            "accuracy_m",
+            "captured_at",
+            "file_url",
+            "uploaded_by",
+            "created_at",
+        )
+
+    def get_file_url(self, obj):
+        if not obj.file:
+            return ""
+
+        try:
+            url = obj.file.url
+        except ValueError:
+            return ""
+
+        request = self.context.get("request")
+        if request is not None:
+            return request.build_absolute_uri(url)
+
+        return url
+
+
+class CommercialActivityEvidenceCreateSerializer(serializers.Serializer):
+    MAX_FILE_SIZE = 5 * 1024 * 1024
+    MAX_EVIDENCES_PER_ACTIVITY = 5
+    ALLOWED_EXTENSIONS = {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".webp",
+        ".heic",
+        ".heif",
+        ".pdf",
+    }
+    IMAGE_EXTENSIONS = {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".webp",
+        ".heic",
+        ".heif",
+    }
+
+    file = serializers.FileField()
+    note = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=240,
+        default="",
+    )
+    latitude = serializers.DecimalField(
+        required=False,
+        allow_null=True,
+        max_digits=9,
+        decimal_places=6,
+        min_value=Decimal("-90"),
+        max_value=Decimal("90"),
+    )
+    longitude = serializers.DecimalField(
+        required=False,
+        allow_null=True,
+        max_digits=9,
+        decimal_places=6,
+        min_value=Decimal("-180"),
+        max_value=Decimal("180"),
+    )
+    accuracy_m = serializers.DecimalField(
+        required=False,
+        allow_null=True,
+        max_digits=8,
+        decimal_places=2,
+        min_value=Decimal("0"),
+    )
+    captured_at = serializers.DateTimeField(
+        required=False,
+        allow_null=True,
+    )
+
+    def validate_file(self, uploaded_file):
+        extension = Path(uploaded_file.name or "").suffix.lower()
+
+        if extension not in self.ALLOWED_EXTENSIONS:
+            raise serializers.ValidationError(
+                "Adjunta una imagen JPG, PNG, WEBP, HEIC o un archivo PDF."
+            )
+
+        if uploaded_file.size > self.MAX_FILE_SIZE:
+            raise serializers.ValidationError(
+                "Cada evidencia puede pesar como máximo 5 MB."
+            )
+
+        return uploaded_file
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        activity = self.context.get("activity")
+
+        if activity is None:
+            raise serializers.ValidationError(
+                {"detail": "No se pudo identificar la actividad."}
+            )
+
+        if activity.evidences.count() >= self.MAX_EVIDENCES_PER_ACTIVITY:
+            raise serializers.ValidationError(
+                {
+                    "detail": (
+                        "Cada actividad admite hasta 5 evidencias."
+                    )
+                }
+            )
+
+        latitude = attrs.get("latitude")
+        longitude = attrs.get("longitude")
+
+        if (latitude is None) != (longitude is None):
+            raise serializers.ValidationError(
+                {
+                    "location": (
+                        "La latitud y la longitud deben registrarse juntas."
+                    )
+                }
+            )
+
+        uploaded_file = attrs["file"]
+        extension = Path(uploaded_file.name or "").suffix.lower()
+        attrs["evidence_type"] = (
+            CommercialActivityEvidence.EvidenceType.PHOTO
+            if extension in self.IMAGE_EXTENSIONS
+            else CommercialActivityEvidence.EvidenceType.DOCUMENT
+        )
+        attrs["original_name"] = (uploaded_file.name or "evidencia")[:255]
+        attrs["mime_type"] = (
+            getattr(uploaded_file, "content_type", "") or ""
+        )[:120]
+        attrs["size_bytes"] = uploaded_file.size
+
+        return attrs
+
+    def create(self, validated_data):
+        activity = self.context["activity"]
+        uploaded_by = self.context.get("uploaded_by")
+
+        return CommercialActivityEvidence.objects.create(
+            activity=activity,
+            uploaded_by=uploaded_by,
+            **validated_data,
+        )
+
+
 class CommercialActivitySerializer(serializers.ModelSerializer):
     contact = SchoolContactSerializer(read_only=True)
     performed_by = UserSummarySerializer(read_only=True)
     activity_type_display = serializers.CharField(source="get_activity_type_display", read_only=True)
+    evidences = CommercialActivityEvidenceSerializer(
+        many=True,
+        read_only=True,
+    )
 
     class Meta:
         model = CommercialActivity
         fields = (
             "id", "school_id", "opportunity_id",
             "activity_type", "activity_type_display", "summary", "result",
-            "contact", "performed_by", "occurred_at", "is_important", "created_at",
+            "contact", "performed_by", "occurred_at", "is_important",
+            "evidences", "created_at",
         )
 
 
