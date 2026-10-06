@@ -19,6 +19,7 @@ from crm.models import (
     CommercialQuotation,
     CommercialTeam,
     CommercialTeamMembership,
+    CRMHistoryEvent,
     CRMWorkItemLink,
     MarketEditorial,
     Pipeline,
@@ -52,6 +53,7 @@ from crm.services import (
     AdoptionError,
     CRMPlanningError,
     build_opportunity_commercial_history,
+    build_school_commercial_history,
     CommercialActivityError,
     CommercialProjectionError,
     CommercialQuotationError,
@@ -1524,6 +1526,51 @@ class SchoolViewSet(viewsets.ModelViewSet):
         return Response(
             SchoolPopulationRecordSerializer(population).data,
             status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="commercial-history",
+        url_name="commercial-history",
+    )
+    def commercial_history(self, request, pk=None):
+        school = self.get_object()
+
+        visible_opportunities = visible_opportunities_queryset(
+            request.user
+        ).filter(school=school)
+        visible_activities = visible_commercial_activities_queryset(
+            request.user
+        ).filter(school=school)
+        visible_contacts = visible_school_contacts_queryset(
+            request.user
+        ).filter(school=school)
+
+        visible_opportunity_ids = visible_opportunities.values_list(
+            "id",
+            flat=True,
+        )
+        history_events = CRMHistoryEvent.objects.filter(
+            school=school,
+        ).filter(
+            Q(opportunity__isnull=True)
+            | Q(opportunity_id__in=visible_opportunity_ids)
+        )
+
+        events = build_school_commercial_history(
+            school=school,
+            opportunities_queryset=visible_opportunities,
+            activities_queryset=visible_activities,
+            contacts_queryset=visible_contacts,
+            events_queryset=history_events,
+        )
+
+        return Response(
+            CRMCommercialHistoryEventSerializer(
+                events,
+                many=True,
+            ).data
         )
 
     @action(
