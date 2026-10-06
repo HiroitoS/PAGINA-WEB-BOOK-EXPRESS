@@ -97,6 +97,8 @@ from .serializers import (
     AdoptionSerializer,
     CampaignSerializer,
     CommercialActivityCreateSerializer,
+    CommercialActivityEvidenceCreateSerializer,
+    CommercialActivityEvidenceSerializer,
     CommercialActivitySerializer,
     CRMCommercialHistoryEventSerializer,
     CommercialProjectionCreateSerializer,
@@ -649,6 +651,7 @@ class SchoolContactViewSet(viewsets.ModelViewSet):
                 "performed_by",
                 "created_by",
             )
+            .prefetch_related("evidences__uploaded_by")
             .order_by("-occurred_at", "-id")
         )
 
@@ -2027,6 +2030,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
                     "performed_by",
                     "created_by",
                 )
+                .prefetch_related("evidences__uploaded_by")
                 .order_by("-occurred_at", "-id")
             )
 
@@ -2097,7 +2101,85 @@ class SchoolViewSet(viewsets.ModelViewSet):
             _raise_service_validation_error(exc)
 
         return Response(
-            CommercialActivitySerializer(activity).data,
+            CommercialActivitySerializer(
+                activity,
+                context={"request": request},
+            ).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=r"activities/(?P<activity_id>[^/.]+)/evidence",
+        url_name="activity-evidence",
+    )
+    def school_activity_evidence(
+        self,
+        request,
+        pk=None,
+        activity_id=None,
+    ):
+        school = self.get_object()
+
+        if not usuario_puede_gestionar_colegios(request.user):
+            raise PermissionDenied(
+                "No tienes permiso para adjuntar evidencias."
+            )
+
+        activity = (
+            visible_commercial_activities_queryset(request.user)
+            .filter(
+                pk=activity_id,
+                school=school,
+            )
+            .select_related(
+                "school",
+                "opportunity",
+                "contact",
+            )
+            .first()
+        )
+
+        if activity is None:
+            return Response(
+                {"detail": "La actividad no pertenece a este colegio."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = CommercialActivityEvidenceCreateSerializer(
+            data=request.data,
+            context={
+                "activity": activity,
+                "uploaded_by": request.user,
+            },
+        )
+        serializer.is_valid(raise_exception=True)
+        evidence = serializer.save()
+
+        record_history_event(
+            school=school,
+            opportunity=activity.opportunity,
+            contact=activity.contact,
+            actor=request.user,
+            category="evidence",
+            event_type="activity_evidence_added",
+            title="Evidencia adjuntada",
+            description=evidence.original_name,
+            source_type="commercial_activity_evidence",
+            source_id=evidence.id,
+            metadata={
+                "activity_id": activity.id,
+                "evidence_id": evidence.id,
+                "evidence_type": evidence.evidence_type,
+            },
+        )
+
+        return Response(
+            CommercialActivityEvidenceSerializer(
+                evidence,
+                context={"request": request},
+            ).data,
             status=status.HTTP_201_CREATED,
         )
 
@@ -3713,7 +3795,7 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         if request.method == "GET":
             queryset = visible_commercial_activities_queryset(request.user).filter(opportunity=opportunity).select_related(
                 "contact", "performed_by", "created_by"
-            ).order_by("-occurred_at", "-id")
+            ).prefetch_related("evidences__uploaded_by").order_by("-occurred_at", "-id")
             page = self.paginate_queryset(queryset)
             if page is not None:
                 return self.get_paginated_response(CommercialActivitySerializer(page, many=True).data)
@@ -3731,7 +3813,106 @@ class OpportunityViewSet(viewsets.ModelViewSet):
             )
         except CommercialActivityError as exc:
             _raise_service_validation_error(exc)
-        return Response(CommercialActivitySerializer(activity).data, status=status.HTTP_201_CREATED)
+        return Response(
+            CommercialActivitySerializer(
+                activity,
+                context={"request": request},
+            ).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=r"activities/(?P<activity_id>[^/.]+)/evidence",
+        url_name="activity-evidence",
+    )
+    def activity_evidence(
+        self,
+        request,
+        pk=None,
+        activity_id=None,
+    ):
+        opportunity = self.get_object()
+
+        if not _user_can_manage_visible_opportunity(
+            request.user,
+            opportunity,
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para adjuntar evidencias "
+                "en esta oportunidad."
+            )
+
+        if opportunity.is_closed:
+            raise serializers.ValidationError(
+                {
+                    "detail": (
+                        "La oportunidad está cerrada. "
+                        "Adjunta evidencias antes del cierre comercial."
+                    )
+                }
+            )
+
+        activity = (
+            visible_commercial_activities_queryset(request.user)
+            .filter(
+                pk=activity_id,
+                opportunity=opportunity,
+            )
+            .select_related(
+                "school",
+                "opportunity",
+                "contact",
+            )
+            .first()
+        )
+
+        if activity is None:
+            return Response(
+                {
+                    "detail": (
+                        "La actividad no pertenece a esta oportunidad."
+                    )
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = CommercialActivityEvidenceCreateSerializer(
+            data=request.data,
+            context={
+                "activity": activity,
+                "uploaded_by": request.user,
+            },
+        )
+        serializer.is_valid(raise_exception=True)
+        evidence = serializer.save()
+
+        record_history_event(
+            school=opportunity.school,
+            opportunity=opportunity,
+            contact=activity.contact,
+            actor=request.user,
+            category="evidence",
+            event_type="activity_evidence_added",
+            title="Evidencia adjuntada",
+            description=evidence.original_name,
+            source_type="commercial_activity_evidence",
+            source_id=evidence.id,
+            metadata={
+                "activity_id": activity.id,
+                "evidence_id": evidence.id,
+                "evidence_type": evidence.evidence_type,
+            },
+        )
+
+        return Response(
+            CommercialActivityEvidenceSerializer(
+                evidence,
+                context={"request": request},
+            ).data,
+            status=status.HTTP_201_CREATED,
+        )
 
     @action(detail=True, methods=["get"], url_path="work-items")
     def work_items(self, request, pk=None):
