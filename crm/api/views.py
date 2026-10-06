@@ -1,3 +1,4 @@
+from datetime import timedelta
 import unicodedata
 
 from django.contrib.auth import get_user_model
@@ -16,6 +17,7 @@ from catalog.models import Grade, Product
 from crm.models import (
     Adoption,
     Campaign,
+    CommercialActivity,
     CommercialQuotation,
     CommercialTeam,
     CommercialTeamMembership,
@@ -208,6 +210,100 @@ def _matching_location_values(queryset, field_name, requested_value):
     ]
 
 
+def _apply_school_filters(queryset, params):
+    search = str(params.get("search", "") or "").strip()
+    team = params.get("team")
+    owner = params.get("owner")
+    department = str(params.get("department", "") or "").strip()
+    province = str(params.get("province", "") or "").strip()
+    district = str(params.get("district", "") or "").strip()
+    assignment = str(params.get("assignment", "") or "").strip()
+    is_active = params.get("is_active")
+
+    if search:
+        queryset = queryset.filter(
+            Q(name__icontains=search)
+            | Q(book_express_code__icontains=search)
+            | Q(institution_code__icontains=search)
+            | Q(modular_code__icontains=search)
+            | Q(educational_services__modular_code__icontains=search)
+            | Q(ruc__icontains=search)
+            | Q(phone__icontains=search)
+            | Q(whatsapp__icontains=search)
+            | Q(email__icontains=search)
+            | Q(owner__username__icontains=search)
+            | Q(owner__first_name__icontains=search)
+            | Q(owner__last_name__icontains=search)
+            | Q(campuses__address__icontains=search)
+            | Q(campuses__district__icontains=search)
+        )
+
+    if team:
+        queryset = queryset.filter(team_id=team)
+
+    if owner:
+        queryset = queryset.filter(owner_id=owner)
+
+    location_campuses = SchoolCampus.objects.filter(
+        school__in=queryset,
+        is_active=True,
+    )
+
+    if department:
+        department_values = _matching_location_values(
+            location_campuses,
+            "department",
+            department,
+        )
+        if not department_values:
+            return queryset.none()
+        queryset = queryset.filter(
+            campuses__department__in=department_values
+        )
+        location_campuses = location_campuses.filter(
+            department__in=department_values
+        )
+
+    if province:
+        province_values = _matching_location_values(
+            location_campuses,
+            "province",
+            province,
+        )
+        if not province_values:
+            return queryset.none()
+        queryset = queryset.filter(
+            campuses__province__in=province_values
+        )
+        location_campuses = location_campuses.filter(
+            province__in=province_values
+        )
+
+    if district:
+        district_values = _matching_location_values(
+            location_campuses,
+            "district",
+            district,
+        )
+        if not district_values:
+            return queryset.none()
+        queryset = queryset.filter(
+            campuses__district__in=district_values
+        )
+
+    if assignment == "unassigned":
+        queryset = queryset.filter(owner__isnull=True)
+    elif assignment == "assigned":
+        queryset = queryset.filter(owner__isnull=False)
+
+    if is_active == "true":
+        queryset = queryset.filter(is_active=True)
+    elif is_active == "false":
+        queryset = queryset.filter(is_active=False)
+
+    return queryset.distinct()
+
+
 def _user_can_manage_visible_opportunity(user, opportunity):
     if usuario_es_administrador(user):
         return True
@@ -261,6 +357,24 @@ class CRMSummaryAPIView(APIView):
         opportunities = visible_opportunities_queryset(request.user)
         activities = visible_commercial_activities_queryset(request.user)
         today = timezone.localdate()
+        week_start = today - timedelta(days=today.weekday())
+        week_activities = activities.filter(
+            occurred_at__date__gte=week_start,
+            occurred_at__date__lte=today,
+        )
+        activity_counts = {
+            activity_type: week_activities.filter(
+                activity_type=activity_type,
+            ).count()
+            for activity_type in (
+                CommercialActivity.ActivityType.CALL,
+                CommercialActivity.ActivityType.VISIT,
+                CommercialActivity.ActivityType.COLD_VISIT,
+                CommercialActivity.ActivityType.PRESENTATION,
+                CommercialActivity.ActivityType.MEETING,
+                CommercialActivity.ActivityType.FOLLOW_UP,
+            )
+        }
         stages = list(
             opportunities.values(
                 "stage_id", "stage__code", "stage__name", "stage__order", "stage__category"
@@ -276,6 +390,10 @@ class CRMSummaryAPIView(APIView):
                 last_activity_at__isnull=True,
             ).count(),
             "activities_today": activities.filter(occurred_at__date=today).count(),
+            "activities_week": week_activities.count(),
+            "activity_week_start": week_start,
+            "activity_week_end": today,
+            "activity_counts": activity_counts,
             "stages": stages,
         })
 
@@ -918,87 +1036,10 @@ class SchoolViewSet(viewsets.ModelViewSet):
                 "editorial_usages__service__level",
                 "commercial_profiles__campaign",
             )
-        search = self.request.query_params.get("search", "").strip()
-        team = self.request.query_params.get("team")
-        owner = self.request.query_params.get("owner")
-        department = self.request.query_params.get("department", "").strip()
-        province = self.request.query_params.get("province", "").strip()
-        district = self.request.query_params.get("district", "").strip()
-        assignment = self.request.query_params.get("assignment", "").strip()
-        is_active = self.request.query_params.get("is_active")
-        if search:
-            queryset = queryset.filter(
-                Q(name__icontains=search)
-                | Q(book_express_code__icontains=search)
-                | Q(institution_code__icontains=search)
-                | Q(modular_code__icontains=search)
-                | Q(educational_services__modular_code__icontains=search)
-                | Q(ruc__icontains=search)
-                | Q(phone__icontains=search) | Q(whatsapp__icontains=search) | Q(email__icontains=search)
-                | Q(owner__username__icontains=search) | Q(owner__first_name__icontains=search)
-                | Q(owner__last_name__icontains=search)
-                | Q(campuses__address__icontains=search)
-                | Q(campuses__district__icontains=search)
-            )
-        if team:
-            queryset = queryset.filter(team_id=team)
-        if owner:
-            queryset = queryset.filter(owner_id=owner)
-        location_campuses = SchoolCampus.objects.filter(
-            school__in=queryset,
-            is_active=True,
-        )
-
-        if department:
-            department_values = _matching_location_values(
-                location_campuses,
-                "department",
-                department,
-            )
-            if not department_values:
-                return queryset.none()
-            queryset = queryset.filter(
-                campuses__department__in=department_values
-            )
-            location_campuses = location_campuses.filter(
-                department__in=department_values
-            )
-
-        if province:
-            province_values = _matching_location_values(
-                location_campuses,
-                "province",
-                province,
-            )
-            if not province_values:
-                return queryset.none()
-            queryset = queryset.filter(
-                campuses__province__in=province_values
-            )
-            location_campuses = location_campuses.filter(
-                province__in=province_values
-            )
-
-        if district:
-            district_values = _matching_location_values(
-                location_campuses,
-                "district",
-                district,
-            )
-            if not district_values:
-                return queryset.none()
-            queryset = queryset.filter(
-                campuses__district__in=district_values
-            )
-        if assignment == "unassigned":
-            queryset = queryset.filter(owner__isnull=True)
-        elif assignment == "assigned":
-            queryset = queryset.filter(owner__isnull=False)
-        if is_active == "true":
-            queryset = queryset.filter(is_active=True)
-        elif is_active == "false":
-            queryset = queryset.filter(is_active=False)
-        return queryset.distinct().order_by("name", "id")
+        return _apply_school_filters(
+            queryset,
+            self.request.query_params,
+        ).order_by("name", "id")
 
     def get_serializer_class(self):
         if self.action == "list":
@@ -1302,9 +1343,33 @@ class SchoolViewSet(viewsets.ModelViewSet):
         serializer = SchoolAssignmentSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        school_ids = serializer.validated_data["school_ids"]
+        selection_mode = serializer.validated_data.get(
+            "selection_mode",
+            "ids",
+        )
         team = serializer.validated_data["team"]
         owner = serializer.validated_data["owner"]
+
+        if selection_mode == "filters":
+            filters = serializer.validated_data.get("filters", {})
+            selected_queryset = _apply_school_filters(
+                visible_schools_queryset(request.user),
+                filters,
+            )
+            school_ids = list(
+                selected_queryset.values_list("id", flat=True)
+            )
+            if not school_ids:
+                raise serializers.ValidationError(
+                    {
+                        "filters": (
+                            "Los filtros actuales no encontraron colegios "
+                            "para asignar."
+                        )
+                    }
+                )
+        else:
+            school_ids = serializer.validated_data["school_ids"]
 
         if (
             team is not None
@@ -1409,6 +1474,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
         return Response(
             {
                 "updated": len(schools),
+                "selection_mode": selection_mode,
                 "schools": SchoolListSerializer(
                     refreshed,
                     many=True,
