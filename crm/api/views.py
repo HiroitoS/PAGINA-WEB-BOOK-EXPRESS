@@ -85,6 +85,7 @@ from crm.services import (
 )
 
 from crm.services.commercial_lines import VALID_PROJECTION_LINES
+from crm.services.education import grade_matches_level
 from crm.services.school_imports import (
     confirm_school_import,
     create_school_import_preview,
@@ -1570,6 +1571,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
 
         serializer = SchoolPopulationRecordWriteSerializer(
             data=request.data,
+            context={"level": service.level},
         )
         serializer.is_valid(raise_exception=True)
 
@@ -2728,6 +2730,19 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         if grade is None:
             raise serializers.ValidationError(
                 {"grade": "El grado seleccionado no está disponible."}
+            )
+
+        if not grade_matches_level(
+            grade=grade,
+            level=service.level,
+        ):
+            raise serializers.ValidationError(
+                {
+                    "grade": (
+                        f"{grade.name} no corresponde al nivel "
+                        f"{service.level.name}."
+                    )
+                }
             )
 
         base_products = (
