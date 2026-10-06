@@ -713,6 +713,7 @@ class CRMApiTests(TestCase):
             {
                 "title": "Preparar material para visita",
                 "contact": contact.id,
+                "commercial_action_type": "visit",
             },
             format="json",
         )
@@ -735,6 +736,14 @@ class CRMApiTests(TestCase):
         self.assertEqual(
             response.data["results"][0]["type"],
             "task",
+        )
+        self.assertEqual(
+            response.data["results"][0]["commercial_action_type"],
+            "visit",
+        )
+        self.assertEqual(
+            response.data["results"][0]["commercial_action_type_display"],
+            "Visita coordinada",
         )
         self.assertEqual(
             response.data["results"][0]["opportunity_id"],
