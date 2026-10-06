@@ -4,6 +4,8 @@ from django.utils import timezone
 
 from crm.models import CommercialActivity, Opportunity, School
 
+from .history import record_history_event
+
 
 class CommercialActivityError(ValidationError):
     pass
@@ -108,5 +110,24 @@ def record_commercial_activity(
         locked_opportunity.save(
             update_fields=["last_activity_at", "updated_at"]
         )
+
+    record_history_event(
+        school=resolved_school,
+        opportunity=locked_opportunity,
+        contact=contact,
+        actor=performed_by or created_by,
+        category="activity",
+        event_type=activity.activity_type,
+        title=activity.summary,
+        description=activity.result,
+        source_type="commercial_activity",
+        source_id=activity.id,
+        metadata={
+            "activity_id": activity.id,
+            "contact_id": activity.contact_id,
+            "opportunity_id": activity.opportunity_id,
+        },
+        occurred_at=activity.occurred_at,
+    )
 
     return activity
