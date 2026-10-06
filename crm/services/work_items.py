@@ -40,6 +40,7 @@ def link_crm_work_item(
     opportunity=None,
     contact=None,
     origin_activity=None,
+    commercial_action_type="",
 ):
     locked_school = (
         School.objects
@@ -134,6 +135,7 @@ def link_crm_work_item(
         contact=contact,
         opportunity=locked_opportunity,
         origin_activity=origin_activity,
+        commercial_action_type=commercial_action_type,
         task=task,
         event=event,
         reminder=reminder,
@@ -154,6 +156,7 @@ def link_work_item_to_school(
     reminder=None,
     contact=None,
     origin_activity=None,
+    commercial_action_type="",
 ):
     return link_crm_work_item(
         school=school,
@@ -163,6 +166,7 @@ def link_work_item_to_school(
         reminder=reminder,
         contact=contact,
         origin_activity=origin_activity,
+        commercial_action_type=commercial_action_type,
     )
 
 
@@ -174,6 +178,7 @@ def link_work_item_to_opportunity(
     event=None,
     reminder=None,
     origin_activity=None,
+    commercial_action_type="",
 ):
     contact = (
         origin_activity.contact
@@ -191,4 +196,5 @@ def link_work_item_to_opportunity(
         event=event,
         reminder=reminder,
         origin_activity=origin_activity,
+        commercial_action_type=commercial_action_type,
     )
