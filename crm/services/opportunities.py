@@ -12,6 +12,8 @@ from crm.models import (
     School,
 )
 
+from .history import record_history_event
+
 
 class OpportunityTransitionError(ValidationError):
     pass
@@ -263,13 +265,31 @@ def create_opportunity(
     opportunity.full_clean()
     opportunity.save()
 
-    OpportunityStageHistory.objects.create(
+    stage_history = OpportunityStageHistory.objects.create(
         opportunity=opportunity,
         from_stage=None,
         to_stage=stage,
         changed_by=created_by,
         transition_type=OpportunityStageHistory.TransitionType.CREATED,
         note="Oportunidad creada.",
+    )
+
+    record_history_event(
+        school=locked_school,
+        opportunity=opportunity,
+        contact=resolved_primary_contact,
+        actor=created_by,
+        category="opportunity",
+        event_type="created",
+        title=f"Oportunidad creada en {stage.name}",
+        description="Oportunidad creada.",
+        source_type="opportunity_stage_history",
+        source_id=stage_history.id,
+        metadata={
+            "from_stage": "",
+            "to_stage": stage.name,
+        },
+        occurred_at=stage_history.created_at,
     )
 
     return opportunity
@@ -380,7 +400,7 @@ def transition_opportunity_stage(
         ]
     )
 
-    OpportunityStageHistory.objects.create(
+    stage_history = OpportunityStageHistory.objects.create(
         opportunity=locked_opportunity,
         from_stage=previous_stage,
         to_stage=to_stage,
@@ -389,6 +409,24 @@ def transition_opportunity_stage(
             OpportunityStageHistory.TransitionType.STAGE_CHANGE
         ),
         note=cleaned_note,
+    )
+
+    record_history_event(
+        school=locked_opportunity.school,
+        opportunity=locked_opportunity,
+        contact=locked_opportunity.primary_contact,
+        actor=changed_by,
+        category="opportunity",
+        event_type="stage_change",
+        title=f"{previous_stage.name} → {to_stage.name}",
+        description=cleaned_note,
+        source_type="opportunity_stage_history",
+        source_id=stage_history.id,
+        metadata={
+            "from_stage": previous_stage.name,
+            "to_stage": to_stage.name,
+        },
+        occurred_at=stage_history.created_at,
     )
 
     return locked_opportunity
@@ -458,7 +496,7 @@ def reopen_opportunity(
         ]
     )
 
-    OpportunityStageHistory.objects.create(
+    stage_history = OpportunityStageHistory.objects.create(
         opportunity=locked_opportunity,
         from_stage=previous_stage,
         to_stage=to_stage,
@@ -467,6 +505,24 @@ def reopen_opportunity(
             OpportunityStageHistory.TransitionType.REOPENED
         ),
         note=cleaned_reason,
+    )
+
+    record_history_event(
+        school=locked_opportunity.school,
+        opportunity=locked_opportunity,
+        contact=locked_opportunity.primary_contact,
+        actor=changed_by,
+        category="opportunity",
+        event_type="reopened",
+        title=f"{previous_stage.name} → {to_stage.name}",
+        description=cleaned_reason,
+        source_type="opportunity_stage_history",
+        source_id=stage_history.id,
+        metadata={
+            "from_stage": previous_stage.name,
+            "to_stage": to_stage.name,
+        },
+        occurred_at=stage_history.created_at,
     )
 
     return locked_opportunity
