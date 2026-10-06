@@ -2936,6 +2936,22 @@ class OpportunityStageHistorySerializer(serializers.ModelSerializer):
         )
 
 
+class CRMCommercialHistoryEventSerializer(serializers.Serializer):
+    id = serializers.CharField()
+    category = serializers.CharField()
+    event_type = serializers.CharField()
+    event_type_display = serializers.CharField()
+    platform = serializers.CharField()
+    occurred_at = serializers.DateTimeField()
+    actor = UserSummarySerializer(allow_null=True)
+    title = serializers.CharField()
+    description = serializers.CharField(
+        allow_blank=True,
+        required=False,
+    )
+    metadata = serializers.JSONField(required=False)
+
+
 class CommercialActivitySerializer(serializers.ModelSerializer):
     contact = SchoolContactSerializer(read_only=True)
     performed_by = UserSummarySerializer(read_only=True)
