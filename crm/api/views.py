@@ -222,7 +222,7 @@ def _apply_school_filters(queryset, params):
 
     if search:
         queryset = queryset.filter(
-            Q(name__icontains=search)
+            Q(name__unaccent__icontains=search)
             | Q(book_express_code__icontains=search)
             | Q(institution_code__icontains=search)
             | Q(modular_code__icontains=search)
@@ -231,11 +231,11 @@ def _apply_school_filters(queryset, params):
             | Q(phone__icontains=search)
             | Q(whatsapp__icontains=search)
             | Q(email__icontains=search)
-            | Q(owner__username__icontains=search)
-            | Q(owner__first_name__icontains=search)
-            | Q(owner__last_name__icontains=search)
-            | Q(campuses__address__icontains=search)
-            | Q(campuses__district__icontains=search)
+            | Q(owner__username__unaccent__icontains=search)
+            | Q(owner__first_name__unaccent__icontains=search)
+            | Q(owner__last_name__unaccent__icontains=search)
+            | Q(campuses__address__unaccent__icontains=search)
+            | Q(campuses__district__unaccent__icontains=search)
         )
 
     if team:
@@ -390,7 +390,7 @@ class CRMSummaryAPIView(APIView):
                 last_activity_at__isnull=True,
             ).count(),
             "activities_today": activities.filter(occurred_at__date=today).count(),
-            "activities_week": week_activities.count(),
+            "activities_week": sum(activity_counts.values()),
             "activity_week_start": week_start,
             "activity_week_end": today,
             "activity_counts": activity_counts,
