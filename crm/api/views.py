@@ -1452,33 +1452,37 @@ class SchoolViewSet(viewsets.ModelViewSet):
                         },
                     )
 
-        refreshed = (
-            School.objects
-            .filter(id__in=school_ids)
-            .select_related(
-                "team",
-                "owner",
-                "owner__book_express_profile",
+        schools_data = []
+
+        if selection_mode == "ids":
+            refreshed = (
+                School.objects
+                .filter(id__in=school_ids)
+                .select_related(
+                    "team",
+                    "owner",
+                    "owner__book_express_profile",
+                )
+                .prefetch_related(
+                    "levels",
+                    "campuses",
+                    "educational_services__campus",
+                    "educational_services__level",
+                    "educational_services__population_records",
+                    "educational_services__population_records__details__grade",
+                )
+                .order_by("name", "id")
             )
-            .prefetch_related(
-                "levels",
-                "campuses",
-                "educational_services__campus",
-                "educational_services__level",
-                "educational_services__population_records",
-                "educational_services__population_records__details__grade",
-            )
-            .order_by("name", "id")
-        )
+            schools_data = SchoolListSerializer(
+                refreshed,
+                many=True,
+            ).data
 
         return Response(
             {
                 "updated": len(schools),
                 "selection_mode": selection_mode,
-                "schools": SchoolListSerializer(
-                    refreshed,
-                    many=True,
-                ).data,
+                "schools": schools_data,
             }
         )
 
