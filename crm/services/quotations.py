@@ -23,6 +23,7 @@ from .commercial_lines import (
     green_margin_threshold,
     resolve_product_commercial_line,
 )
+from .history import record_history_event
 from .opportunities import transition_opportunity_stage
 
 
@@ -1041,6 +1042,27 @@ def create_commercial_quotation_from_projection(
         item.full_clean()
         item.save()
 
+    record_history_event(
+        school=locked_opportunity.school,
+        opportunity=locked_opportunity,
+        contact=locked_opportunity.primary_contact,
+        actor=actor,
+        category="quotation",
+        event_type="quotation_created",
+        title=f"Cotización v{quotation.version} generada",
+        description=(
+            f"Se generó la cotización desde Proyección "
+            f"v{projection.version}."
+        ),
+        source_type="commercial_quotation",
+        source_id=quotation.id,
+        metadata={
+            "version": quotation.version,
+            "source_projection_id": projection.id,
+        },
+        occurred_at=quotation.created_at,
+    )
+
     return quotation
 
 
@@ -1406,6 +1428,24 @@ def approve_commercial_quotation_discount(
         ]
     )
 
+    record_history_event(
+        school=locked_quotation.opportunity.school,
+        opportunity=locked_quotation.opportunity,
+        contact=locked_quotation.opportunity.primary_contact,
+        actor=actor,
+        category="quotation",
+        event_type="discount_approved",
+        title=(
+            f"Descuento de Cotización v"
+            f"{locked_quotation.version} aprobado"
+        ),
+        description=locked_quotation.discount_approval_note,
+        source_type="commercial_quotation",
+        source_id=locked_quotation.id,
+        metadata={"version": locked_quotation.version},
+        occurred_at=locked_quotation.discount_approved_at,
+    )
+
     return locked_quotation
 
 
@@ -1552,6 +1592,21 @@ def create_commercial_quotation(
         item.full_clean()
         item.save()
 
+    record_history_event(
+        school=locked_opportunity.school,
+        opportunity=locked_opportunity,
+        contact=locked_opportunity.primary_contact,
+        actor=actor,
+        category="quotation",
+        event_type="quotation_created",
+        title=f"Cotización v{quotation.version} generada",
+        description="Se generó la cotización comercial.",
+        source_type="commercial_quotation",
+        source_id=quotation.id,
+        metadata={"version": quotation.version},
+        occurred_at=quotation.created_at,
+    )
+
     return quotation
 
 
@@ -1691,6 +1746,23 @@ def send_commercial_quotation(*, quotation, actor):
             allow_quotation_sent=True,
         )
 
+    record_history_event(
+        school=locked_quotation.opportunity.school,
+        opportunity=locked_quotation.opportunity,
+        contact=locked_quotation.opportunity.primary_contact,
+        actor=actor,
+        category="quotation",
+        event_type="quotation_sent",
+        title=f"Cotización v{locked_quotation.version} enviada",
+        description=(
+            "La cotización fue marcada como enviada al colegio."
+        ),
+        source_type="commercial_quotation",
+        source_id=locked_quotation.id,
+        metadata={"version": locked_quotation.version},
+        occurred_at=locked_quotation.sent_at,
+    )
+
     return locked_quotation
 
 
@@ -1742,6 +1814,23 @@ def accept_commercial_quotation(*, quotation, actor):
             "accepted_by",
             "updated_at",
         ]
+    )
+
+    record_history_event(
+        school=locked_quotation.opportunity.school,
+        opportunity=locked_quotation.opportunity,
+        contact=locked_quotation.opportunity.primary_contact,
+        actor=actor,
+        category="quotation",
+        event_type="quotation_accepted",
+        title=f"Cotización v{locked_quotation.version} aceptada",
+        description=(
+            "Se registró la aceptación comercial del colegio."
+        ),
+        source_type="commercial_quotation",
+        source_id=locked_quotation.id,
+        metadata={"version": locked_quotation.version},
+        occurred_at=locked_quotation.accepted_at,
     )
 
     return locked_quotation
@@ -1798,6 +1887,24 @@ def reopen_commercial_quotation_negotiation(
             "reopen_reason",
             "updated_at",
         ]
+    )
+
+    record_history_event(
+        school=locked_quotation.opportunity.school,
+        opportunity=locked_quotation.opportunity,
+        contact=locked_quotation.opportunity.primary_contact,
+        actor=actor,
+        category="quotation",
+        event_type="quotation_reopened",
+        title=(
+            f"Negociación de Cotización v"
+            f"{locked_quotation.version} reabierta"
+        ),
+        description=locked_quotation.reopen_reason,
+        source_type="commercial_quotation",
+        source_id=locked_quotation.id,
+        metadata={"version": locked_quotation.version},
+        occurred_at=locked_quotation.reopened_at,
     )
 
     return locked_quotation
