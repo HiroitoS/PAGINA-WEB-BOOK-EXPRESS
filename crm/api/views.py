@@ -1334,6 +1334,9 @@ class SchoolViewSet(viewsets.ModelViewSet):
             )
 
             for school in schools:
+                previous_team_id = school.team_id
+                previous_owner_id = school.owner_id
+
                 school.team = team
                 school.owner = owner
                 school.save(
@@ -1343,6 +1346,40 @@ class SchoolViewSet(viewsets.ModelViewSet):
                         "updated_at",
                     ]
                 )
+
+                if (
+                    previous_team_id != school.team_id
+                    or previous_owner_id != school.owner_id
+                ):
+                    owner_name = (
+                        owner.get_full_name().strip()
+                        or owner.get_username()
+                        if owner is not None
+                        else "Sin asesor asignado"
+                    )
+                    team_name = (
+                        team.name
+                        if team is not None
+                        else "Sin equipo comercial"
+                    )
+
+                    record_history_event(
+                        school=school,
+                        actor=request.user,
+                        category="assignment",
+                        event_type="assignment_updated",
+                        title="Responsable comercial actualizado",
+                        description=(
+                            f"Equipo: {team_name}. "
+                            f"Asesor: {owner_name}."
+                        ),
+                        metadata={
+                            "previous_team_id": previous_team_id,
+                            "team_id": school.team_id,
+                            "previous_owner_id": previous_owner_id,
+                            "owner_id": school.owner_id,
+                        },
+                    )
 
         refreshed = (
             School.objects
@@ -1623,6 +1660,8 @@ class SchoolViewSet(viewsets.ModelViewSet):
         )
         serializer.is_valid(raise_exception=True)
 
+        population_changes = []
+
         with transaction.atomic():
             for item in serializer.validated_data["levels"]:
                 level = item["level"]
@@ -1660,9 +1699,21 @@ class SchoolViewSet(viewsets.ModelViewSet):
                 )
 
                 if not is_active or student_count is None:
-                    current_records.update(
+                    deactivated = current_records.update(
                         is_current=False,
                     )
+                    if deactivated or (
+                        current_population is not None
+                        and current_population.student_count is not None
+                    ):
+                        population_changes.append(
+                            {
+                                "level": level.name,
+                                "year": year,
+                                "student_count": None,
+                                "status": "pending",
+                            }
+                        )
                     continue
 
                 desired_details = sorted(
@@ -1721,6 +1772,38 @@ class SchoolViewSet(viewsets.ModelViewSet):
                         )
                         for detail in details
                     ]
+                )
+
+                population_changes.append(
+                    {
+                        "level": level.name,
+                        "year": year,
+                        "student_count": student_count,
+                        "status": "known",
+                    }
+                )
+
+            if population_changes:
+                change_description = "; ".join(
+                    (
+                        f"{item['level']} {item['year']}: "
+                        + (
+                            str(item["student_count"])
+                            if item["student_count"] is not None
+                            else "Pendiente"
+                        )
+                    )
+                    for item in population_changes
+                )
+
+                record_history_event(
+                    school=school,
+                    actor=request.user,
+                    category="population",
+                    event_type="population_updated",
+                    title="Población institucional actualizada",
+                    description=change_description,
+                    metadata={"levels": population_changes},
                 )
 
         refreshed_school = (
