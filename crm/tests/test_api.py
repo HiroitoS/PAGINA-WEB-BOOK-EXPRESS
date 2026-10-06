@@ -154,6 +154,75 @@ class CRMApiTests(TestCase):
 
         return response
 
+    def test_commercial_history_unifies_activity_and_quotation_events(self):
+        self.authenticate(self.advisor)
+
+        activity_response = self.client.post(
+            reverse(
+                "crm:opportunity-activities",
+                args=[self.opportunity.id],
+            ),
+            {
+                "activity_type": "call",
+                "summary": "Llamada de seguimiento",
+                "result": "El colegio solicita una propuesta.",
+            },
+            format="json",
+        )
+        self.assertEqual(activity_response.status_code, 201)
+
+        quotation_response = self._create_quotation_via_api()
+        quotation_id = quotation_response.data["id"]
+
+        send_response = self.client.post(
+            reverse(
+                "crm:opportunity-send-quotation",
+                args=[self.opportunity.id, quotation_id],
+            ),
+            {},
+            format="json",
+        )
+        self.assertEqual(send_response.status_code, 200)
+
+        accept_response = self.client.post(
+            reverse(
+                "crm:opportunity-accept-quotation",
+                args=[self.opportunity.id, quotation_id],
+            ),
+            {},
+            format="json",
+        )
+        self.assertEqual(accept_response.status_code, 200)
+
+        response = self.client.get(
+            reverse(
+                "crm:opportunity-commercial-history",
+                args=[self.opportunity.id],
+            )
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        event_types = {
+            item["event_type"]
+            for item in response.data
+        }
+        self.assertIn("call", event_types)
+        self.assertIn("quotation_created", event_types)
+        self.assertIn("quotation_sent", event_types)
+        self.assertIn("quotation_accepted", event_types)
+
+        sent_event = next(
+            item
+            for item in response.data
+            if item["event_type"] == "quotation_sent"
+        )
+        self.assertEqual(
+            sent_event["actor"]["username"],
+            self.advisor.username,
+        )
+        self.assertEqual(sent_event["platform"], "Página Web")
+
     def test_advisor_can_create_and_list_opportunity_quotation(self):
         self.authenticate(self.advisor)
 
