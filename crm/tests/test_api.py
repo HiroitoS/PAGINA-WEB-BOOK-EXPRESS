@@ -1591,6 +1591,50 @@ class CRMApiTests(TestCase):
             ).exists()
         )
 
+    def test_initial_population_rejects_non_standard_multigrade(self):
+        initial = Level.objects.create(
+            name="Inicial validación CRM",
+            is_active=True,
+        )
+        multigrade = Grade.objects.create(
+            name="Multigrado Inicial validación CRM",
+            order=99,
+            is_active=True,
+        )
+
+        self.authenticate(self.admin)
+        response = self.client.patch(
+            reverse(
+                "crm:school-institutional-population",
+                args=[self.school.id],
+            ),
+            {
+                "levels": [
+                    {
+                        "level": initial.id,
+                        "year": 2027,
+                        "is_active": True,
+                        "details": [
+                            {
+                                "grade": multigrade.id,
+                                "section_count": 1,
+                                "students_per_section": 20,
+                            }
+                        ],
+                    }
+                ]
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(
+            SchoolPopulationRecord.objects.filter(
+                service__school=self.school,
+                service__level=initial,
+            ).exists()
+        )
+
     def test_new_population_replaces_current_population(self):
         level = Level.objects.create(
             name="Secundaria población CRM",
