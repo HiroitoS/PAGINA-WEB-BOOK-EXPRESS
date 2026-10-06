@@ -40,6 +40,13 @@ class CRMWorkItemLink(TimeStampedModel):
         related_name="generated_work_item_links",
         verbose_name="Actividad de origen",
     )
+    commercial_action_type = models.CharField(
+        max_length=30,
+        choices=CommercialActivity.ActivityType.choices,
+        blank=True,
+        default="",
+        verbose_name="Próxima acción comercial",
+    )
     task = models.ForeignKey(
         "workspaces.Task",
         on_delete=models.CASCADE,
