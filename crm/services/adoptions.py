@@ -11,6 +11,7 @@ from crm.models import (
     PipelineStage,
 )
 
+from .history import record_history_event
 from .opportunities import transition_opportunity_stage
 
 
@@ -251,6 +252,27 @@ def confirm_adoption(
             f"Directivo: {authorized_contact.full_name}."
         ),
         allow_won=True,
+    )
+
+    record_history_event(
+        school=opportunity.school,
+        opportunity=opportunity,
+        contact=authorized_contact,
+        actor=actor,
+        category="adoption",
+        event_type="adoption_confirmed",
+        title=f"Adopción v{adoption.version} confirmada",
+        description=(
+            f"Directivo: "
+            f"{adoption.authorized_contact_name_snapshot}."
+        ),
+        source_type="adoption",
+        source_id=adoption.id,
+        metadata={
+            "version": adoption.version,
+            "quotation_id": adoption.quotation_id,
+        },
+        occurred_at=adoption.confirmed_at or adoption.created_at,
     )
 
     return adoption
