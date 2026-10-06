@@ -1547,6 +1547,50 @@ class CRMApiTests(TestCase):
         )
 
 
+    def test_population_rejects_grade_from_another_level(self):
+        primary = Level.objects.create(
+            name="Primaria validación CRM",
+            is_active=True,
+        )
+        initial_grade = Grade.objects.create(
+            name="3 años incompatibilidad CRM",
+            order=1,
+            is_active=True,
+        )
+
+        self.authenticate(self.admin)
+        response = self.client.patch(
+            reverse(
+                "crm:school-institutional-population",
+                args=[self.school.id],
+            ),
+            {
+                "levels": [
+                    {
+                        "level": primary.id,
+                        "year": 2027,
+                        "is_active": True,
+                        "details": [
+                            {
+                                "grade": initial_grade.id,
+                                "section_count": 1,
+                                "students_per_section": 20,
+                            }
+                        ],
+                    }
+                ]
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(
+            SchoolPopulationRecord.objects.filter(
+                service__school=self.school,
+                service__level=primary,
+            ).exists()
+        )
+
     def test_new_population_replaces_current_population(self):
         level = Level.objects.create(
             name="Secundaria población CRM",
