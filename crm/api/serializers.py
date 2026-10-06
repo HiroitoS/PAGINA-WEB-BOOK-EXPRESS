@@ -2961,6 +2961,12 @@ class CommercialActivityCreateSerializer(serializers.Serializer):
 
 class OpportunityTaskCreateSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=180)
+    commercial_action_type = serializers.ChoiceField(
+        choices=CommercialActivity.ActivityType.choices,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
     assigned_to = serializers.PrimaryKeyRelatedField(queryset=User.objects.filter(is_active=True), required=False, allow_null=True)
     description = serializers.CharField(required=False, allow_blank=True, default="")
     priority = serializers.ChoiceField(choices=Task.PRIORITY_CHOICES, required=False, default="medium")
@@ -2974,6 +2980,12 @@ class OpportunityTaskCreateSerializer(serializers.Serializer):
 
 class OpportunityEventCreateSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=180)
+    commercial_action_type = serializers.ChoiceField(
+        choices=CommercialActivity.ActivityType.choices,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
     start_at = serializers.DateTimeField()
     assigned_to = serializers.PrimaryKeyRelatedField(queryset=User.objects.filter(is_active=True), required=False, allow_null=True)
     participants = serializers.PrimaryKeyRelatedField(queryset=User.objects.filter(is_active=True), many=True, required=False)
@@ -2987,6 +2999,12 @@ class OpportunityEventCreateSerializer(serializers.Serializer):
 
 class OpportunityReminderCreateSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=180)
+    commercial_action_type = serializers.ChoiceField(
+        choices=CommercialActivity.ActivityType.choices,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
     remind_at = serializers.DateTimeField()
     user = serializers.PrimaryKeyRelatedField(queryset=User.objects.filter(is_active=True), required=False, allow_null=True)
     message = serializers.CharField(required=False, allow_blank=True, default="")
@@ -3061,6 +3079,10 @@ class SchoolReminderCreateSerializer(OpportunityReminderCreateSerializer):
 
 class WorkItemLinkSerializer(serializers.ModelSerializer):
     type = serializers.CharField(source="work_item_type", read_only=True)
+    commercial_action_type_display = serializers.CharField(
+        source="get_commercial_action_type_display",
+        read_only=True,
+    )
     item = serializers.SerializerMethodField()
 
     class Meta:
@@ -3071,6 +3093,8 @@ class WorkItemLinkSerializer(serializers.ModelSerializer):
             "contact_id",
             "opportunity_id",
             "type",
+            "commercial_action_type",
+            "commercial_action_type_display",
             "item",
             "origin_activity_id",
             "created_at",
