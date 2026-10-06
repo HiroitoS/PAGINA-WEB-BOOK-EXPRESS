@@ -1,5 +1,6 @@
 from .activities import CommercialActivityError, record_commercial_activity
 from .adoptions import AdoptionError, confirm_adoption
+from .history import build_opportunity_commercial_history
 from .opportunities import (
     OpportunityTransitionError,
     create_opportunity,
@@ -41,6 +42,7 @@ from .work_items import (
 __all__ = [
     "AdoptionError",
     "confirm_adoption",
+    "build_opportunity_commercial_history",
     "CommercialProjectionError",
     "create_commercial_projection_revision",
     "resolve_projection_price",
