@@ -42,6 +42,7 @@ from crm.permissions import (
     usuario_puede_supervisar_crm,
 )
 from crm.services.commercial_lines import green_margin_threshold
+from crm.services.education import grade_matches_level
 from workspaces.models import CalendarEvent, Task, WorkspaceGroup
 
 
@@ -695,6 +696,26 @@ class SchoolPopulationRecordWriteSerializer(serializers.ModelSerializer):
                     }
                 )
 
+            level = self.context.get("level")
+            if level is not None:
+                invalid_grades = [
+                    detail["grade"].name
+                    for detail in details
+                    if not grade_matches_level(
+                        grade=detail["grade"],
+                        level=level,
+                    )
+                ]
+                if invalid_grades:
+                    raise serializers.ValidationError(
+                        {
+                            "details": (
+                                f"Los grados {', '.join(invalid_grades)} "
+                                f"no corresponden al nivel {level.name}."
+                            )
+                        }
+                    )
+
             attrs["student_count"] = sum(
                 detail["section_count"]
                 * detail["students_per_section"]
@@ -974,6 +995,25 @@ class SchoolInstitutionalPopulationLevelWriteSerializer(
                         "details": (
                             "No puedes registrar dos veces el mismo grado "
                             "en un nivel."
+                        )
+                    }
+                )
+
+            level = attrs["level"]
+            invalid_grades = [
+                detail["grade"].name
+                for detail in details
+                if not grade_matches_level(
+                    grade=detail["grade"],
+                    level=level,
+                )
+            ]
+            if invalid_grades:
+                raise serializers.ValidationError(
+                    {
+                        "details": (
+                            f"Los grados {', '.join(invalid_grades)} "
+                            f"no corresponden al nivel {level.name}."
                         )
                     }
                 )
