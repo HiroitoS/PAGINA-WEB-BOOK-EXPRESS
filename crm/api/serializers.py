@@ -1662,11 +1662,60 @@ class SchoolWriteSerializer(serializers.ModelSerializer):
         )
 
 
+class SchoolAssignmentFilterSerializer(serializers.Serializer):
+    search = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=200,
+    )
+    is_active = serializers.ChoiceField(
+        choices=("", "true", "false"),
+        required=False,
+        allow_blank=True,
+    )
+    department = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=120,
+    )
+    province = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=120,
+    )
+    district = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=120,
+    )
+    assignment = serializers.ChoiceField(
+        choices=("", "assigned", "unassigned"),
+        required=False,
+        allow_blank=True,
+    )
+    team = serializers.IntegerField(
+        required=False,
+        min_value=1,
+    )
+    owner = serializers.IntegerField(
+        required=False,
+        min_value=1,
+    )
+
+
 class SchoolAssignmentSerializer(serializers.Serializer):
+    selection_mode = serializers.ChoiceField(
+        choices=("ids", "filters"),
+        default="ids",
+    )
     school_ids = serializers.ListField(
         child=serializers.IntegerField(min_value=1),
+        required=False,
         allow_empty=False,
         max_length=500,
+    )
+    filters = SchoolAssignmentFilterSerializer(
+        required=False,
     )
     team = serializers.PrimaryKeyRelatedField(
         queryset=CommercialTeam.objects.filter(is_active=True),
@@ -1690,8 +1739,29 @@ class SchoolAssignmentSerializer(serializers.Serializer):
         return unique_ids
 
     def validate(self, attrs):
+        selection_mode = attrs.get("selection_mode", "ids")
+        school_ids = attrs.get("school_ids")
+        filters = attrs.get("filters")
         team = attrs.get("team")
         owner = attrs.get("owner")
+
+        if selection_mode == "ids" and not school_ids:
+            raise serializers.ValidationError(
+                {
+                    "school_ids": (
+                        "Selecciona al menos un colegio."
+                    )
+                }
+            )
+
+        if selection_mode == "filters" and filters is None:
+            raise serializers.ValidationError(
+                {
+                    "filters": (
+                        "Envía los filtros de la cartera que deseas asignar."
+                    )
+                }
+            )
 
         if owner is not None and team is None:
             raise serializers.ValidationError(
