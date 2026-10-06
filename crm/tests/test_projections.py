@@ -277,6 +277,50 @@ class CRMCommercialProjectionTests(TestCase):
             2,
         )
 
+    def test_projection_rejects_grade_from_another_level(self):
+        initial_grade = Grade.objects.create(
+            name="3 años Proyección incompatible",
+            order=1,
+            is_active=True,
+        )
+
+        with self.assertRaisesMessage(
+            CommercialProjectionError,
+            "no corresponde al nivel",
+        ):
+            self._create_projection(
+                grade_lines=[
+                    {
+                        "service": self.service,
+                        "grade": initial_grade,
+                        "student_count": 20,
+                    }
+                ],
+                items=[],
+            )
+
+    def test_projection_products_api_rejects_grade_from_another_level(self):
+        initial_grade = Grade.objects.create(
+            name="4 años Catálogo incompatible",
+            order=2,
+            is_active=True,
+        )
+        self.client.force_authenticate(user=self.advisor)
+
+        response = self.client.get(
+            reverse(
+                "crm:opportunity-projection-products",
+                args=[self.opportunity.id],
+            ),
+            {
+                "service": self.service.id,
+                "grade": initial_grade.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("grade", response.data)
+
     def test_projection_rejects_product_from_another_grade(self):
         wrong_product = Product.objects.create(
             provider=self.provider,
