@@ -23,6 +23,10 @@ def record_commercial_activity(
     opportunity=None,
     contact=None,
     occurred_at=None,
+    latitude=None,
+    longitude=None,
+    location_accuracy_m=None,
+    location_captured_at=None,
     is_important=False,
 ):
     locked_opportunity = None
@@ -96,6 +100,10 @@ def record_commercial_activity(
         summary=cleaned_summary,
         result=cleaned_result,
         occurred_at=activity_date,
+        latitude=latitude,
+        longitude=longitude,
+        location_accuracy_m=location_accuracy_m,
+        location_captured_at=location_captured_at,
         is_important=is_important,
         created_by=created_by,
     )
@@ -126,6 +134,10 @@ def record_commercial_activity(
             "activity_id": activity.id,
             "contact_id": activity.contact_id,
             "opportunity_id": activity.opportunity_id,
+            "has_location": (
+                activity.latitude is not None
+                and activity.longitude is not None
+            ),
         },
         occurred_at=activity.occurred_at,
     )
