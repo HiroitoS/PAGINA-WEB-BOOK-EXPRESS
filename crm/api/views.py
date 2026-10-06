@@ -1088,6 +1088,20 @@ class SchoolViewSet(viewsets.ModelViewSet):
         school = School(**data, created_by=request.user)
         school.full_clean()
         school.save()
+
+        record_history_event(
+            school=school,
+            actor=request.user,
+            category="school",
+            event_type="school_created",
+            title="Colegio incorporado a la cartera CRM",
+            description=school.name,
+            source_type="school",
+            source_id=school.id,
+            metadata={"school_id": school.id},
+            occurred_at=school.created_at,
+        )
+
         _sync_main_campus_from_school(
             school=school,
             actor=request.user,
