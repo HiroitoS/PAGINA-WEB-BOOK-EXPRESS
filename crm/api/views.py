@@ -662,6 +662,7 @@ class SchoolContactViewSet(viewsets.ModelViewSet):
                 CommercialActivitySerializer(
                     page,
                     many=True,
+                    context={"request": request},
                 ).data
             )
 
@@ -669,6 +670,7 @@ class SchoolContactViewSet(viewsets.ModelViewSet):
             CommercialActivitySerializer(
                 queryset,
                 many=True,
+                context={"request": request},
             ).data
         )
 
@@ -3798,8 +3800,16 @@ class OpportunityViewSet(viewsets.ModelViewSet):
             ).prefetch_related("evidences__uploaded_by").order_by("-occurred_at", "-id")
             page = self.paginate_queryset(queryset)
             if page is not None:
-                return self.get_paginated_response(CommercialActivitySerializer(page, many=True).data)
-            return Response(CommercialActivitySerializer(queryset, many=True).data)
+                return self.get_paginated_response(CommercialActivitySerializer(
+                    page,
+                    many=True,
+                    context={"request": request},
+                ).data)
+            return Response(CommercialActivitySerializer(
+                queryset,
+                many=True,
+                context={"request": request},
+            ).data)
         if not _user_can_manage_visible_opportunity(request.user, opportunity):
             raise PermissionDenied("No tienes permiso para registrar actividad en esta oportunidad.")
         serializer = CommercialActivityCreateSerializer(data=request.data)
