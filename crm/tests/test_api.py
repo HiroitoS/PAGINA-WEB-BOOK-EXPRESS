@@ -625,6 +625,38 @@ class CRMApiTests(TestCase):
         self.assertEqual(response.data["schools"], 1)
         self.assertEqual(response.data["open_opportunities"], 1)
 
+    def test_summary_exposes_weekly_operational_activity_counts(self):
+        CommercialActivity.objects.create(
+            school=self.school,
+            opportunity=self.opportunity,
+            performed_by=self.advisor,
+            created_by=self.advisor,
+            activity_type=CommercialActivity.ActivityType.CALL,
+            summary="Llamada semanal",
+            result="Contacto realizado.",
+        )
+        CommercialActivity.objects.create(
+            school=self.school,
+            opportunity=self.opportunity,
+            performed_by=self.advisor,
+            created_by=self.advisor,
+            activity_type=CommercialActivity.ActivityType.VISIT,
+            summary="Visita coordinada semanal",
+            result="Reunión confirmada.",
+        )
+
+        self.authenticate(self.advisor)
+        response = self.client.get(reverse("crm:summary"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["activities_week"], 2)
+        self.assertEqual(response.data["activity_counts"]["call"], 1)
+        self.assertEqual(response.data["activity_counts"]["visit"], 1)
+        self.assertEqual(
+            response.data["activity_counts"]["cold_visit"],
+            0,
+        )
+
     def test_advisor_can_register_commercial_activity(self):
         self.authenticate(self.advisor)
         response = self.client.post(
@@ -1274,6 +1306,47 @@ class CRMApiTests(TestCase):
             extra_school.owner_id,
             self.other_advisor.id,
         )
+
+    def test_admin_can_assign_all_schools_matching_filters(self):
+        first_school = School.objects.create(
+            name="C3 Seleccion Norte",
+            created_by=self.admin,
+        )
+        second_school = School.objects.create(
+            name="C3 Seleccion Sur",
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.admin)
+
+        response = self.client.post(
+            reverse("crm:school-assign-portfolio"),
+            {
+                "selection_mode": "filters",
+                "filters": {
+                    "search": "C3 Seleccion",
+                    "is_active": "true",
+                },
+                "team": self.other_team.id,
+                "owner": self.other_advisor.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["updated"], 2)
+        self.assertEqual(response.data["selection_mode"], "filters")
+
+        first_school.refresh_from_db()
+        second_school.refresh_from_db()
+        self.school.refresh_from_db()
+
+        self.assertEqual(first_school.team_id, self.other_team.id)
+        self.assertEqual(first_school.owner_id, self.other_advisor.id)
+        self.assertEqual(second_school.team_id, self.other_team.id)
+        self.assertEqual(second_school.owner_id, self.other_advisor.id)
+        self.assertEqual(self.school.team_id, self.team.id)
+        self.assertEqual(self.school.owner_id, self.advisor.id)
 
     def test_admin_can_assign_school_portfolio(self):
         self.authenticate(self.admin)
