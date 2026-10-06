@@ -16,6 +16,7 @@ from .commercial_lines import (
     SCHOOL_TEXT,
     VALID_PROJECTION_LINES,
 )
+from .history import record_history_event
 
 
 class CommercialProjectionError(ValidationError):
@@ -485,6 +486,27 @@ def create_commercial_projection_revision(
         )
         item.full_clean()
         item.save()
+
+    record_history_event(
+        school=locked_opportunity.school,
+        opportunity=locked_opportunity,
+        contact=locked_opportunity.primary_contact,
+        actor=actor,
+        category="projection",
+        event_type="projection_created",
+        title=f"Proyección v{projection.version} guardada",
+        description=(
+            "Línea comercial: "
+            f"{projection.get_commercial_line_display()}."
+        ),
+        source_type="commercial_projection",
+        source_id=projection.id,
+        metadata={
+            "version": projection.version,
+            "commercial_line": projection.commercial_line,
+        },
+        occurred_at=projection.created_at,
+    )
 
     return (
         CommercialProjection.objects
