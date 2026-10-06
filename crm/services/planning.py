@@ -113,6 +113,7 @@ def create_opportunity_task(
     is_important=False,
     is_private=False,
     origin_activity=None,
+    commercial_action_type="",
 ):
     locked = _locked_open_opportunity(opportunity)
 
@@ -150,6 +151,7 @@ def create_opportunity_task(
         created_by=actor,
         task=task,
         origin_activity=origin_activity,
+        commercial_action_type=commercial_action_type,
     )
 
     return task
@@ -172,6 +174,7 @@ def create_opportunity_event(
     location="",
     related_task=None,
     origin_activity=None,
+    commercial_action_type="",
 ):
     locked = _locked_open_opportunity(opportunity)
 
@@ -209,6 +212,7 @@ def create_opportunity_event(
         created_by=actor,
         event=event,
         origin_activity=origin_activity,
+        commercial_action_type=(commercial_action_type or event_type),
     )
 
     return event
@@ -227,6 +231,7 @@ def create_opportunity_reminder(
     task=None,
     event=None,
     origin_activity=None,
+    commercial_action_type="",
 ):
     locked = _locked_open_opportunity(opportunity)
 
@@ -266,6 +271,7 @@ def create_opportunity_reminder(
         created_by=actor,
         reminder=reminder,
         origin_activity=origin_activity,
+        commercial_action_type=commercial_action_type,
     )
 
     return reminder
@@ -313,6 +319,7 @@ def create_school_task(
     contact=None,
     opportunity=None,
     origin_activity=None,
+    commercial_action_type="",
     assigned_to=None,
     description="",
     priority="medium",
@@ -361,6 +368,7 @@ def create_school_task(
         origin_activity=origin_activity,
         created_by=actor,
         task=task,
+        commercial_action_type=commercial_action_type,
     )
 
     return task
@@ -376,6 +384,7 @@ def create_school_event(
     contact=None,
     opportunity=None,
     origin_activity=None,
+    commercial_action_type="",
     assigned_to=None,
     participants=None,
     description="",
@@ -424,6 +433,7 @@ def create_school_event(
         origin_activity=origin_activity,
         created_by=actor,
         event=event,
+        commercial_action_type=(commercial_action_type or event_type),
     )
 
     return event
@@ -462,6 +472,7 @@ def create_school_reminder(
     contact=None,
     opportunity=None,
     origin_activity=None,
+    commercial_action_type="",
     user=None,
     message="",
     group=None,
@@ -508,6 +519,7 @@ def create_school_reminder(
         origin_activity=origin_activity,
         created_by=actor,
         reminder=reminder,
+        commercial_action_type=commercial_action_type,
     )
 
     return reminder
