@@ -1,6 +1,7 @@
 from .activity import CommercialActivity
 from .adoption import Adoption, AdoptionItem
 from .campaign import Campaign
+from .history import CRMHistoryEvent
 from .opportunity import Opportunity, OpportunityStageHistory
 from .pipeline import Pipeline, PipelineStage
 from .quotation import CommercialQuotation, CommercialQuotationItem
@@ -32,6 +33,7 @@ __all__ = [
     "Adoption",
     "AdoptionItem",
     "Campaign",
+    "CRMHistoryEvent",
     "CommercialTeam",
     "CommercialTeamMembership",
     "School",
