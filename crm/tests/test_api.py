@@ -14,6 +14,7 @@ from crm.models import (
     CommercialQuotation,
     CommercialTeam,
     CommercialTeamMembership,
+    CRMHistoryEvent,
     CRMWorkItemLink,
     Opportunity,
     Pipeline,
@@ -222,6 +223,103 @@ class CRMApiTests(TestCase):
             self.advisor.username,
         )
         self.assertEqual(sent_event["platform"], "Página Web")
+
+    def test_school_history_keeps_activity_before_opportunity(self):
+        self.authenticate(self.advisor)
+
+        response = self.client.post(
+            reverse(
+                "crm:school-activities",
+                args=[self.school.id],
+            ),
+            {
+                "activity_type": "cold_visit",
+                "summary": "Visita inicial al colegio",
+                "result": "Se obtuvo el nombre del director.",
+                "opportunity": None,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertIsNone(response.data["opportunity_id"])
+
+        history_response = self.client.get(
+            reverse(
+                "crm:school-commercial-history",
+                args=[self.school.id],
+            )
+        )
+
+        self.assertEqual(history_response.status_code, 200)
+        visit_events = [
+            item
+            for item in history_response.data
+            if item["event_type"] == "cold_visit"
+        ]
+        self.assertEqual(len(visit_events), 1)
+        self.assertEqual(
+            visit_events[0]["title"],
+            "Visita inicial al colegio",
+        )
+
+        opportunity_history = self.client.get(
+            reverse(
+                "crm:opportunity-commercial-history",
+                args=[self.opportunity.id],
+            )
+        )
+        self.assertEqual(opportunity_history.status_code, 200)
+        self.assertNotIn(
+            "cold_visit",
+            {
+                item["event_type"]
+                for item in opportunity_history.data
+            },
+        )
+
+    def test_activity_is_persisted_once_in_crm_history(self):
+        self.authenticate(self.advisor)
+
+        response = self.client.post(
+            reverse(
+                "crm:opportunity-activities",
+                args=[self.opportunity.id],
+            ),
+            {
+                "activity_type": "call",
+                "summary": "Confirmar reunión",
+                "result": "El director confirmó la reunión.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            CRMHistoryEvent.objects.filter(
+                school=self.school,
+                opportunity=self.opportunity,
+                source_type="commercial_activity",
+                source_id=response.data["id"],
+                event_type="call",
+            ).count(),
+            1,
+        )
+
+        history_response = self.client.get(
+            reverse(
+                "crm:opportunity-commercial-history",
+                args=[self.opportunity.id],
+            )
+        )
+        call_events = [
+            item
+            for item in history_response.data
+            if item["source_type"] == "commercial_activity"
+            and item["source_id"] == response.data["id"]
+            and item["event_type"] == "call"
+        ]
+        self.assertEqual(len(call_events), 1)
 
     def test_advisor_can_create_and_list_opportunity_quotation(self):
         self.authenticate(self.advisor)
