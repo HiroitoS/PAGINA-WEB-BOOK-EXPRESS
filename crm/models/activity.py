@@ -69,6 +69,32 @@ class CommercialActivity(TimeStampedModel):
         default=timezone.now,
         verbose_name="Fecha de la actividad",
     )
+    latitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        verbose_name="Latitud registrada",
+    )
+    longitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        verbose_name="Longitud registrada",
+    )
+    location_accuracy_m = models.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name="Precisión de ubicación (m)",
+    )
+    location_captured_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Fecha de captura de ubicación",
+    )
     is_important = models.BooleanField(
         default=False,
         verbose_name="Importante",
