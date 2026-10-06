@@ -3051,6 +3051,48 @@ class CRMApiTests(TestCase):
         )
         self.assertFalse(service.is_active)
 
+    def test_school_activity_can_store_location_without_evidence(self):
+        self.authenticate(self.advisor)
+
+        response = self.client.post(
+            reverse(
+                "crm:school-activities",
+                args=[self.school.id],
+            ),
+            {
+                "activity_type": "cold_visit",
+                "summary": "Visita geolocalizada",
+                "result": "Se visitó el colegio para ubicar al directivo.",
+                "opportunity": None,
+                "latitude": "-12.065432",
+                "longitude": "-75.205678",
+                "location_accuracy_m": "18.25",
+                "location_captured_at": timezone.now().isoformat(),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["latitude"], "-12.065432")
+        self.assertEqual(response.data["longitude"], "-75.205678")
+        self.assertEqual(
+            response.data["location_accuracy_m"],
+            "18.25",
+        )
+
+        activity = CommercialActivity.objects.get(
+            pk=response.data["id"],
+        )
+        self.assertEqual(
+            activity.latitude,
+            Decimal("-12.065432"),
+        )
+        self.assertEqual(
+            activity.longitude,
+            Decimal("-75.205678"),
+        )
+        self.assertEqual(activity.evidences.count(), 0)
+
     def test_school_activity_accepts_evidence_with_optional_location(self):
         self.authenticate(self.advisor)
 
