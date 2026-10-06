@@ -1,4 +1,5 @@
 from .activity import CommercialActivity
+from .activity_evidence import CommercialActivityEvidence
 from .adoption import Adoption, AdoptionItem
 from .campaign import Campaign
 from .history import CRMHistoryEvent
@@ -57,6 +58,7 @@ __all__ = [
     "CommercialProjectionGrade",
     "CommercialProjectionItem",
     "CommercialActivity",
+    "CommercialActivityEvidence",
     "CRMWorkItemLink",
     "MarketEditorial",
 ]
