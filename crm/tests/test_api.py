@@ -517,6 +517,22 @@ class CRMApiTests(TestCase):
         self.assertEqual(response.data["count"], 1)
         self.assertEqual(response.data["results"][0]["id"], self.opportunity.id)
 
+    def test_school_search_ignores_accents_and_case(self):
+        self.school.name = "Colegio José María Arguedas"
+        self.school.save(update_fields=["name", "updated_at"])
+        self.authenticate(self.advisor)
+
+        response = self.client.get(
+            reverse("crm:school-list"),
+            {
+                "search": "JOSE MARIA",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["id"], self.school.id)
+
     def test_school_location_filters_ignore_accents_and_case(self):
         SchoolCampus.objects.create(
             school=self.school,
