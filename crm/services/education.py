@@ -45,8 +45,6 @@ def grade_level_key(value):
         return LEVEL_PRIMARY
     if "secundaria" in label:
         return LEVEL_SECONDARY
-    if "inicial" in label:
-        return LEVEL_INITIAL
 
     match = re.search(r"\b([345])\s+anos?\b", label)
     if match:
