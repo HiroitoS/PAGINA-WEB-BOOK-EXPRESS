@@ -73,6 +73,7 @@ from crm.services import (
     create_school_reminder,
     create_school_task,
     record_commercial_activity,
+    record_history_event,
     recalculate_active_school_profile,
     recalculate_school_commercial_profile,
     reopen_commercial_quotation_negotiation,
@@ -610,6 +611,17 @@ class SchoolContactViewSet(viewsets.ModelViewSet):
             _fill_empty_primary_contact_on_open_opportunities(
                 school=contact.school,
                 contact=contact,
+            )
+
+            record_history_event(
+                school=contact.school,
+                contact=contact,
+                actor=request.user,
+                category="contact",
+                event_type="contact_updated",
+                title=f"Contacto actualizado: {contact.full_name}",
+                description=contact.position or "",
+                metadata={"contact_id": contact.id},
             )
 
         recalculate_active_school_profile(contact.school)
@@ -1777,6 +1789,23 @@ class SchoolViewSet(viewsets.ModelViewSet):
                 contact=contact,
             )
 
+            record_history_event(
+                school=school,
+                contact=contact,
+                actor=request.user,
+                category="contact",
+                event_type="contact_created",
+                title=f"Contacto registrado: {contact.full_name}",
+                description=contact.position or "",
+                source_type="school_contact",
+                source_id=contact.id,
+                metadata={
+                    "contact_id": contact.id,
+                    "is_primary": contact.is_primary,
+                },
+                occurred_at=contact.created_at,
+            )
+
         recalculate_active_school_profile(school)
 
         return Response(
@@ -1861,6 +1890,17 @@ class SchoolViewSet(viewsets.ModelViewSet):
             _fill_empty_primary_contact_on_open_opportunities(
                 school=school,
                 contact=contact,
+            )
+
+            record_history_event(
+                school=school,
+                contact=contact,
+                actor=request.user,
+                category="contact",
+                event_type="contact_updated",
+                title=f"Contacto actualizado: {contact.full_name}",
+                description=contact.position or "",
+                metadata={"contact_id": contact.id},
             )
 
         recalculate_active_school_profile(school)
