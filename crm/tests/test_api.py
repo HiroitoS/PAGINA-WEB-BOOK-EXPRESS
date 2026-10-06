@@ -13,6 +13,7 @@ from rest_framework.test import APIClient
 from catalog.models import Area, Grade, Level, Product, Provider
 from crm.models import (
     Campaign,
+    CommercialActivity,
     CommercialQuotation,
     CommercialTeam,
     CommercialTeamMembership,
