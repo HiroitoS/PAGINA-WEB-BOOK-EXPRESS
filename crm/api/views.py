@@ -51,6 +51,7 @@ from crm.selectors import (
 from crm.services import (
     AdoptionError,
     CRMPlanningError,
+    build_opportunity_commercial_history,
     CommercialActivityError,
     CommercialProjectionError,
     CommercialQuotationError,
@@ -93,6 +94,7 @@ from .serializers import (
     CampaignSerializer,
     CommercialActivityCreateSerializer,
     CommercialActivitySerializer,
+    CRMCommercialHistoryEventSerializer,
     CommercialProjectionCreateSerializer,
     CommercialProjectionSerializer,
     CommercialQuotationCreateSerializer,
@@ -3471,8 +3473,40 @@ class OpportunityViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["get"], url_path="history")
     def history(self, request, pk=None):
         opportunity = self.get_object()
-        queryset = opportunity.stage_history.select_related("from_stage", "to_stage", "changed_by").order_by("-created_at", "-id")
-        return Response(OpportunityStageHistorySerializer(queryset, many=True).data)
+        queryset = opportunity.stage_history.select_related(
+            "from_stage",
+            "to_stage",
+            "changed_by",
+        ).order_by("-created_at", "-id")
+        return Response(
+            OpportunityStageHistorySerializer(
+                queryset,
+                many=True,
+            ).data
+        )
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="commercial-history",
+        url_name="commercial-history",
+    )
+    def commercial_history(self, request, pk=None):
+        opportunity = self.get_object()
+        activities = (
+            visible_commercial_activities_queryset(request.user)
+            .filter(opportunity=opportunity)
+        )
+        events = build_opportunity_commercial_history(
+            opportunity=opportunity,
+            activities_queryset=activities,
+        )
+        return Response(
+            CRMCommercialHistoryEventSerializer(
+                events,
+                many=True,
+            ).data
+        )
 
     @action(detail=True, methods=["get", "post"], url_path="activities")
     def activities(self, request, pk=None):
