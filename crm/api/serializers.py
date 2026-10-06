@@ -3180,18 +3180,73 @@ class CommercialActivitySerializer(serializers.ModelSerializer):
         fields = (
             "id", "school_id", "opportunity_id",
             "activity_type", "activity_type_display", "summary", "result",
-            "contact", "performed_by", "occurred_at", "is_important",
+            "contact", "performed_by", "occurred_at",
+            "latitude", "longitude", "location_accuracy_m",
+            "location_captured_at", "is_important",
             "evidences", "created_at",
         )
 
 
 class CommercialActivityCreateSerializer(serializers.Serializer):
-    activity_type = serializers.ChoiceField(choices=CommercialActivity.ActivityType.choices)
+    activity_type = serializers.ChoiceField(
+        choices=CommercialActivity.ActivityType.choices
+    )
     summary = serializers.CharField(max_length=200)
     result = serializers.CharField()
-    contact = serializers.PrimaryKeyRelatedField(queryset=SchoolContact.objects.filter(is_active=True), required=False, allow_null=True)
+    contact = serializers.PrimaryKeyRelatedField(
+        queryset=SchoolContact.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
     occurred_at = serializers.DateTimeField(required=False)
+    latitude = serializers.DecimalField(
+        required=False,
+        allow_null=True,
+        max_digits=9,
+        decimal_places=6,
+        min_value=Decimal("-90"),
+        max_value=Decimal("90"),
+    )
+    longitude = serializers.DecimalField(
+        required=False,
+        allow_null=True,
+        max_digits=9,
+        decimal_places=6,
+        min_value=Decimal("-180"),
+        max_value=Decimal("180"),
+    )
+    location_accuracy_m = serializers.DecimalField(
+        required=False,
+        allow_null=True,
+        max_digits=8,
+        decimal_places=2,
+        min_value=Decimal("0"),
+    )
+    location_captured_at = serializers.DateTimeField(
+        required=False,
+        allow_null=True,
+    )
     is_important = serializers.BooleanField(required=False, default=False)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        latitude = attrs.get("latitude")
+        longitude = attrs.get("longitude")
+
+        if (latitude is None) != (longitude is None):
+            raise serializers.ValidationError(
+                {
+                    "location": (
+                        "La latitud y la longitud deben registrarse juntas."
+                    )
+                }
+            )
+
+        if latitude is None:
+            attrs["location_accuracy_m"] = None
+            attrs["location_captured_at"] = None
+
+        return attrs
 
 
 class OpportunityTaskCreateSerializer(serializers.Serializer):
