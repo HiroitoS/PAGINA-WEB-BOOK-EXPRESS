@@ -522,15 +522,22 @@ class SchoolContact(TimeStampedModel):
         ]
 
     def save(self, *args, **kwargs):
-        first_name = (self.first_name or "").strip()
-        last_name = (self.last_name or "").strip()
+        first_name = " ".join((self.first_name or "").split())
+        last_name = " ".join((self.last_name or "").split())
+
+        self.first_name = first_name
+        self.last_name = last_name
+        self.position = " ".join((self.position or "").split())
+        self.phone = (self.phone or "").strip()
+        self.whatsapp = (self.whatsapp or "").strip()
+        self.email = (self.email or "").strip().lower()
 
         if first_name or last_name:
-            self.first_name = first_name
-            self.last_name = last_name
             self.full_name = " ".join(
                 value for value in [first_name, last_name] if value
             )
+        else:
+            self.full_name = " ".join((self.full_name or "").split())
 
         super().save(*args, **kwargs)
 
