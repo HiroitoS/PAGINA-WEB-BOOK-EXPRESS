@@ -4,6 +4,7 @@ from django.db import transaction
 from accounts.permissions import usuario_es_administrador
 from crm.models import (
     CRMWorkItemLink,
+    CommercialActivity,
     CommercialTeamMembership,
     Opportunity,
     School,
@@ -23,6 +24,12 @@ from .work_items import (
 
 class CRMPlanningError(ValidationError):
     pass
+
+
+def _normalize_commercial_action_type(value):
+    if value in CommercialActivity.ActivityType.values:
+        return value
+    return ""
 
 
 def _locked_open_opportunity(opportunity):
@@ -212,7 +219,10 @@ def create_opportunity_event(
         created_by=actor,
         event=event,
         origin_activity=origin_activity,
-        commercial_action_type=(commercial_action_type or event_type),
+        commercial_action_type=(
+            commercial_action_type
+            or _normalize_commercial_action_type(event_type)
+        ),
     )
 
     return event
@@ -433,7 +443,10 @@ def create_school_event(
         origin_activity=origin_activity,
         created_by=actor,
         event=event,
-        commercial_action_type=(commercial_action_type or event_type),
+        commercial_action_type=(
+            commercial_action_type
+            or _normalize_commercial_action_type(event_type)
+        ),
     )
 
     return event
