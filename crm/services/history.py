@@ -1,5 +1,3 @@
-from django.db import IntegrityError
-
 from crm.models import (
     CRMHistoryEvent,
     CommercialActivity,
@@ -167,20 +165,13 @@ def record_history_event(
         values["occurred_at"] = occurred_at
 
     if source_type and source_id is not None:
-        try:
-            event, _ = CRMHistoryEvent.objects.get_or_create(
-                source_type=source_type,
-                source_id=source_id,
-                event_type=event_type,
-                defaults=values,
-            )
-            return event
-        except IntegrityError:
-            return CRMHistoryEvent.objects.get(
-                source_type=source_type,
-                source_id=source_id,
-                event_type=event_type,
-            )
+        event, _ = CRMHistoryEvent.objects.get_or_create(
+            source_type=source_type,
+            source_id=source_id,
+            event_type=event_type,
+            defaults=values,
+        )
+        return event
 
     return CRMHistoryEvent.objects.create(
         source_type=source_type,
@@ -618,14 +609,10 @@ def build_school_commercial_history(
     ).order_by("created_at", "id")
 
     for opportunity in opportunities:
-        opportunity_activities = activities_queryset.filter(
-            opportunity=opportunity,
-        )
-
         legacy.extend(
             _opportunity_legacy_events(
                 opportunity=opportunity,
-                activities_queryset=opportunity_activities,
+                activities_queryset=activities_queryset.none(),
             )
         )
 
