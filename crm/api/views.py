@@ -2043,6 +2043,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
                     CommercialActivitySerializer(
                         page,
                         many=True,
+                        context={"request": request},
                     ).data
                 )
 
@@ -2050,6 +2051,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
                 CommercialActivitySerializer(
                     queryset,
                     many=True,
+                    context={"request": request},
                 ).data
             )
 
