@@ -1,9 +1,11 @@
 from datetime import timedelta
+import tempfile
 from decimal import Decimal
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils import timezone
 
 from rest_framework.test import APIClient
@@ -3048,3 +3050,134 @@ class CRMApiTests(TestCase):
             "9990002",
         )
         self.assertFalse(service.is_active)
+
+    def test_school_activity_accepts_evidence_with_optional_location(self):
+        self.authenticate(self.advisor)
+
+        activity_response = self.client.post(
+            reverse(
+                "crm:school-activities",
+                args=[self.school.id],
+            ),
+            {
+                "activity_type": "visit",
+                "summary": "Visita con evidencia",
+                "result": "Se presentó la propuesta al colegio.",
+                "opportunity": None,
+            },
+            format="json",
+        )
+        self.assertEqual(activity_response.status_code, 201)
+        activity_id = activity_response.data["id"]
+
+        with tempfile.TemporaryDirectory() as media_root:
+            with override_settings(MEDIA_ROOT=media_root):
+                evidence_response = self.client.post(
+                    reverse(
+                        "crm:school-activity-evidence",
+                        args=[self.school.id, activity_id],
+                    ),
+                    {
+                        "file": SimpleUploadedFile(
+                            "visita.jpg",
+                            b"evidencia-de-prueba",
+                            content_type="image/jpeg",
+                        ),
+                        "latitude": "-12.065000",
+                        "longitude": "-75.205000",
+                        "accuracy_m": "12.50",
+                    },
+                    format="multipart",
+                )
+
+                self.assertEqual(evidence_response.status_code, 201)
+                self.assertEqual(
+                    evidence_response.data["evidence_type"],
+                    "photo",
+                )
+                self.assertEqual(
+                    evidence_response.data["original_name"],
+                    "visita.jpg",
+                )
+                self.assertEqual(
+                    evidence_response.data["latitude"],
+                    "-12.065000",
+                )
+                self.assertIn(
+                    "/media/crm/activity-evidence/",
+                    evidence_response.data["file_url"],
+                )
+
+                activities_response = self.client.get(
+                    reverse(
+                        "crm:school-activities",
+                        args=[self.school.id],
+                    ),
+                    {"page_size": 50},
+                )
+
+                self.assertEqual(
+                    activities_response.status_code,
+                    200,
+                )
+                activities = activities_response.data.get(
+                    "results",
+                    activities_response.data,
+                )
+                activity = next(
+                    item
+                    for item in activities
+                    if item["id"] == activity_id
+                )
+                self.assertEqual(len(activity["evidences"]), 1)
+
+        history_response = self.client.get(
+            reverse(
+                "crm:school-commercial-history",
+                args=[self.school.id],
+            )
+        )
+        self.assertEqual(history_response.status_code, 200)
+        self.assertTrue(
+            any(
+                item["event_type"] == "activity_evidence_added"
+                for item in history_response.data
+            )
+        )
+
+    def test_activity_evidence_rejects_unsupported_file_type(self):
+        self.authenticate(self.advisor)
+
+        activity_response = self.client.post(
+            reverse(
+                "crm:school-activities",
+                args=[self.school.id],
+            ),
+            {
+                "activity_type": "call",
+                "summary": "Llamada de prueba",
+                "result": "Contacto realizado.",
+                "opportunity": None,
+            },
+            format="json",
+        )
+        self.assertEqual(activity_response.status_code, 201)
+
+        response = self.client.post(
+            reverse(
+                "crm:school-activity-evidence",
+                args=[self.school.id, activity_response.data["id"]],
+            ),
+            {
+                "file": SimpleUploadedFile(
+                    "archivo.exe",
+                    b"contenido-no-permitido",
+                    content_type="application/octet-stream",
+                ),
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("file", response.data)
+
