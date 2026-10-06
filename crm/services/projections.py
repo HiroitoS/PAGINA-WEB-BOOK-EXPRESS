@@ -16,6 +16,7 @@ from .commercial_lines import (
     SCHOOL_TEXT,
     VALID_PROJECTION_LINES,
 )
+from .education import grade_matches_level
 from .history import record_history_event
 
 
@@ -286,6 +287,17 @@ def create_commercial_projection_revision(
         if not grade.is_active:
             raise CommercialProjectionError(
                 f"El grado {grade.name} está inactivo."
+            )
+
+        if not grade_matches_level(
+            grade=grade,
+            level=service.level,
+        ):
+            raise CommercialProjectionError(
+                (
+                    f"{grade.name} no corresponde al nivel "
+                    f"{service.level.name}."
+                )
             )
 
         key = (service.id, grade.id)
