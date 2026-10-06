@@ -24,6 +24,7 @@ EVENT_TYPE_LABELS = {
     "population_updated": "Población actualizada",
     "assignment_updated": "Asignación comercial",
     "evidence_added": "Evidencia agregada",
+    "activity_evidence_added": "Evidencia de actividad",
 }
 
 
