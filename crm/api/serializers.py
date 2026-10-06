@@ -2950,6 +2950,8 @@ class CRMCommercialHistoryEventSerializer(serializers.Serializer):
         required=False,
     )
     metadata = serializers.JSONField(required=False)
+    source_type = serializers.CharField(required=False, allow_blank=True)
+    source_id = serializers.IntegerField(required=False, allow_null=True)
 
 
 class CommercialActivitySerializer(serializers.ModelSerializer):
