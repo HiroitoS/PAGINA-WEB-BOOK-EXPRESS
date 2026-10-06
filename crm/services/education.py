@@ -41,13 +41,25 @@ def educational_level_key(value):
 def grade_level_key(value):
     label = normalize_education_label(value)
 
-    if "primaria" in label:
+    primary_grade = re.search(
+        r"\b([1-6])(?:ro|do|to|er|o)?\b",
+        label,
+    )
+    if "primaria" in label and primary_grade:
         return LEVEL_PRIMARY
-    if "secundaria" in label:
+
+    secondary_grade = re.search(
+        r"\b([1-5])(?:ro|do|to|er|o)?\b",
+        label,
+    )
+    if "secundaria" in label and secondary_grade:
         return LEVEL_SECONDARY
 
-    match = re.search(r"\b([345])\s+anos?\b", label)
-    if match:
+    initial_grade = re.search(
+        r"\b([345])\s+anos?\b",
+        label,
+    )
+    if initial_grade:
         return LEVEL_INITIAL
 
     return None
