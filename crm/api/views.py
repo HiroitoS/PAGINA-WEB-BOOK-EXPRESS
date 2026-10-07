@@ -4,6 +4,7 @@ import unicodedata
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Count, Prefetch, Q
+from django.http import HttpResponse
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 
@@ -13,7 +14,10 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.permissions import usuario_es_administrador
+from accounts.permissions import (
+    usuario_es_administrador,
+    usuario_tiene_permiso,
+)
 from catalog.models import Grade, Product
 from crm.models import (
     Adoption,
@@ -57,6 +61,10 @@ from crm.services import (
     AdoptionError,
     CRMPlanningError,
     build_advisor_commercial_report,
+    build_crm_report_workbook,
+    build_editorial_commercial_report,
+    build_opportunity_commercial_report,
+    build_school_commercial_report,
     build_opportunity_commercial_history,
     build_school_commercial_history,
     CommercialActivityError,
@@ -401,9 +409,7 @@ class CRMSummaryAPIView(APIView):
         })
 
 
-class CRMCommercialReportAPIView(APIView):
-    permission_classes = [EsSupervisorCRM]
-
+class CRMReportFilterMixin:
     @staticmethod
     def _parse_id(value, field_name):
         if value in (None, ""):
@@ -441,20 +447,25 @@ class CRMCommercialReportAPIView(APIView):
 
         return parsed
 
-    def get(self, request):
+    def _commercial_filters(self, request):
+        return {
+            "campaign_id": self._parse_id(
+                request.query_params.get("campaign"),
+                "campaign",
+            ),
+            "team_id": self._parse_id(
+                request.query_params.get("team"),
+                "team",
+            ),
+            "owner_id": self._parse_id(
+                request.query_params.get("owner"),
+                "owner",
+            ),
+        }
+
+    def _dated_filters(self, request):
+        filters = self._commercial_filters(request)
         today = timezone.localdate()
-        campaign_id = self._parse_id(
-            request.query_params.get("campaign"),
-            "campaign",
-        )
-        team_id = self._parse_id(
-            request.query_params.get("team"),
-            "team",
-        )
-        owner_id = self._parse_id(
-            request.query_params.get("owner"),
-            "owner",
-        )
         date_from = self._parse_date(
             request.query_params.get("date_from"),
             "date_from",
@@ -474,16 +485,127 @@ class CRMCommercialReportAPIView(APIView):
                 }
             )
 
+        return {
+            **filters,
+            "date_from": date_from,
+            "date_to": date_to,
+        }
+
+
+class CRMCommercialReportAPIView(
+    CRMReportFilterMixin,
+    APIView,
+):
+    permission_classes = [EsSupervisorCRM]
+
+    def get(self, request):
+        filters = self._dated_filters(request)
+
         report = build_advisor_commercial_report(
             user=request.user,
-            campaign_id=campaign_id,
-            team_id=team_id,
-            owner_id=owner_id,
-            date_from=date_from,
-            date_to=date_to,
+            **filters,
         )
 
         return Response(report)
+
+
+class CRMEditorialReportAPIView(
+    CRMReportFilterMixin,
+    APIView,
+):
+    permission_classes = [EsSupervisorCRM]
+
+    def get(self, request):
+        filters = self._commercial_filters(request)
+
+        report = build_editorial_commercial_report(
+            user=request.user,
+            **filters,
+        )
+
+        return Response(report)
+
+
+class CRMSchoolReportAPIView(
+    CRMReportFilterMixin,
+    APIView,
+):
+    permission_classes = [EsSupervisorCRM]
+
+    def get(self, request):
+        filters = self._commercial_filters(request)
+
+        report = build_school_commercial_report(
+            user=request.user,
+            **filters,
+        )
+
+        return Response(report)
+
+
+class CRMOpportunityReportAPIView(
+    CRMReportFilterMixin,
+    APIView,
+):
+    permission_classes = [EsSupervisorCRM]
+
+    def get(self, request):
+        filters = self._commercial_filters(request)
+
+        report = build_opportunity_commercial_report(
+            user=request.user,
+            **filters,
+        )
+
+        return Response(report)
+
+
+class CRMReportExportAPIView(
+    CRMReportFilterMixin,
+    APIView,
+):
+    permission_classes = [EsSupervisorCRM]
+
+    def get(self, request):
+        if not usuario_tiene_permiso(
+            request.user,
+            "crm.export_crm_reports",
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para exportar reportes CRM."
+            )
+
+        filters = self._dated_filters(request)
+        include_profitability = (
+            str(
+                request.query_params.get(
+                    "include_profitability",
+                    "",
+                )
+            ).lower()
+            == "true"
+        )
+
+        stream = build_crm_report_workbook(
+            user=request.user,
+            include_profitability=include_profitability,
+            **filters,
+        )
+        today = timezone.localdate().strftime("%Y%m%d")
+        response = HttpResponse(
+            stream.getvalue(),
+            content_type=(
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+        )
+        response["Content-Disposition"] = (
+            'attachment; filename="'
+            f"Reporte_CRM_BookExpress_{today}.xlsx"
+            '"'
+        )
+
+        return response
 
 
 class CampaignViewSet(viewsets.ReadOnlyModelViewSet):
