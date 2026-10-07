@@ -1,5 +1,6 @@
 from .activities import CommercialActivityError, record_commercial_activity
 from .adoptions import AdoptionError, confirm_adoption
+from .dashboard import build_crm_dashboard_summary
 from .history import (
     build_opportunity_commercial_history,
     build_school_commercial_history,
@@ -54,6 +55,7 @@ from .work_items import (
 __all__ = [
     "AdoptionError",
     "confirm_adoption",
+    "build_crm_dashboard_summary",
     "build_opportunity_commercial_history",
     "build_school_commercial_history",
     "record_history_event",
