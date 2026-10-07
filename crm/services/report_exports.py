@@ -481,6 +481,10 @@ def _add_schools_sheet(wb, school_report):
         "Distrito",
         "Equipo",
         "Asesor",
+        "Población",
+        "Segmento",
+        "Score",
+        "Prioridad",
         "Abiertas",
         "Ganadas",
         "No concretadas",
@@ -496,6 +500,10 @@ def _add_schools_sheet(wb, school_report):
             row["district"],
             row["team"],
             row["advisor"],
+            row["population_total"],
+            row["segment"],
+            row["priority_score"],
+            row["priority"],
             row["open_opportunities"],
             row["won_opportunities"],
             row["lost_opportunities"],
@@ -512,10 +520,10 @@ def _add_schools_sheet(wb, school_report):
         headers=headers,
         rows=rows,
         widths=[
-            34, 15, 17, 17, 24, 24, 10, 10,
-            14, 18, 17, 20,
+            34, 15, 17, 17, 24, 24, 12, 11,
+            10, 14, 10, 10, 14, 18, 17, 20,
         ],
-        date_columns={12},
+        date_columns={16},
     )
 
 
