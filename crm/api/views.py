@@ -3,7 +3,7 @@ import unicodedata
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Count, Prefetch, Q, Sum
+from django.db.models import Count, Prefetch, Q
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 
@@ -17,11 +17,8 @@ from accounts.permissions import usuario_es_administrador
 from catalog.models import Grade, Product
 from crm.models import (
     Adoption,
-    AdoptionItem,
     Campaign,
     CommercialActivity,
-    CommercialProjection,
-    CommercialProjectionItem,
     CommercialQuotation,
     CommercialTeam,
     CommercialTeamMembership,
@@ -59,6 +56,7 @@ from crm.selectors import (
 from crm.services import (
     AdoptionError,
     CRMPlanningError,
+    build_advisor_commercial_report,
     build_opportunity_commercial_history,
     build_school_commercial_history,
     CommercialActivityError,
@@ -406,16 +404,27 @@ class CRMSummaryAPIView(APIView):
 class CRMCommercialReportAPIView(APIView):
     permission_classes = [EsSupervisorCRM]
 
-    activity_types = (
-        CommercialActivity.ActivityType.CALL,
-        CommercialActivity.ActivityType.VISIT,
-        CommercialActivity.ActivityType.COLD_VISIT,
-        CommercialActivity.ActivityType.PRESENTATION,
-        CommercialActivity.ActivityType.MEETING,
-        CommercialActivity.ActivityType.FOLLOW_UP,
-    )
+    @staticmethod
+    def _parse_id(value, field_name):
+        if value in (None, ""):
+            return None
 
-    def _parse_date(self, value, field_name):
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError) as exc:
+            raise serializers.ValidationError(
+                {field_name: "Selecciona una opción válida."}
+            ) from exc
+
+        if parsed < 1:
+            raise serializers.ValidationError(
+                {field_name: "Selecciona una opción válida."}
+            )
+
+        return parsed
+
+    @staticmethod
+    def _parse_date(value, field_name):
         if not value:
             return None
 
@@ -432,34 +441,28 @@ class CRMCommercialReportAPIView(APIView):
 
         return parsed
 
-    @staticmethod
-    def _conversion_rate(won, lost):
-        closed = won + lost
-
-        if closed <= 0:
-            return 0
-
-        return round((won / closed) * 100, 1)
-
     def get(self, request):
         today = timezone.localdate()
-        campaign_id = request.query_params.get("campaign")
-        team_id = request.query_params.get("team")
-        owner_id = request.query_params.get("owner")
+        campaign_id = self._parse_id(
+            request.query_params.get("campaign"),
+            "campaign",
+        )
+        team_id = self._parse_id(
+            request.query_params.get("team"),
+            "team",
+        )
+        owner_id = self._parse_id(
+            request.query_params.get("owner"),
+            "owner",
+        )
         date_from = self._parse_date(
             request.query_params.get("date_from"),
             "date_from",
-        )
+        ) or today.replace(day=1)
         date_to = self._parse_date(
             request.query_params.get("date_to"),
             "date_to",
-        )
-
-        if date_from is None:
-            date_from = today.replace(day=1)
-
-        if date_to is None:
-            date_to = today
+        ) or today
 
         if date_from > date_to:
             raise serializers.ValidationError(
@@ -471,289 +474,16 @@ class CRMCommercialReportAPIView(APIView):
                 }
             )
 
-        schools = visible_schools_queryset(request.user)
-        opportunities = visible_opportunities_queryset(request.user)
-        activities = visible_commercial_activities_queryset(request.user)
-
-        if team_id:
-            schools = schools.filter(team_id=team_id)
-            opportunities = opportunities.filter(team_id=team_id)
-            activities = activities.filter(school__team_id=team_id)
-
-        if owner_id:
-            schools = schools.filter(owner_id=owner_id)
-            opportunities = opportunities.filter(owner_id=owner_id)
-            activities = activities.filter(performed_by_id=owner_id)
-
-        if campaign_id:
-            opportunities = opportunities.filter(campaign_id=campaign_id)
-
-        activities = activities.filter(
-            occurred_at__date__gte=date_from,
-            occurred_at__date__lte=date_to,
+        report = build_advisor_commercial_report(
+            user=request.user,
+            campaign_id=campaign_id,
+            team_id=team_id,
+            owner_id=owner_id,
+            date_from=date_from,
+            date_to=date_to,
         )
 
-        current_projections = CommercialProjection.objects.filter(
-            opportunity__in=opportunities,
-            is_current=True,
-        )
-        current_adoptions = Adoption.objects.filter(
-            opportunity__in=opportunities,
-            is_current=True,
-        )
-
-        school_counts = {
-            row["owner_id"]: row["total"]
-            for row in (
-                schools
-                .exclude(owner_id__isnull=True)
-                .values("owner_id")
-                .annotate(total=Count("id"))
-            )
-        }
-
-        opportunity_counts = {}
-        for row in (
-            opportunities
-            .exclude(owner_id__isnull=True)
-            .values("owner_id", "stage__category")
-            .annotate(total=Count("id"))
-        ):
-            owner_counts = opportunity_counts.setdefault(
-                row["owner_id"],
-                {
-                    PipelineStage.Category.OPEN: 0,
-                    PipelineStage.Category.WON: 0,
-                    PipelineStage.Category.LOST: 0,
-                },
-            )
-            owner_counts[row["stage__category"]] = row["total"]
-
-        activity_totals = {}
-        activity_breakdown = {}
-        for row in (
-            activities
-            .exclude(performed_by_id__isnull=True)
-            .values("performed_by_id", "activity_type")
-            .annotate(total=Count("id"))
-        ):
-            user_id = row["performed_by_id"]
-            activity_totals[user_id] = (
-                activity_totals.get(user_id, 0) + row["total"]
-            )
-            activity_breakdown.setdefault(user_id, {})[
-                row["activity_type"]
-            ] = row["total"]
-
-        projection_counts = {
-            row["opportunity__owner_id"]: row["total"]
-            for row in (
-                current_projections
-                .exclude(opportunity__owner_id__isnull=True)
-                .values("opportunity__owner_id")
-                .annotate(total=Count("id"))
-            )
-        }
-        projection_units = {
-            row["projection__opportunity__owner_id"]: row["total"] or 0
-            for row in (
-                CommercialProjectionItem.objects
-                .filter(projection__in=current_projections)
-                .exclude(projection__opportunity__owner_id__isnull=True)
-                .values("projection__opportunity__owner_id")
-                .annotate(total=Sum("quantity"))
-            )
-        }
-
-        adoption_counts = {
-            row["advisor_id"]: row["total"]
-            for row in (
-                current_adoptions
-                .exclude(advisor_id__isnull=True)
-                .values("advisor_id")
-                .annotate(total=Count("id"))
-            )
-        }
-        adoption_units = {
-            row["adoption__advisor_id"]: row["total"] or 0
-            for row in (
-                AdoptionItem.objects
-                .filter(adoption__in=current_adoptions)
-                .exclude(adoption__advisor_id__isnull=True)
-                .values("adoption__advisor_id")
-                .annotate(total=Sum("quantity"))
-            )
-        }
-
-        advisor_ids = set(school_counts)
-        advisor_ids.update(opportunity_counts)
-        advisor_ids.update(activity_totals)
-        advisor_ids.update(projection_counts)
-        advisor_ids.update(adoption_counts)
-
-        if owner_id:
-            try:
-                advisor_ids.add(int(owner_id))
-            except (TypeError, ValueError):
-                raise serializers.ValidationError(
-                    {"owner": "Selecciona un asesor válido."}
-                )
-
-        User = get_user_model()
-        users = {
-            user.id: user
-            for user in (
-                User.objects
-                .filter(id__in=advisor_ids)
-                .select_related("book_express_profile")
-            )
-        }
-
-        team_names = {}
-        for membership in (
-            CommercialTeamMembership.objects
-            .filter(
-                user_id__in=advisor_ids,
-                is_active=True,
-                team__is_active=True,
-                role=CommercialTeamMembership.Role.ADVISOR,
-            )
-            .select_related("team")
-            .order_by("team__name")
-        ):
-            team_names.setdefault(membership.user_id, []).append(
-                membership.team.name
-            )
-
-        advisor_rows = []
-
-        for advisor_id in advisor_ids:
-            user = users.get(advisor_id)
-
-            if user is None:
-                continue
-
-            counts = opportunity_counts.get(
-                advisor_id,
-                {
-                    PipelineStage.Category.OPEN: 0,
-                    PipelineStage.Category.WON: 0,
-                    PipelineStage.Category.LOST: 0,
-                },
-            )
-            won = counts.get(PipelineStage.Category.WON, 0)
-            lost = counts.get(PipelineStage.Category.LOST, 0)
-            full_name = user.get_full_name().strip()
-
-            advisor_rows.append(
-                {
-                    "advisor_id": advisor_id,
-                    "advisor_name": full_name or user.get_username(),
-                    "teams": team_names.get(advisor_id, []),
-                    "schools": school_counts.get(advisor_id, 0),
-                    "activities": activity_totals.get(advisor_id, 0),
-                    "activity_counts": {
-                        activity_type: (
-                            activity_breakdown
-                            .get(advisor_id, {})
-                            .get(activity_type, 0)
-                        )
-                        for activity_type in self.activity_types
-                    },
-                    "open_opportunities": counts.get(
-                        PipelineStage.Category.OPEN,
-                        0,
-                    ),
-                    "won_opportunities": won,
-                    "lost_opportunities": lost,
-                    "current_projections": projection_counts.get(
-                        advisor_id,
-                        0,
-                    ),
-                    "projected_units": projection_units.get(
-                        advisor_id,
-                        0,
-                    ),
-                    "current_adoptions": adoption_counts.get(
-                        advisor_id,
-                        0,
-                    ),
-                    "adopted_units": adoption_units.get(
-                        advisor_id,
-                        0,
-                    ),
-                    "conversion_rate": self._conversion_rate(
-                        won,
-                        lost,
-                    ),
-                }
-            )
-
-        advisor_rows.sort(
-            key=lambda row: row["advisor_name"].casefold()
-        )
-
-        summary_open = opportunities.filter(
-            stage__category=PipelineStage.Category.OPEN,
-        ).count()
-        summary_won = opportunities.filter(
-            stage__category=PipelineStage.Category.WON,
-        ).count()
-        summary_lost = opportunities.filter(
-            stage__category=PipelineStage.Category.LOST,
-        ).count()
-
-        return Response(
-            {
-                "filters": {
-                    "campaign": (
-                        int(campaign_id)
-                        if campaign_id
-                        else None
-                    ),
-                    "team": int(team_id) if team_id else None,
-                    "owner": int(owner_id) if owner_id else None,
-                    "date_from": date_from,
-                    "date_to": date_to,
-                },
-                "summary": {
-                    "schools": schools.count(),
-                    "activities": activities.count(),
-                    "open_opportunities": summary_open,
-                    "won_opportunities": summary_won,
-                    "lost_opportunities": summary_lost,
-                    "current_projections": current_projections.count(),
-                    "projected_units": (
-                        CommercialProjectionItem.objects
-                        .filter(projection__in=current_projections)
-                        .aggregate(total=Sum("quantity"))
-                        .get("total")
-                        or 0
-                    ),
-                    "current_adoptions": current_adoptions.count(),
-                    "adopted_units": (
-                        AdoptionItem.objects
-                        .filter(adoption__in=current_adoptions)
-                        .aggregate(total=Sum("quantity"))
-                        .get("total")
-                        or 0
-                    ),
-                    "conversion_rate": self._conversion_rate(
-                        summary_won,
-                        summary_lost,
-                    ),
-                },
-                "unassigned": {
-                    "schools": schools.filter(
-                        owner_id__isnull=True,
-                    ).count(),
-                    "opportunities": opportunities.filter(
-                        owner_id__isnull=True,
-                    ).count(),
-                },
-                "advisors": advisor_rows,
-            }
-        )
+        return Response(report)
 
 
 class CampaignViewSet(viewsets.ReadOnlyModelViewSet):
