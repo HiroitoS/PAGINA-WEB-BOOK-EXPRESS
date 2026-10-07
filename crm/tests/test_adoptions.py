@@ -458,6 +458,48 @@ class CRMAdoptionFlowTests(TestCase):
         self.assertIsNone(quotation.reopened_at)
         self.assertEqual(quotation.reopen_reason, "")
 
+    def test_adoption_requires_assigned_advisor(self):
+        quotation = create_commercial_quotation(
+            opportunity=self.opportunity,
+            actor=self.advisor,
+            items=self.quotation_items(),
+            **self.quotation_schedule(),
+        )
+        quotation = self.define_editorial_condition(quotation)
+        quotation = send_commercial_quotation(
+            quotation=quotation,
+            actor=self.advisor,
+        )
+        quotation = accept_commercial_quotation(
+            quotation=quotation,
+            actor=self.advisor,
+        )
+
+        self.opportunity.owner = None
+        self.opportunity.save(
+            update_fields=[
+                "owner",
+                "updated_at",
+            ]
+        )
+
+        with self.assertRaisesMessage(
+            AdoptionError,
+            "Asigna un asesor responsable",
+        ):
+            confirm_adoption(
+                quotation=quotation,
+                authorized_contact=self.contact,
+                signed_at=timezone.now() - timedelta(minutes=10),
+                actor=self.admin,
+            )
+
+        self.assertFalse(
+            Adoption.objects.filter(
+                opportunity=self.opportunity,
+            ).exists()
+        )
+
     def test_adoption_rejects_future_signature(self):
         quotation = create_commercial_quotation(
             opportunity=self.opportunity,
