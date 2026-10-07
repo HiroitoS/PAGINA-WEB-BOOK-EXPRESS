@@ -209,6 +209,47 @@ class CRMApiTests(TestCase):
         )
         self.assertEqual(advisor_row["open_opportunities"], 1)
 
+    def test_supervisor_report_does_not_expose_unsupervised_team_advisors(self):
+        self.authenticate(self.supervisor)
+
+        response = self.client.get(
+            reverse("crm:commercial-report"),
+            {
+                "team": self.other_team.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["summary"]["schools"], 0)
+        self.assertEqual(
+            response.data["summary"]["open_opportunities"],
+            0,
+        )
+        self.assertEqual(response.data["advisors"], [])
+
+    def test_supervisor_report_only_lists_visible_team_names(self):
+        CommercialTeamMembership.objects.create(
+            team=self.other_team,
+            user=self.advisor,
+            role=CommercialTeamMembership.Role.ADVISOR,
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.supervisor)
+        response = self.client.get(
+            reverse("crm:commercial-report"),
+            {
+                "team": self.team.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data["advisors"]), 1)
+        self.assertEqual(
+            response.data["advisors"][0]["teams"],
+            [self.team.name],
+        )
+
     def test_advisor_cannot_access_commercial_report(self):
         self.authenticate(self.advisor)
 
