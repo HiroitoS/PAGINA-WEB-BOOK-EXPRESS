@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.contrib.auth import get_user_model
 from django.db.models import Count, Sum
 
@@ -8,6 +10,7 @@ from crm.models import (
     CommercialActivity,
     CommercialProjection,
     CommercialProjectionItem,
+    CommercialQuotation,
     CommercialTeamMembership,
     PipelineStage,
 )
@@ -380,4 +383,576 @@ def build_advisor_commercial_report(
             ).count(),
         },
         "advisors": advisor_rows,
+    }
+
+
+def _money_string(value):
+    amount = Decimal(value or 0).quantize(Decimal("0.01"))
+    return format(amount, "f")
+
+
+def _report_opportunities(
+    *,
+    user,
+    campaign_id=None,
+    team_id=None,
+    owner_id=None,
+):
+    opportunities = visible_opportunities_queryset(user)
+
+    if campaign_id is not None:
+        opportunities = opportunities.filter(campaign_id=campaign_id)
+
+    if team_id is not None:
+        opportunities = opportunities.filter(team_id=team_id)
+
+    if owner_id is not None:
+        opportunities = opportunities.filter(owner_id=owner_id)
+
+    return opportunities
+
+
+def build_editorial_commercial_report(
+    *,
+    user,
+    campaign_id=None,
+    team_id=None,
+    owner_id=None,
+):
+    opportunities = _report_opportunities(
+        user=user,
+        campaign_id=campaign_id,
+        team_id=team_id,
+        owner_id=owner_id,
+    )
+    current_projections = CommercialProjection.objects.filter(
+        opportunity__in=opportunities,
+        is_current=True,
+    )
+    current_adoptions = Adoption.objects.filter(
+        opportunity__in=opportunities,
+        is_current=True,
+    )
+
+    if owner_id is not None:
+        current_adoptions = current_adoptions.filter(
+            advisor_id=owner_id
+        )
+
+    editorials = {}
+
+    def get_row(name):
+        key = (name or "Sin editorial").strip() or "Sin editorial"
+
+        if key not in editorials:
+            editorials[key] = {
+                "editorial": key,
+                "projected_product_ids": set(),
+                "projected_school_ids": set(),
+                "projected_units": 0,
+                "projected_reference_value": Decimal("0.00"),
+                "adopted_product_ids": set(),
+                "adopted_school_ids": set(),
+                "adopted_units": 0,
+                "adopted_value": Decimal("0.00"),
+                "supplier_cost_total": Decimal("0.00"),
+                "incentive_total": Decimal("0.00"),
+                "contribution_total": Decimal("0.00"),
+            }
+
+        return editorials[key]
+
+    projection_items = (
+        CommercialProjectionItem.objects
+        .filter(projection__in=current_projections)
+        .values(
+            "provider_name_snapshot",
+            "product_id",
+            "quantity",
+            "unit_price",
+            "projection__opportunity__school_id",
+        )
+    )
+
+    for item in projection_items.iterator():
+        row = get_row(item["provider_name_snapshot"])
+        quantity = int(item["quantity"] or 0)
+        unit_price = Decimal(item["unit_price"] or 0)
+
+        row["projected_product_ids"].add(item["product_id"])
+        row["projected_school_ids"].add(
+            item["projection__opportunity__school_id"]
+        )
+        row["projected_units"] += quantity
+        row["projected_reference_value"] += (
+            unit_price * Decimal(quantity)
+        )
+
+    adoption_items = (
+        AdoptionItem.objects
+        .filter(adoption__in=current_adoptions)
+        .values(
+            "provider_name_snapshot",
+            "product_id",
+            "quantity",
+            "school_price",
+            "supplier_cost",
+            "school_commission",
+            "adoption__opportunity__school_id",
+        )
+    )
+
+    for item in adoption_items.iterator():
+        row = get_row(item["provider_name_snapshot"])
+        quantity = int(item["quantity"] or 0)
+        quantity_decimal = Decimal(quantity)
+        school_price = Decimal(item["school_price"] or 0)
+        supplier_cost = Decimal(item["supplier_cost"] or 0)
+        incentive = Decimal(item["school_commission"] or 0)
+
+        adopted_value = school_price * quantity_decimal
+        supplier_total = supplier_cost * quantity_decimal
+        incentive_total = incentive * quantity_decimal
+        contribution = (
+            adopted_value
+            - supplier_total
+            - incentive_total
+        )
+
+        row["adopted_product_ids"].add(item["product_id"])
+        row["adopted_school_ids"].add(
+            item["adoption__opportunity__school_id"]
+        )
+        row["adopted_units"] += quantity
+        row["adopted_value"] += adopted_value
+        row["supplier_cost_total"] += supplier_total
+        row["incentive_total"] += incentive_total
+        row["contribution_total"] += contribution
+
+    rows = []
+
+    for row in editorials.values():
+        projected_units = row["projected_units"]
+        adopted_units = row["adopted_units"]
+        adopted_value = row["adopted_value"]
+        contribution_total = row["contribution_total"]
+
+        unit_conversion = (
+            round((adopted_units / projected_units) * 100, 1)
+            if projected_units > 0
+            else 0
+        )
+        margin_percent = (
+            (contribution_total / adopted_value * Decimal("100.00"))
+            if adopted_value > 0
+            else Decimal("0.00")
+        )
+        contribution_unit = (
+            contribution_total / Decimal(adopted_units)
+            if adopted_units > 0
+            else Decimal("0.00")
+        )
+
+        rows.append(
+            {
+                "editorial": row["editorial"],
+                "projected_products": len(
+                    row["projected_product_ids"]
+                ),
+                "projected_schools": len(
+                    row["projected_school_ids"]
+                ),
+                "projected_units": projected_units,
+                "projected_reference_value": _money_string(
+                    row["projected_reference_value"]
+                ),
+                "adopted_products": len(
+                    row["adopted_product_ids"]
+                ),
+                "adopted_schools": len(
+                    row["adopted_school_ids"]
+                ),
+                "adopted_units": adopted_units,
+                "adopted_value": _money_string(adopted_value),
+                "unit_conversion_rate": unit_conversion,
+                "supplier_cost_total": _money_string(
+                    row["supplier_cost_total"]
+                ),
+                "incentive_total": _money_string(
+                    row["incentive_total"]
+                ),
+                "contribution_total": _money_string(
+                    contribution_total
+                ),
+                "margin_percent": float(
+                    margin_percent.quantize(Decimal("0.01"))
+                ),
+                "contribution_per_unit": _money_string(
+                    contribution_unit
+                ),
+            }
+        )
+
+    rows.sort(
+        key=lambda row: (
+            -Decimal(row["contribution_total"]),
+            row["editorial"].casefold(),
+        )
+    )
+
+    total_projected_units = sum(
+        row["projected_units"] for row in rows
+    )
+    total_adopted_units = sum(
+        row["adopted_units"] for row in rows
+    )
+    total_projected_value = sum(
+        Decimal(row["projected_reference_value"])
+        for row in rows
+    )
+    total_adopted_value = sum(
+        Decimal(row["adopted_value"])
+        for row in rows
+    )
+    total_supplier_cost = sum(
+        Decimal(row["supplier_cost_total"])
+        for row in rows
+    )
+    total_incentive = sum(
+        Decimal(row["incentive_total"])
+        for row in rows
+    )
+    total_contribution = sum(
+        Decimal(row["contribution_total"])
+        for row in rows
+    )
+    total_margin = (
+        total_contribution
+        / total_adopted_value
+        * Decimal("100.00")
+        if total_adopted_value > 0
+        else Decimal("0.00")
+    )
+
+    return {
+        "filters": {
+            "campaign": campaign_id,
+            "team": team_id,
+            "owner": owner_id,
+        },
+        "summary": {
+            "editorials": len(rows),
+            "projected_units": total_projected_units,
+            "adopted_units": total_adopted_units,
+            "projected_reference_value": _money_string(
+                total_projected_value
+            ),
+            "adopted_value": _money_string(
+                total_adopted_value
+            ),
+            "supplier_cost_total": _money_string(
+                total_supplier_cost
+            ),
+            "incentive_total": _money_string(
+                total_incentive
+            ),
+            "contribution_total": _money_string(
+                total_contribution
+            ),
+            "margin_percent": float(
+                total_margin.quantize(Decimal("0.01"))
+            ),
+        },
+        "editorials": rows,
+    }
+
+
+def build_opportunity_commercial_report(
+    *,
+    user,
+    campaign_id=None,
+    team_id=None,
+    owner_id=None,
+):
+    opportunities = (
+        _report_opportunities(
+            user=user,
+            campaign_id=campaign_id,
+            team_id=team_id,
+            owner_id=owner_id,
+        )
+        .select_related(
+            "school",
+            "campaign",
+            "team",
+            "owner",
+            "stage",
+        )
+        .order_by("school__name", "id")
+    )
+    opportunity_ids = list(
+        opportunities.values_list("id", flat=True)
+    )
+
+    current_projections = CommercialProjection.objects.filter(
+        opportunity_id__in=opportunity_ids,
+        is_current=True,
+    )
+    current_adoptions = Adoption.objects.filter(
+        opportunity_id__in=opportunity_ids,
+        is_current=True,
+    )
+
+    projection_by_opportunity = {
+        projection.opportunity_id: projection
+        for projection in current_projections
+    }
+    projection_units = {
+        row["projection__opportunity_id"]: row["total"] or 0
+        for row in (
+            CommercialProjectionItem.objects
+            .filter(projection__in=current_projections)
+            .values("projection__opportunity_id")
+            .annotate(total=Sum("quantity"))
+        )
+    }
+    adoption_units = {
+        row["adoption__opportunity_id"]: row["total"] or 0
+        for row in (
+            AdoptionItem.objects
+            .filter(adoption__in=current_adoptions)
+            .values("adoption__opportunity_id")
+            .annotate(total=Sum("quantity"))
+        )
+    }
+    adoption_by_opportunity = {
+        adoption.opportunity_id: adoption
+        for adoption in current_adoptions
+    }
+
+    quotation_by_opportunity = {}
+
+    for quotation in (
+        CommercialQuotation.objects
+        .filter(opportunity_id__in=opportunity_ids)
+        .exclude(
+            status=CommercialQuotation.Status.SUPERSEDED
+        )
+        .order_by("opportunity_id", "-version")
+    ):
+        quotation_by_opportunity.setdefault(
+            quotation.opportunity_id,
+            quotation,
+        )
+
+    rows = []
+
+    for opportunity in opportunities:
+        projection = projection_by_opportunity.get(opportunity.id)
+        adoption = adoption_by_opportunity.get(opportunity.id)
+        quotation = quotation_by_opportunity.get(opportunity.id)
+        owner_name = ""
+
+        if opportunity.owner_id:
+            owner_name = (
+                opportunity.owner.get_full_name().strip()
+                or opportunity.owner.get_username()
+            )
+
+        rows.append(
+            {
+                "opportunity_id": opportunity.id,
+                "school_id": opportunity.school_id,
+                "school_name": opportunity.school.name,
+                "campaign": opportunity.campaign.name,
+                "team": (
+                    opportunity.team.name
+                    if opportunity.team_id
+                    else ""
+                ),
+                "advisor": owner_name,
+                "stage": opportunity.stage.name,
+                "stage_category": opportunity.stage.category,
+                "commercial_line": (
+                    projection.get_commercial_line_display()
+                    if projection
+                    else ""
+                ),
+                "projected_units": projection_units.get(
+                    opportunity.id,
+                    0,
+                ),
+                "quotation_status": (
+                    quotation.get_status_display()
+                    if quotation
+                    else ""
+                ),
+                "quotation_version": (
+                    quotation.version if quotation else None
+                ),
+                "adoption_status": (
+                    "Confirmada" if adoption else ""
+                ),
+                "adopted_units": adoption_units.get(
+                    opportunity.id,
+                    0,
+                ),
+                "last_activity_at": (
+                    opportunity.last_activity_at
+                    if opportunity.last_activity_at
+                    else None
+                ),
+                "closed_at": (
+                    opportunity.closed_at
+                    if opportunity.closed_at
+                    else None
+                ),
+            }
+        )
+
+    summary = {
+        "opportunities": len(rows),
+        "open": sum(
+            1
+            for row in rows
+            if row["stage_category"]
+            == PipelineStage.Category.OPEN
+        ),
+        "won": sum(
+            1
+            for row in rows
+            if row["stage_category"]
+            == PipelineStage.Category.WON
+        ),
+        "lost": sum(
+            1
+            for row in rows
+            if row["stage_category"]
+            == PipelineStage.Category.LOST
+        ),
+        "projected_units": sum(
+            row["projected_units"] for row in rows
+        ),
+        "adopted_units": sum(
+            row["adopted_units"] for row in rows
+        ),
+    }
+
+    return {
+        "filters": {
+            "campaign": campaign_id,
+            "team": team_id,
+            "owner": owner_id,
+        },
+        "summary": summary,
+        "opportunities": rows,
+    }
+
+
+def build_school_commercial_report(
+    *,
+    user,
+    campaign_id=None,
+    team_id=None,
+    owner_id=None,
+):
+    schools = visible_schools_queryset(user)
+
+    if team_id is not None:
+        schools = schools.filter(team_id=team_id)
+
+    if owner_id is not None:
+        schools = schools.filter(owner_id=owner_id)
+
+    opportunity_report = build_opportunity_commercial_report(
+        user=user,
+        campaign_id=campaign_id,
+        team_id=team_id,
+        owner_id=owner_id,
+    )
+    by_school = {}
+
+    for opportunity in opportunity_report["opportunities"]:
+        school_id = opportunity["school_id"]
+        row = by_school.setdefault(
+            school_id,
+            {
+                "school_id": school_id,
+                "school_name": opportunity["school_name"],
+                "team": opportunity["team"],
+                "advisor": opportunity["advisor"],
+                "open_opportunities": 0,
+                "won_opportunities": 0,
+                "lost_opportunities": 0,
+                "projected_units": 0,
+                "adopted_units": 0,
+                "last_activity_at": None,
+            },
+        )
+
+        category = opportunity["stage_category"]
+
+        if category == PipelineStage.Category.OPEN:
+            row["open_opportunities"] += 1
+        elif category == PipelineStage.Category.WON:
+            row["won_opportunities"] += 1
+        elif category == PipelineStage.Category.LOST:
+            row["lost_opportunities"] += 1
+
+        row["projected_units"] += opportunity["projected_units"]
+        row["adopted_units"] += opportunity["adopted_units"]
+
+        activity_at = opportunity["last_activity_at"]
+
+        if (
+            activity_at
+            and (
+                row["last_activity_at"] is None
+                or activity_at > row["last_activity_at"]
+            )
+        ):
+            row["last_activity_at"] = activity_at
+
+    school_objects = {
+        school.id: school
+        for school in (
+            schools
+            .select_related("team", "owner")
+            .filter(id__in=by_school.keys())
+        )
+    }
+
+    rows = []
+
+    for school_id, row in by_school.items():
+        school = school_objects.get(school_id)
+
+        if school is None:
+            continue
+
+        row["department"] = school.department
+        row["province"] = school.province
+        row["district"] = school.district
+        rows.append(row)
+
+    rows.sort(
+        key=lambda row: row["school_name"].casefold()
+    )
+
+    return {
+        "filters": {
+            "campaign": campaign_id,
+            "team": team_id,
+            "owner": owner_id,
+        },
+        "summary": {
+            "schools": len(rows),
+            "projected_units": sum(
+                row["projected_units"] for row in rows
+            ),
+            "adopted_units": sum(
+                row["adopted_units"] for row in rows
+            ),
+        },
+        "schools": rows,
     }
