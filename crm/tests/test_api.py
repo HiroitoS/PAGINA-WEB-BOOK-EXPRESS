@@ -1,6 +1,7 @@
 from datetime import timedelta
 import tempfile
 from decimal import Decimal
+from io import BytesIO
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.test import TestCase, override_settings
@@ -8,6 +9,7 @@ from django.urls import reverse
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils import timezone
 
+from openpyxl import load_workbook
 from rest_framework.test import APIClient
 
 from catalog.models import Area, Grade, Level, Product, Provider
@@ -248,6 +250,88 @@ class CRMApiTests(TestCase):
         self.assertEqual(
             response.data["advisors"][0]["teams"],
             [self.team.name],
+        )
+
+    def test_supervisor_can_access_extended_commercial_reports(self):
+        self.authenticate(self.supervisor)
+
+        for route_name, response_key in (
+            ("crm:editorial-report", "editorials"),
+            ("crm:school-report", "schools"),
+            ("crm:opportunity-report", "opportunities"),
+        ):
+            response = self.client.get(
+                reverse(route_name),
+                {
+                    "campaign": self.campaign.id,
+                    "team": self.team.id,
+                },
+            )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(response_key, response.data)
+
+    def test_advisor_cannot_access_extended_commercial_reports(self):
+        self.authenticate(self.advisor)
+
+        for route_name in (
+            "crm:editorial-report",
+            "crm:school-report",
+            "crm:opportunity-report",
+        ):
+            response = self.client.get(reverse(route_name))
+            self.assertEqual(response.status_code, 403)
+
+    def test_report_export_requires_specific_permission(self):
+        self.authenticate(self.supervisor)
+
+        response = self.client.get(
+            reverse("crm:report-export"),
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_supervisor_can_export_consolidated_crm_workbook(self):
+        grant_permission(
+            self.supervisor,
+            "export_crm_reports",
+        )
+        self.authenticate(self.supervisor)
+
+        response = self.client.get(
+            reverse("crm:report-export"),
+            {
+                "campaign": self.campaign.id,
+                "team": self.team.id,
+                "include_profitability": "true",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response["Content-Type"],
+            (
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+        )
+
+        workbook = load_workbook(
+            BytesIO(response.content),
+            read_only=True,
+        )
+
+        self.assertEqual(
+            workbook.sheetnames,
+            [
+                "01_Resumen",
+                "02_Asesores",
+                "03_Editoriales",
+                "04_Colegios",
+                "05_Oportunidades",
+                "06_Actividades",
+                "07_Rentabilidad_Interna",
+            ],
         )
 
     def test_advisor_cannot_access_commercial_report(self):
