@@ -604,7 +604,7 @@ def build_editorial_commercial_report(
 
     rows.sort(
         key=lambda row: (
-            -Decimal(row["contribution_total"]),
+            -Decimal(row["adopted_value"]),
             row["editorial"].casefold(),
         )
     )
