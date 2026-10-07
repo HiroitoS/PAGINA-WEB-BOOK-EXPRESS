@@ -174,9 +174,16 @@ def build_advisor_commercial_report(
 
     advisor_ids = set(school_counts)
     advisor_ids.update(opportunity_counts)
-    advisor_ids.update(activity_totals)
     advisor_ids.update(projection_counts)
     advisor_ids.update(adoption_counts)
+
+    is_admin = usuario_es_administrador(user)
+    supervised_ids = set()
+
+    if not is_admin:
+        supervised_ids = set(
+            supervised_team_ids(user)
+        )
 
     advisor_memberships = CommercialTeamMembership.objects.filter(
         is_active=True,
@@ -186,12 +193,15 @@ def build_advisor_commercial_report(
     )
 
     if team_id is not None:
+        if is_admin or team_id in supervised_ids:
+            advisor_memberships = advisor_memberships.filter(
+                team_id=team_id
+            )
+        else:
+            advisor_memberships = advisor_memberships.none()
+    elif not is_admin:
         advisor_memberships = advisor_memberships.filter(
-            team_id=team_id
-        )
-    elif not usuario_es_administrador(user):
-        advisor_memberships = advisor_memberships.filter(
-            team_id__in=supervised_team_ids(user)
+            team_id__in=supervised_ids
         )
 
     if owner_id is not None:
@@ -215,14 +225,27 @@ def build_advisor_commercial_report(
 
     team_names = {}
 
-    for membership in (
-        CommercialTeamMembership.objects
-        .filter(
-            user_id__in=advisor_ids,
-            is_active=True,
-            team__is_active=True,
-            role=CommercialTeamMembership.Role.ADVISOR,
+    visible_memberships = CommercialTeamMembership.objects.filter(
+        user_id__in=advisor_ids,
+        is_active=True,
+        team__is_active=True,
+        role=CommercialTeamMembership.Role.ADVISOR,
+    )
+
+    if team_id is not None:
+        if is_admin or team_id in supervised_ids:
+            visible_memberships = visible_memberships.filter(
+                team_id=team_id
+            )
+        else:
+            visible_memberships = visible_memberships.none()
+    elif not is_admin:
+        visible_memberships = visible_memberships.filter(
+            team_id__in=supervised_ids
         )
+
+    for membership in (
+        visible_memberships
         .select_related("team")
         .order_by("team__name")
     ):
