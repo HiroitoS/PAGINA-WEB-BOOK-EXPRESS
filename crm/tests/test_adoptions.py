@@ -10,6 +10,7 @@ from crm.models import (
     Adoption,
     Campaign,
     CommercialQuotation,
+    CommercialQuotationItem,
     CommercialTeam,
     CommercialTeamMembership,
     OpportunityStageHistory,
@@ -368,6 +369,52 @@ class CRMAdoptionFlowTests(TestCase):
             ).count(),
             1,
         )
+
+    def test_adoption_inherits_reading_month_from_accepted_quotation(self):
+        quotation = create_commercial_quotation(
+            opportunity=self.opportunity,
+            actor=self.advisor,
+            items=self.quotation_items(),
+            **self.quotation_schedule(),
+        )
+
+        quotation_item = quotation.items.get()
+        quotation_item.commercial_line = (
+            CommercialQuotationItem.CommercialLine.READING_PLAN
+        )
+        quotation_item.reading_month = 8
+        quotation_item.save(
+            update_fields=[
+                "commercial_line",
+                "reading_month",
+                "updated_at",
+            ]
+        )
+
+        quotation = self.define_editorial_condition(quotation)
+        quotation = send_commercial_quotation(
+            quotation=quotation,
+            actor=self.advisor,
+        )
+        quotation = accept_commercial_quotation(
+            quotation=quotation,
+            actor=self.advisor,
+        )
+
+        adoption = confirm_adoption(
+            quotation=quotation,
+            authorized_contact=self.contact,
+            signed_at=timezone.now() - timedelta(minutes=10),
+            actor=self.admin,
+        )
+
+        adoption_item = adoption.items.get()
+
+        self.assertEqual(
+            adoption_item.reading_month,
+            quotation_item.reading_month,
+        )
+        self.assertEqual(adoption_item.reading_month, 8)
 
     def test_negotiation_cannot_reopen_after_adoption(self):
         quotation = create_commercial_quotation(
