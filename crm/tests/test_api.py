@@ -161,6 +161,51 @@ class CRMApiTests(TestCase):
 
         return response
 
+    def test_crm_summary_exposes_premium_dashboard_metrics_with_visible_scope(self):
+        CommercialActivity.objects.create(
+            school=self.school,
+            opportunity=self.opportunity,
+            performed_by=self.advisor,
+            activity_type=CommercialActivity.ActivityType.CALL,
+            summary="Actividad para dashboard",
+            result="Contacto realizado.",
+            occurred_at=timezone.now(),
+            created_by=self.advisor,
+        )
+        CommercialActivity.objects.create(
+            school=self.other_school,
+            opportunity=self.other_opportunity,
+            performed_by=self.other_advisor,
+            activity_type=CommercialActivity.ActivityType.CALL,
+            summary="Actividad fuera del dashboard",
+            result="No debe ser visible.",
+            occurred_at=timezone.now(),
+            created_by=self.other_advisor,
+        )
+
+        self.authenticate(self.supervisor)
+        response = self.client.get(reverse("crm:summary"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["schools"], 1)
+        self.assertEqual(response.data["open_opportunities"], 1)
+        self.assertEqual(response.data["activities_today"], 1)
+        self.assertEqual(response.data["activities_week"], 1)
+        self.assertEqual(response.data["activity_counts"]["call"], 1)
+        self.assertEqual(len(response.data["activity_trend"]), 7)
+        self.assertEqual(
+            sum(
+                item["total"]
+                for item in response.data["activity_trend"]
+            ),
+            1,
+        )
+        self.assertEqual(response.data["follow_up_coverage"], 100.0)
+        self.assertEqual(response.data["projected_units"], 0)
+        self.assertEqual(response.data["adopted_units"], 0)
+        self.assertEqual(response.data["unit_conversion_rate"], 0)
+        self.assertEqual(response.data["closure_conversion_rate"], 0)
+
     def test_supervisor_commercial_report_uses_visible_scope(self):
         CommercialActivity.objects.create(
             school=self.school,
