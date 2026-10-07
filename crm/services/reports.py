@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.db.models import Count, Sum
 
+from accounts.permissions import usuario_es_administrador
 from crm.models import (
     Adoption,
     AdoptionItem,
@@ -11,6 +12,7 @@ from crm.models import (
     PipelineStage,
 )
 from crm.selectors import (
+    supervised_team_ids,
     visible_commercial_activities_queryset,
     visible_opportunities_queryset,
     visible_schools_queryset,
@@ -175,6 +177,31 @@ def build_advisor_commercial_report(
     advisor_ids.update(activity_totals)
     advisor_ids.update(projection_counts)
     advisor_ids.update(adoption_counts)
+
+    advisor_memberships = CommercialTeamMembership.objects.filter(
+        is_active=True,
+        user__is_active=True,
+        team__is_active=True,
+        role=CommercialTeamMembership.Role.ADVISOR,
+    )
+
+    if team_id is not None:
+        advisor_memberships = advisor_memberships.filter(
+            team_id=team_id
+        )
+    elif not usuario_es_administrador(user):
+        advisor_memberships = advisor_memberships.filter(
+            team_id__in=supervised_team_ids(user)
+        )
+
+    if owner_id is not None:
+        advisor_memberships = advisor_memberships.filter(
+            user_id=owner_id
+        )
+
+    advisor_ids.update(
+        advisor_memberships.values_list("user_id", flat=True)
+    )
 
     User = get_user_model()
     users = {
