@@ -13,6 +13,8 @@ from crm.models import (
     CommercialQuotation,
     CommercialTeamMembership,
     PipelineStage,
+    SchoolCampus,
+    SchoolCommercialProfile,
 )
 from crm.selectors import (
     supervised_team_ids,
@@ -419,18 +421,25 @@ def build_editorial_commercial_report(
     team_id=None,
     owner_id=None,
 ):
-    opportunities = _report_opportunities(
+    opportunity_scope = _report_opportunities(
         user=user,
         campaign_id=campaign_id,
         team_id=team_id,
-        owner_id=owner_id,
+        owner_id=None,
     )
+    projection_opportunities = opportunity_scope
+
+    if owner_id is not None:
+        projection_opportunities = projection_opportunities.filter(
+            owner_id=owner_id
+        )
+
     current_projections = CommercialProjection.objects.filter(
-        opportunity__in=opportunities,
+        opportunity__in=projection_opportunities,
         is_current=True,
     )
     current_adoptions = Adoption.objects.filter(
-        opportunity__in=opportunities,
+        opportunity__in=opportunity_scope,
         is_current=True,
     )
 
@@ -864,9 +873,7 @@ def build_school_commercial_report(
     if owner_id is not None:
         schools = schools.filter(owner_id=owner_id)
 
-    school_rows = {}
-
-    for school in (
+    school_objects = list(
         schools
         .select_related("team", "owner")
         .annotate(
@@ -875,7 +882,48 @@ def build_school_commercial_report(
             )
         )
         .order_by("name")
+    )
+    school_ids = [school.id for school in school_objects]
+
+    campuses = {}
+    for campus in (
+        SchoolCampus.objects
+        .filter(
+            school_id__in=school_ids,
+            is_active=True,
+        )
+        .order_by(
+            "school_id",
+            "-is_main",
+            "sequence",
+            "id",
+        )
     ):
+        campuses.setdefault(campus.school_id, campus)
+
+    profiles = {}
+    profile_queryset = (
+        SchoolCommercialProfile.objects
+        .filter(school_id__in=school_ids)
+        .select_related("campaign")
+        .order_by(
+            "school_id",
+            "-campaign__year",
+            "-id",
+        )
+    )
+
+    if campaign_id is not None:
+        profile_queryset = profile_queryset.filter(
+            campaign_id=campaign_id
+        )
+
+    for profile in profile_queryset:
+        profiles.setdefault(profile.school_id, profile)
+
+    school_rows = {}
+
+    for school in school_objects:
         owner_name = ""
 
         if school.owner_id:
@@ -884,16 +932,43 @@ def build_school_commercial_report(
                 or school.owner.get_username()
             )
 
+        campus = campuses.get(school.id)
+        profile = profiles.get(school.id)
+
         school_rows[school.id] = {
             "school_id": school.id,
             "school_name": school.name,
-            "department": school.department,
-            "province": school.province,
-            "district": school.district,
+            "department": (
+                campus.department
+                if campus and campus.department
+                else school.department
+            ),
+            "province": (
+                campus.province
+                if campus and campus.province
+                else school.province
+            ),
+            "district": (
+                campus.district
+                if campus and campus.district
+                else school.district
+            ),
             "team": (
                 school.team.name if school.team_id else ""
             ),
             "advisor": owner_name,
+            "population_total": (
+                profile.population_total if profile else 0
+            ),
+            "segment": (
+                profile.segment if profile else ""
+            ),
+            "priority_score": (
+                profile.priority_score if profile else 0
+            ),
+            "priority": (
+                profile.get_priority_display() if profile else ""
+            ),
             "open_opportunities": 0,
             "won_opportunities": 0,
             "lost_opportunities": 0,
@@ -948,6 +1023,9 @@ def build_school_commercial_report(
                     + row["lost_opportunities"]
                 )
                 == 0
+            ),
+            "population_total": sum(
+                row["population_total"] for row in rows
             ),
             "projected_units": sum(
                 row["projected_units"] for row in rows
