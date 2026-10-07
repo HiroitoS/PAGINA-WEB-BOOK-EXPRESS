@@ -16,6 +16,7 @@ from catalog.models import Area, Grade, Level, Product, Provider
 from crm.models import (
     Campaign,
     CommercialActivity,
+    CommercialProjection,
     CommercialQuotation,
     CommercialTeam,
     CommercialTeamMembership,
@@ -272,6 +273,52 @@ class CRMApiTests(TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertIn(response_key, response.data)
 
+    def test_school_report_only_includes_schools_with_current_projection(self):
+        CommercialProjection.objects.create(
+            opportunity=self.opportunity,
+            version=1,
+            is_current=True,
+            school_name_snapshot=self.school.name,
+            campaign_name_snapshot=self.campaign.name,
+            campaign_year_snapshot=self.campaign.year,
+            commercial_line=(
+                CommercialProjection.CommercialLine.SCHOOL_TEXT
+            ),
+            created_by=self.advisor,
+        )
+        school_without_projection = School.objects.create(
+            name="Colegio sin proyección",
+            team=self.team,
+            owner=self.advisor,
+            created_by=self.admin,
+        )
+        Opportunity.objects.create(
+            title="Oportunidad sin proyección",
+            school=school_without_projection,
+            campaign=self.campaign,
+            pipeline=self.pipeline,
+            stage=self.initial_stage,
+            team=self.team,
+            owner=self.advisor,
+            created_by=self.admin,
+        )
+
+        self.authenticate(self.supervisor)
+        response = self.client.get(
+            reverse("crm:school-report"),
+            {
+                "campaign": self.campaign.id,
+                "team": self.team.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["summary"]["schools"], 1)
+        self.assertEqual(
+            [row["school_id"] for row in response.data["schools"]],
+            [self.school.id],
+        )
+
     def test_advisor_cannot_access_extended_commercial_reports(self):
         self.authenticate(self.advisor)
 
@@ -294,17 +341,45 @@ class CRMApiTests(TestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_supervisor_can_export_consolidated_crm_workbook(self):
+        CommercialActivity.objects.create(
+            school=self.school,
+            opportunity=self.opportunity,
+            performed_by=self.advisor,
+            activity_type=CommercialActivity.ActivityType.CALL,
+            summary="Actividad exportable",
+            result="Resultado exportable",
+            occurred_at=timezone.now(),
+            created_by=self.advisor,
+        )
         grant_permission(
             self.supervisor,
             "export_crm_reports",
         )
         self.authenticate(self.supervisor)
+        today = timezone.localdate().isoformat()
+        activity_response = self.client.get(
+            reverse("crm:activity-report"),
+            {
+                "campaign": self.campaign.id,
+                "team": self.team.id,
+                "date_from": today,
+                "date_to": today,
+            },
+        )
+
+        self.assertEqual(activity_response.status_code, 200)
+        self.assertEqual(
+            activity_response.data["summary"]["activities"],
+            1,
+        )
 
         response = self.client.get(
             reverse("crm:report-export"),
             {
                 "campaign": self.campaign.id,
                 "team": self.team.id,
+                "date_from": today,
+                "date_to": today,
                 "include_profitability": "true",
             },
         )
@@ -334,6 +409,16 @@ class CRMApiTests(TestCase):
                 "06_Actividades",
                 "07_Rentabilidad_Interna",
             ],
+        )
+        activity_sheet = workbook["06_Actividades"]
+        self.assertIsNotNone(activity_sheet["A5"].value)
+        self.assertEqual(
+            activity_sheet["C5"].value,
+            self.school.name,
+        )
+        self.assertEqual(
+            activity_sheet["F5"].value,
+            "Actividad exportable",
         )
 
     def test_advisor_cannot_access_commercial_report(self):
