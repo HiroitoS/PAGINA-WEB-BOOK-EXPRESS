@@ -158,6 +158,66 @@ class CRMApiTests(TestCase):
 
         return response
 
+    def test_supervisor_commercial_report_uses_visible_scope(self):
+        CommercialActivity.objects.create(
+            school=self.school,
+            opportunity=self.opportunity,
+            performed_by=self.advisor,
+            activity_type=CommercialActivity.ActivityType.CALL,
+            summary="Llamada de reportería",
+            result="Contacto realizado.",
+            occurred_at=timezone.now(),
+            created_by=self.advisor,
+        )
+        CommercialActivity.objects.create(
+            school=self.other_school,
+            opportunity=self.other_opportunity,
+            performed_by=self.other_advisor,
+            activity_type=CommercialActivity.ActivityType.CALL,
+            summary="Actividad fuera del equipo",
+            result="No debe ser visible.",
+            occurred_at=timezone.now(),
+            created_by=self.other_advisor,
+        )
+
+        self.authenticate(self.supervisor)
+        response = self.client.get(
+            reverse("crm:commercial-report"),
+            {
+                "campaign": self.campaign.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["summary"]["schools"], 1)
+        self.assertEqual(response.data["summary"]["activities"], 1)
+        self.assertEqual(
+            response.data["summary"]["open_opportunities"],
+            1,
+        )
+        self.assertEqual(len(response.data["advisors"]), 1)
+        advisor_row = response.data["advisors"][0]
+        self.assertEqual(
+            advisor_row["advisor_id"],
+            self.advisor.id,
+        )
+        self.assertEqual(advisor_row["schools"], 1)
+        self.assertEqual(advisor_row["activities"], 1)
+        self.assertEqual(
+            advisor_row["activity_counts"]["call"],
+            1,
+        )
+        self.assertEqual(advisor_row["open_opportunities"], 1)
+
+    def test_advisor_cannot_access_commercial_report(self):
+        self.authenticate(self.advisor)
+
+        response = self.client.get(
+            reverse("crm:commercial-report"),
+        )
+
+        self.assertEqual(response.status_code, 403)
+
     def test_commercial_history_unifies_activity_and_quotation_events(self):
         self.authenticate(self.advisor)
 
