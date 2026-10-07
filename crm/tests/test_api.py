@@ -256,6 +256,7 @@ class CRMApiTests(TestCase):
         self.authenticate(self.supervisor)
 
         for route_name, response_key in (
+            ("crm:activity-report", "activities"),
             ("crm:editorial-report", "editorials"),
             ("crm:school-report", "schools"),
             ("crm:opportunity-report", "opportunities"),
@@ -275,6 +276,7 @@ class CRMApiTests(TestCase):
         self.authenticate(self.advisor)
 
         for route_name in (
+            "crm:activity-report",
             "crm:editorial-report",
             "crm:school-report",
             "crm:opportunity-report",
