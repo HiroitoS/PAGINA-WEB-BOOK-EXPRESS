@@ -63,6 +63,7 @@ from crm.services import (
     build_activity_commercial_report,
     build_advisor_commercial_report,
     build_crm_report_workbook,
+    build_crm_dashboard_summary,
     build_editorial_commercial_report,
     build_opportunity_commercial_report,
     build_school_commercial_report,
@@ -365,49 +366,9 @@ class CRMSummaryAPIView(APIView):
     permission_classes = [EsUsuarioCRM]
 
     def get(self, request):
-        schools = visible_schools_queryset(request.user)
-        opportunities = visible_opportunities_queryset(request.user)
-        activities = visible_commercial_activities_queryset(request.user)
-        today = timezone.localdate()
-        week_start = today - timedelta(days=today.weekday())
-        week_activities = activities.filter(
-            occurred_at__date__gte=week_start,
-            occurred_at__date__lte=today,
+        return Response(
+            build_crm_dashboard_summary(user=request.user)
         )
-        activity_counts = {
-            activity_type: week_activities.filter(
-                activity_type=activity_type,
-            ).count()
-            for activity_type in (
-                CommercialActivity.ActivityType.CALL,
-                CommercialActivity.ActivityType.VISIT,
-                CommercialActivity.ActivityType.COLD_VISIT,
-                CommercialActivity.ActivityType.PRESENTATION,
-                CommercialActivity.ActivityType.MEETING,
-                CommercialActivity.ActivityType.FOLLOW_UP,
-            )
-        }
-        stages = list(
-            opportunities.values(
-                "stage_id", "stage__code", "stage__name", "stage__order", "stage__category"
-            ).annotate(total=Count("id")).order_by("stage__order", "stage__name")
-        )
-        return Response({
-            "schools": schools.filter(is_active=True).count(),
-            "open_opportunities": opportunities.filter(stage__category=PipelineStage.Category.OPEN).count(),
-            "won_opportunities": opportunities.filter(stage__category=PipelineStage.Category.WON).count(),
-            "lost_opportunities": opportunities.filter(stage__category=PipelineStage.Category.LOST).count(),
-            "opportunities_without_activity": opportunities.filter(
-                stage__category=PipelineStage.Category.OPEN,
-                last_activity_at__isnull=True,
-            ).count(),
-            "activities_today": activities.filter(occurred_at__date=today).count(),
-            "activities_week": sum(activity_counts.values()),
-            "activity_week_start": week_start,
-            "activity_week_end": today,
-            "activity_counts": activity_counts,
-            "stages": stages,
-        })
 
 
 class CRMReportFilterMixin:
