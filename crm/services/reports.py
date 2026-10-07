@@ -787,6 +787,7 @@ def build_opportunity_commercial_report(
                     if projection
                     else ""
                 ),
+                "has_projection": projection is not None,
                 "projected_units": projection_units.get(
                     opportunity.id,
                     0,
@@ -865,13 +866,26 @@ def build_school_commercial_report(
     team_id=None,
     owner_id=None,
 ):
-    schools = visible_schools_queryset(user)
+    opportunity_report = build_opportunity_commercial_report(
+        user=user,
+        campaign_id=campaign_id,
+        team_id=team_id,
+        owner_id=owner_id,
+    )
+    projected_opportunities = [
+        opportunity
+        for opportunity in opportunity_report["opportunities"]
+        if opportunity["has_projection"]
+    ]
+    projected_school_ids = {
+        opportunity["school_id"]
+        for opportunity in projected_opportunities
+    }
 
-    if team_id is not None:
-        schools = schools.filter(team_id=team_id)
-
-    if owner_id is not None:
-        schools = schools.filter(owner_id=owner_id)
+    schools = (
+        visible_schools_queryset(user)
+        .filter(id__in=projected_school_ids)
+    )
 
     school_objects = list(
         schools
@@ -979,14 +993,7 @@ def build_school_commercial_report(
             ),
         }
 
-    opportunity_report = build_opportunity_commercial_report(
-        user=user,
-        campaign_id=campaign_id,
-        team_id=team_id,
-        owner_id=owner_id,
-    )
-
-    for opportunity in opportunity_report["opportunities"]:
+    for opportunity in projected_opportunities:
         row = school_rows.get(opportunity["school_id"])
 
         if row is None:
@@ -1014,18 +1021,13 @@ def build_school_commercial_report(
         },
         "summary": {
             "schools": len(rows),
-            "schools_without_opportunity": sum(
-                1
-                for row in rows
-                if (
-                    row["open_opportunities"]
-                    + row["won_opportunities"]
-                    + row["lost_opportunities"]
-                )
-                == 0
-            ),
             "population_total": sum(
                 row["population_total"] for row in rows
+            ),
+            "schools_with_adoption": sum(
+                1
+                for row in rows
+                if row["adopted_units"] > 0
             ),
             "projected_units": sum(
                 row["projected_units"] for row in rows
