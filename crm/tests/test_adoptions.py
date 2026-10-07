@@ -22,6 +22,7 @@ from crm.models import (
 from crm.services import (
     AdoptionError,
     CommercialQuotationError,
+    build_editorial_commercial_report,
     accept_commercial_quotation,
     confirm_adoption,
     create_commercial_quotation,
@@ -457,6 +458,57 @@ class CRMAdoptionFlowTests(TestCase):
         )
         self.assertIsNone(quotation.reopened_at)
         self.assertEqual(quotation.reopen_reason, "")
+
+    def test_editorial_report_uses_confirmed_adoption_profitability(self):
+        quotation = create_commercial_quotation(
+            opportunity=self.opportunity,
+            actor=self.advisor,
+            items=self.quotation_items(),
+            **self.quotation_schedule(),
+        )
+        quotation = self.define_editorial_condition(quotation)
+        quotation = send_commercial_quotation(
+            quotation=quotation,
+            actor=self.advisor,
+        )
+        quotation = accept_commercial_quotation(
+            quotation=quotation,
+            actor=self.advisor,
+        )
+
+        confirm_adoption(
+            quotation=quotation,
+            authorized_contact=self.contact,
+            signed_at=timezone.now() - timedelta(minutes=10),
+            actor=self.admin,
+        )
+
+        report = build_editorial_commercial_report(
+            user=self.advisor,
+            campaign_id=self.campaign.id,
+            team_id=self.team.id,
+            owner_id=self.advisor.id,
+        )
+
+        self.assertEqual(len(report["editorials"]), 1)
+        editorial = report["editorials"][0]
+
+        self.assertEqual(editorial["adopted_units"], 60)
+        self.assertEqual(editorial["adopted_value"], "5400.00")
+        self.assertEqual(
+            editorial["supplier_cost_total"],
+            "4200.00",
+        )
+        self.assertEqual(editorial["incentive_total"], "300.00")
+        self.assertEqual(
+            editorial["contribution_total"],
+            "900.00",
+        )
+        self.assertEqual(
+            editorial["contribution_per_unit"],
+            "15.00",
+        )
+        self.assertEqual(editorial["margin_percent"], 16.67)
 
     def test_adoption_requires_assigned_advisor(self):
         quotation = create_commercial_quotation(
