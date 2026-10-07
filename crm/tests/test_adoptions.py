@@ -2,9 +2,11 @@ from datetime import date, time, timedelta
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
 from django.test import TestCase
 from django.utils import timezone
 
+from accounts.permissions import ROL_ADMINISTRADOR
 from catalog.models import Area, Grade, Level, Product, Provider
 from crm.models import (
     Adoption,
@@ -460,6 +462,11 @@ class CRMAdoptionFlowTests(TestCase):
         self.assertEqual(quotation.reopen_reason, "")
 
     def test_editorial_report_uses_confirmed_adoption_profitability(self):
+        admin_group, _ = Group.objects.get_or_create(
+            name=ROL_ADMINISTRADOR,
+        )
+        self.admin.groups.add(admin_group)
+
         quotation = create_commercial_quotation(
             opportunity=self.opportunity,
             actor=self.advisor,
