@@ -60,6 +60,7 @@ from crm.selectors import (
 from crm.services import (
     AdoptionError,
     CRMPlanningError,
+    build_activity_commercial_report,
     build_advisor_commercial_report,
     build_crm_report_workbook,
     build_editorial_commercial_report,
@@ -502,6 +503,23 @@ class CRMCommercialReportAPIView(
         filters = self._dated_filters(request)
 
         report = build_advisor_commercial_report(
+            user=request.user,
+            **filters,
+        )
+
+        return Response(report)
+
+
+class CRMActivityReportAPIView(
+    CRMReportFilterMixin,
+    APIView,
+):
+    permission_classes = [EsSupervisorCRM]
+
+    def get(self, request):
+        filters = self._dated_filters(request)
+
+        report = build_activity_commercial_report(
             user=request.user,
             **filters,
         )
