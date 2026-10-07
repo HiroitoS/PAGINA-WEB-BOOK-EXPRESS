@@ -32,6 +32,7 @@ from .reports import (
     build_opportunity_commercial_report,
     build_school_commercial_report,
 )
+from .report_exports import build_crm_report_workbook
 from .quotations import (
     CommercialQuotationError,
     accept_commercial_quotation,
@@ -59,6 +60,7 @@ __all__ = [
     "CommercialProjectionError",
     "create_commercial_projection_revision",
     "resolve_projection_price",
+    "build_crm_report_workbook",
     "build_activity_commercial_report",
     "build_advisor_commercial_report",
     "build_editorial_commercial_report",
