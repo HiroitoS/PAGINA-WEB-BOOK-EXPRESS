@@ -484,7 +484,7 @@ class CRMAdoptionFlowTests(TestCase):
         )
 
         report = build_editorial_commercial_report(
-            user=self.advisor,
+            user=self.admin,
             campaign_id=self.campaign.id,
             team_id=self.team.id,
             owner_id=self.advisor.id,
