@@ -1,4 +1,3 @@
-from datetime import timedelta
 import unicodedata
 
 from django.contrib.auth import get_user_model
