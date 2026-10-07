@@ -61,6 +61,12 @@ def confirm_adoption(
             "La adopción requiere una cotización aceptada."
         )
 
+    if opportunity.owner_id is None:
+        raise AdoptionError(
+            "Asigna un asesor responsable a la oportunidad antes de "
+            "confirmar la adopción."
+        )
+
     if opportunity.is_closed:
         raise AdoptionError(
             "La oportunidad ya se encuentra cerrada."
