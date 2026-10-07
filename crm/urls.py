@@ -5,6 +5,10 @@ from crm.api.views import (
     CampaignViewSet,
     CommercialTeamViewSet,
     CRMCommercialReportAPIView,
+    CRMEditorialReportAPIView,
+    CRMOpportunityReportAPIView,
+    CRMReportExportAPIView,
+    CRMSchoolReportAPIView,
     CRMSummaryAPIView,
     OpportunityViewSet,
     PipelineViewSet,
@@ -41,6 +45,26 @@ urlpatterns = [
         "reports/commercial/",
         CRMCommercialReportAPIView.as_view(),
         name="commercial-report",
+    ),
+    path(
+        "reports/editorials/",
+        CRMEditorialReportAPIView.as_view(),
+        name="editorial-report",
+    ),
+    path(
+        "reports/schools/",
+        CRMSchoolReportAPIView.as_view(),
+        name="school-report",
+    ),
+    path(
+        "reports/opportunities/",
+        CRMOpportunityReportAPIView.as_view(),
+        name="opportunity-report",
+    ),
+    path(
+        "reports/export/",
+        CRMReportExportAPIView.as_view(),
+        name="report-export",
     ),
     path("", include(router.urls)),
 ]
