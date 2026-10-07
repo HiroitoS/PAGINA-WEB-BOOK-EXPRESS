@@ -25,6 +25,7 @@ from .projections import (
     create_commercial_projection_revision,
     resolve_projection_price,
 )
+from .reports import build_advisor_commercial_report
 from .quotations import (
     CommercialQuotationError,
     accept_commercial_quotation,
@@ -52,6 +53,7 @@ __all__ = [
     "CommercialProjectionError",
     "create_commercial_projection_revision",
     "resolve_projection_price",
+    "build_advisor_commercial_report",
     "CommercialQuotationError",
     "create_commercial_quotation",
     "create_commercial_quotation_from_projection",
