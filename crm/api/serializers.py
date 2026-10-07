@@ -3024,8 +3024,7 @@ class AdoptionSerializer(serializers.ModelSerializer):
 
     def get_can_print(self, obj):
         return bool(
-            obj.advisor_id
-            and str(obj.advisor_name_snapshot or "").strip()
+            str(obj.advisor_name_snapshot or "").strip()
         )
 
     def get_print_block_reason(self, obj):
