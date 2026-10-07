@@ -59,9 +59,12 @@ def build_crm_dashboard_summary(*, user):
     won_count = won_opportunities.count()
     lost_count = lost_opportunities.count()
 
-    opportunities_without_activity = open_opportunities.filter(
-        last_activity_at__isnull=True,
-    ).count()
+    opportunities_without_activity = (
+        open_opportunities
+        .filter(commercial_activities__isnull=True)
+        .distinct()
+        .count()
+    )
 
     week_activities = activities.filter(
         occurred_at__date__gte=week_start,
