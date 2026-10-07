@@ -25,7 +25,13 @@ from .projections import (
     create_commercial_projection_revision,
     resolve_projection_price,
 )
-from .reports import build_advisor_commercial_report
+from .reports import (
+    build_activity_commercial_report,
+    build_advisor_commercial_report,
+    build_editorial_commercial_report,
+    build_opportunity_commercial_report,
+    build_school_commercial_report,
+)
 from .quotations import (
     CommercialQuotationError,
     accept_commercial_quotation,
@@ -53,7 +59,11 @@ __all__ = [
     "CommercialProjectionError",
     "create_commercial_projection_revision",
     "resolve_projection_price",
+    "build_activity_commercial_report",
     "build_advisor_commercial_report",
+    "build_editorial_commercial_report",
+    "build_opportunity_commercial_report",
+    "build_school_commercial_report",
     "CommercialQuotationError",
     "create_commercial_quotation",
     "create_commercial_quotation_from_projection",
