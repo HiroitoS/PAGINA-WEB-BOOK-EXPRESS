@@ -204,8 +204,6 @@ def confirm_adoption(
     adoption.full_clean()
     adoption.save()
 
-    reading_month_by_item = reading_month_by_item or {}
-
     for quotation_item in quotation_items:
         adoption_item = AdoptionItem(
             adoption=adoption,
@@ -235,9 +233,7 @@ def confirm_adoption(
             school_price=quotation_item.school_price,
             parent_price=quotation_item.parent_price,
             school_commission=quotation_item.school_commission,
-            reading_month=reading_month_by_item.get(
-                quotation_item.id
-            ),
+            reading_month=quotation_item.reading_month,
         )
         adoption_item.full_clean()
         adoption_item.save()
