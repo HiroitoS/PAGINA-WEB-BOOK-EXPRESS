@@ -2985,6 +2985,8 @@ class AdoptionSerializer(serializers.ModelSerializer):
         read_only=True,
     )
     items = AdoptionItemSerializer(many=True, read_only=True)
+    can_print = serializers.SerializerMethodField()
+    print_block_reason = serializers.SerializerMethodField()
 
     class Meta:
         model = Adoption
@@ -3014,8 +3016,25 @@ class AdoptionSerializer(serializers.ModelSerializer):
             "confirmed_by",
             "notes",
             "items",
+            "can_print",
+            "print_block_reason",
             "created_at",
             "updated_at",
+        )
+
+    def get_can_print(self, obj):
+        return bool(
+            obj.advisor_id
+            and str(obj.advisor_name_snapshot or "").strip()
+        )
+
+    def get_print_block_reason(self, obj):
+        if self.get_can_print(obj):
+            return ""
+
+        return (
+            "La adopción no tiene un asesor responsable asignado. "
+            "Asigna un asesor antes de imprimir el documento."
         )
 
 
