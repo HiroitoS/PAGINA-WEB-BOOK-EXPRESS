@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
-from django.db.models import Count, Sum
+from django.db.models import Count, Max, Sum
 
 from accounts.permissions import usuario_es_administrador
 from crm.models import (
@@ -864,31 +864,58 @@ def build_school_commercial_report(
     if owner_id is not None:
         schools = schools.filter(owner_id=owner_id)
 
+    school_rows = {}
+
+    for school in (
+        schools
+        .select_related("team", "owner")
+        .annotate(
+            report_last_activity_at=Max(
+                "commercial_activities__occurred_at"
+            )
+        )
+        .order_by("name")
+    ):
+        owner_name = ""
+
+        if school.owner_id:
+            owner_name = (
+                school.owner.get_full_name().strip()
+                or school.owner.get_username()
+            )
+
+        school_rows[school.id] = {
+            "school_id": school.id,
+            "school_name": school.name,
+            "department": school.department,
+            "province": school.province,
+            "district": school.district,
+            "team": (
+                school.team.name if school.team_id else ""
+            ),
+            "advisor": owner_name,
+            "open_opportunities": 0,
+            "won_opportunities": 0,
+            "lost_opportunities": 0,
+            "projected_units": 0,
+            "adopted_units": 0,
+            "last_activity_at": (
+                school.report_last_activity_at
+            ),
+        }
+
     opportunity_report = build_opportunity_commercial_report(
         user=user,
         campaign_id=campaign_id,
         team_id=team_id,
         owner_id=owner_id,
     )
-    by_school = {}
 
     for opportunity in opportunity_report["opportunities"]:
-        school_id = opportunity["school_id"]
-        row = by_school.setdefault(
-            school_id,
-            {
-                "school_id": school_id,
-                "school_name": opportunity["school_name"],
-                "team": opportunity["team"],
-                "advisor": opportunity["advisor"],
-                "open_opportunities": 0,
-                "won_opportunities": 0,
-                "lost_opportunities": 0,
-                "projected_units": 0,
-                "adopted_units": 0,
-                "last_activity_at": None,
-            },
-        )
+        row = school_rows.get(opportunity["school_id"])
+
+        if row is None:
+            continue
 
         category = opportunity["stage_category"]
 
@@ -902,42 +929,7 @@ def build_school_commercial_report(
         row["projected_units"] += opportunity["projected_units"]
         row["adopted_units"] += opportunity["adopted_units"]
 
-        activity_at = opportunity["last_activity_at"]
-
-        if (
-            activity_at
-            and (
-                row["last_activity_at"] is None
-                or activity_at > row["last_activity_at"]
-            )
-        ):
-            row["last_activity_at"] = activity_at
-
-    school_objects = {
-        school.id: school
-        for school in (
-            schools
-            .select_related("team", "owner")
-            .filter(id__in=by_school.keys())
-        )
-    }
-
-    rows = []
-
-    for school_id, row in by_school.items():
-        school = school_objects.get(school_id)
-
-        if school is None:
-            continue
-
-        row["department"] = school.department
-        row["province"] = school.province
-        row["district"] = school.district
-        rows.append(row)
-
-    rows.sort(
-        key=lambda row: row["school_name"].casefold()
-    )
+    rows = list(school_rows.values())
 
     return {
         "filters": {
@@ -947,6 +939,16 @@ def build_school_commercial_report(
         },
         "summary": {
             "schools": len(rows),
+            "schools_without_opportunity": sum(
+                1
+                for row in rows
+                if (
+                    row["open_opportunities"]
+                    + row["won_opportunities"]
+                    + row["lost_opportunities"]
+                )
+                == 0
+            ),
             "projected_units": sum(
                 row["projected_units"] for row in rows
             ),
@@ -955,4 +957,98 @@ def build_school_commercial_report(
             ),
         },
         "schools": rows,
+    }
+
+
+def build_activity_commercial_report(
+    *,
+    user,
+    date_from,
+    date_to,
+    campaign_id=None,
+    team_id=None,
+    owner_id=None,
+):
+    activities = visible_commercial_activities_queryset(user)
+
+    if team_id is not None:
+        activities = activities.filter(
+            school__team_id=team_id
+        )
+
+    if owner_id is not None:
+        activities = activities.filter(
+            performed_by_id=owner_id
+        )
+
+    if campaign_id is not None:
+        activities = activities.filter(
+            opportunity__campaign_id=campaign_id
+        )
+
+    activities = (
+        activities
+        .filter(
+            occurred_at__date__gte=date_from,
+            occurred_at__date__lte=date_to,
+        )
+        .select_related(
+            "school",
+            "contact",
+            "opportunity",
+            "performed_by",
+        )
+        .order_by("-occurred_at", "-id")
+    )
+
+    rows = []
+
+    for activity in activities:
+        performer = ""
+
+        if activity.performed_by_id:
+            performer = (
+                activity.performed_by.get_full_name().strip()
+                or activity.performed_by.get_username()
+            )
+
+        rows.append(
+            {
+                "activity_id": activity.id,
+                "occurred_at": activity.occurred_at,
+                "advisor": performer,
+                "school": activity.school.name,
+                "contact": (
+                    activity.contact.full_name
+                    if activity.contact_id
+                    else ""
+                ),
+                "activity_type": activity.get_activity_type_display(),
+                "summary": activity.summary,
+                "result": activity.result,
+                "opportunity": (
+                    activity.opportunity.title
+                    if activity.opportunity_id
+                    else ""
+                ),
+                "has_location": bool(
+                    activity.latitude is not None
+                    and activity.longitude is not None
+                ),
+                "is_important": activity.is_important,
+            }
+        )
+
+    return {
+        "filters": {
+            "campaign": campaign_id,
+            "team": team_id,
+            "owner": owner_id,
+            "date_from": date_from,
+            "date_to": date_to,
+        },
+        "summary": {
+            "activities": len(rows),
+        },
+        "activities": rows,
     }
