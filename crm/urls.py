@@ -4,6 +4,7 @@ from rest_framework.routers import DefaultRouter
 from crm.api.views import (
     CampaignViewSet,
     CommercialTeamViewSet,
+    CRMCommercialReportAPIView,
     CRMSummaryAPIView,
     OpportunityViewSet,
     PipelineViewSet,
@@ -36,5 +37,10 @@ router.register(r"opportunities", OpportunityViewSet, basename="opportunity")
 
 urlpatterns = [
     path("summary/", CRMSummaryAPIView.as_view(), name="summary"),
+    path(
+        "reports/commercial/",
+        CRMCommercialReportAPIView.as_view(),
+        name="commercial-report",
+    ),
     path("", include(router.urls)),
 ]
