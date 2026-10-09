@@ -213,6 +213,7 @@ class TaskListSerializer(serializers.ModelSerializer):
         read_only=True,
     )
     is_overdue = serializers.BooleanField(read_only=True)
+    in_my_day = serializers.SerializerMethodField()
 
     assigned_to = serializers.PrimaryKeyRelatedField(
         queryset=User.objects.filter(is_active=True),
@@ -251,6 +252,7 @@ class TaskListSerializer(serializers.ModelSerializer):
             "is_important",
             "is_private",
             "is_overdue",
+            "in_my_day",
             "related_contact_request",
             "can_edit_details",
             "can_follow_up",
@@ -283,6 +285,22 @@ class TaskListSerializer(serializers.ModelSerializer):
 
     def get_assigned_to_name(self, obj):
         return get_user_display_name(obj.assigned_to)
+
+    def get_in_my_day(self, obj):
+        annotated_value = getattr(obj, "in_my_day", None)
+
+        if annotated_value is not None:
+            return bool(annotated_value)
+
+        user = get_request_user(self)
+
+        if not user or not user.is_authenticated:
+            return False
+
+        return obj.my_day_selections.filter(
+            user=user,
+            selected_date=timezone.localdate(),
+        ).exists()
 
     def get_can_edit_details(self, obj):
         user = get_request_user(self)
