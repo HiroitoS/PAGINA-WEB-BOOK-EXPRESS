@@ -2,7 +2,7 @@ from datetime import datetime, time
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 
@@ -19,6 +19,7 @@ from .models import (
     Reminder,
     Task,
     TaskComment,
+    TaskMyDaySelection,
     TaskStatusHistory,
     WorkspaceGroup,
     WorkspaceMembership,
@@ -352,6 +353,15 @@ class TaskViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         queryset = visible_tasks_queryset(self.request.user)
 
+        my_day_selections = TaskMyDaySelection.objects.filter(
+            task_id=OuterRef("pk"),
+            user=self.request.user,
+            selected_date=timezone.localdate(),
+        )
+        queryset = queryset.annotate(
+            in_my_day=Exists(my_day_selections),
+        )
+
         if self.action == "retrieve":
             queryset = queryset.prefetch_related(
             "comments__user",
@@ -365,6 +375,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         assigned_to = self.request.query_params.get("assigned_to")
         search = self.request.query_params.get("search")
         due = self.request.query_params.get("due")
+        my_day = self.request.query_params.get("my_day")
         ordering = self.request.query_params.get("ordering")
 
         if status_param:
@@ -401,6 +412,12 @@ class TaskViewSet(viewsets.ModelViewSet):
             ).exclude(
                 status__in=["completed", "cancelled"],
             )
+
+        if my_day == "true":
+            queryset = queryset.filter(in_my_day=True)
+
+        if my_day == "false":
+            queryset = queryset.filter(in_my_day=False)
 
         if search:
             queryset = queryset.filter(
@@ -516,6 +533,52 @@ class TaskViewSet(viewsets.ModelViewSet):
             old_status=old_status or "",
             new_status=new_status,
             note=note,
+        )
+
+    @action(
+        detail=True,
+        methods=["post", "delete"],
+        url_path="my-day",
+    )
+    def my_day(self, request, pk=None):
+        """
+        Agrega o quita una tarea del Mi día personal del usuario autenticado.
+
+        Esta acción no cambia responsable, fecha límite, prioridad ni ninguna
+        otra planificación compartida de la tarea.
+        """
+        task = self.get_object()
+
+        if request.method == "POST":
+            if task.status in ["completed", "cancelled"]:
+                return Response(
+                    {
+                        "detail": (
+                            "No puedes agregar una tarea cerrada a Mi día. "
+                            "Reábrela primero si necesitas retomarla."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            TaskMyDaySelection.objects.update_or_create(
+                task=task,
+                user=request.user,
+                defaults={
+                    "selected_date": timezone.localdate(),
+                },
+            )
+        else:
+            TaskMyDaySelection.objects.filter(
+                task=task,
+                user=request.user,
+            ).delete()
+
+        refreshed_task = self.get_queryset().get(pk=task.pk)
+
+        return Response(
+            self.get_serializer(refreshed_task).data,
+            status=status.HTTP_200_OK,
         )
 
     @action(
