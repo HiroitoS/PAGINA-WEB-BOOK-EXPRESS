@@ -88,6 +88,62 @@ class WorkspaceMembership(TimeStampedModel):
         return f"{self.user} - {self.group}"
 
 
+class WorkspaceTaskList(TimeStampedModel):
+    """
+    Lista funcional de ToDo.
+
+    Se mantiene separada de WorkspaceGroup:
+    - WorkspaceGroup representa un equipo/personas.
+    - WorkspaceTaskList organiza tareas para el usuario o para un equipo.
+    """
+    name = models.CharField(
+        max_length=150,
+        verbose_name="Nombre de la lista",
+    )
+    description = models.TextField(
+        blank=True,
+        verbose_name="Descripción",
+    )
+    color = models.CharField(
+        max_length=30,
+        blank=True,
+        default="#dc2626",
+        verbose_name="Color",
+    )
+    workspace_group = models.ForeignKey(
+        WorkspaceGroup,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="task_lists",
+        verbose_name="Equipo de trabajo",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_workspace_task_lists",
+        verbose_name="Creado por",
+    )
+    position = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Orden",
+    )
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name="Activa",
+    )
+
+    class Meta:
+        verbose_name = "Lista de tareas"
+        verbose_name_plural = "Listas de tareas"
+        ordering = ["position", "name", "id"]
+
+    def __str__(self):
+        return self.name
+
+
 class Task(TimeStampedModel):
     STATUS_CHOICES = [
         ("pending", "Pendiente"),
@@ -154,6 +210,14 @@ class Task(TimeStampedModel):
         blank=True,
         related_name="tasks",
         verbose_name="Grupo de trabajo"
+    )
+    task_list = models.ForeignKey(
+        WorkspaceTaskList,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="tasks",
+        verbose_name="Lista de tareas",
     )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
