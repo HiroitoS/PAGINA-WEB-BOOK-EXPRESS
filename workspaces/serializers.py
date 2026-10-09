@@ -54,10 +54,6 @@ class WorkspaceMembershipSerializer(serializers.ModelSerializer):
         source="group.name",
         read_only=True,
     )
-    task_list_name = serializers.CharField(
-        source="task_list.name",
-        read_only=True,
-    )
 
     class Meta:
         model = WorkspaceMembership
@@ -239,6 +235,10 @@ class TaskListSerializer(serializers.ModelSerializer):
     assigned_to_name = serializers.SerializerMethodField()
     group_name = serializers.CharField(
         source="group.name",
+        read_only=True,
+    )
+    task_list_name = serializers.CharField(
+        source="task_list.name",
         read_only=True,
     )
     status_display = serializers.CharField(
