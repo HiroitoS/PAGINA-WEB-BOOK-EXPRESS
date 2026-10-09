@@ -64,6 +64,44 @@ def usuario_puede_gestionar_grupo(user, group):
     ).exists()
 
 
+def usuario_puede_ver_lista_tareas(user, task_list):
+    if usuario_es_administrador(user):
+        return True
+
+    if not user or not user.is_authenticated or not task_list:
+        return False
+
+    if task_list.created_by_id == user.id:
+        return True
+
+    if (
+        task_list.workspace_group
+        and usuario_es_miembro_activo(user, task_list.workspace_group)
+    ):
+        return True
+
+    return False
+
+
+def usuario_puede_gestionar_lista_tareas(user, task_list):
+    if usuario_es_administrador(user):
+        return True
+
+    if not user or not user.is_authenticated or not task_list:
+        return False
+
+    if task_list.created_by_id == user.id:
+        return True
+
+    if (
+        task_list.workspace_group
+        and usuario_puede_gestionar_grupo(user, task_list.workspace_group)
+    ):
+        return True
+
+    return False
+
+
 def usuario_es_miembro_activo(user, group):
     if usuario_es_administrador(user):
         return True
