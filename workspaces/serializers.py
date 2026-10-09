@@ -10,6 +10,7 @@ from .models import (
     TaskStatusHistory,
     WorkspaceGroup,
     WorkspaceMembership,
+    WorkspaceTaskList,
 )
 from .permissions import (
     usuario_puede_completar_recordatorio,
@@ -51,6 +52,10 @@ class WorkspaceMembershipSerializer(serializers.ModelSerializer):
     )
     group_name = serializers.CharField(
         source="group.name",
+        read_only=True,
+    )
+    task_list_name = serializers.CharField(
+        source="task_list.name",
         read_only=True,
     )
 
@@ -107,6 +112,42 @@ class WorkspaceGroupSerializer(serializers.ModelSerializer):
             "created_by",
             "created_by_name",
             "memberships",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_created_by_name(self, obj):
+        return get_user_display_name(obj.created_by)
+
+
+class WorkspaceTaskListSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.SerializerMethodField()
+    workspace_group_name = serializers.CharField(
+        source="workspace_group.name",
+        read_only=True,
+    )
+
+    class Meta:
+        model = WorkspaceTaskList
+        fields = [
+            "id",
+            "name",
+            "description",
+            "color",
+            "workspace_group",
+            "workspace_group_name",
+            "created_by",
+            "created_by_name",
+            "position",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "created_by",
+            "created_by_name",
+            "workspace_group_name",
             "created_at",
             "updated_at",
         ]
@@ -241,6 +282,8 @@ class TaskListSerializer(serializers.ModelSerializer):
             "priority_display",
             "group",
             "group_name",
+            "task_list",
+            "task_list_name",
             "created_by",
             "created_by_name",
             "assigned_to",
@@ -267,6 +310,7 @@ class TaskListSerializer(serializers.ModelSerializer):
             "id",
             "created_by",
             "created_by_name",
+            "task_list_name",
             "assigned_to_name",
             "status",
             "completed_at",
