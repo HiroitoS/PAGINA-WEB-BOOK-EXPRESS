@@ -234,6 +234,49 @@ class Task(TimeStampedModel):
         self.completed_at = timezone.now()
 
 
+class TaskMyDaySelection(TimeStampedModel):
+    """
+    Selección personal y temporal de una tarea para "Mi día".
+
+    La selección pertenece al usuario, no a la tarea compartida. Así dos
+    usuarios que pueden ver la misma tarea pueden organizar su jornada de
+    manera independiente sin alterar la planificación ni la responsabilidad
+    comercial de la tarea.
+    """
+
+    task = models.ForeignKey(
+        Task,
+        on_delete=models.CASCADE,
+        related_name="my_day_selections",
+        verbose_name="Tarea",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="task_my_day_selections",
+        verbose_name="Usuario",
+    )
+    selected_date = models.DateField(
+        default=timezone.localdate,
+        db_index=True,
+        verbose_name="Día seleccionado",
+    )
+
+    class Meta:
+        verbose_name = "Selección de Mi día"
+        verbose_name_plural = "Selecciones de Mi día"
+        ordering = ["-selected_date", "-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["task", "user"],
+                name="workspace_unique_task_my_day_user",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.user} - {self.task} - {self.selected_date}"
+
+
 class TaskComment(TimeStampedModel):
     ACTION_TYPE_CHOICES = [
         ("comment", "Comentario"),
