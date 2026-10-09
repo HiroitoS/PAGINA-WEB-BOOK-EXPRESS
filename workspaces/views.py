@@ -23,6 +23,7 @@ from .models import (
     TaskStatusHistory,
     WorkspaceGroup,
     WorkspaceMembership,
+    WorkspaceTaskList,
 )
 from .notification_events import (
     notify_event_assigned,
@@ -45,10 +46,12 @@ from .permissions import (
     usuario_puede_editar_datos_recordatorio,
     usuario_puede_editar_datos_tarea,
     usuario_puede_gestionar_grupo,
+    usuario_puede_gestionar_lista_tareas,
     usuario_puede_reabrir_tarea,
     usuario_puede_ver_evento,
     usuario_puede_ver_recordatorio,
     usuario_puede_ver_tarea,
+    usuario_puede_ver_lista_tareas,
 )
 from .serializers import (
     CalendarEventSerializer,
@@ -63,7 +66,7 @@ from .serializers import (
     TaskStatusUpdateSerializer,
     WorkspaceGroupSerializer,
     WorkspaceMembershipSerializer,
-    
+    WorkspaceTaskListSerializer,
 )
 
 
@@ -133,10 +136,28 @@ def visible_groups_queryset(user):
     ).distinct()
 
 
+def visible_task_lists_queryset(user):
+    queryset = WorkspaceTaskList.objects.select_related(
+        "workspace_group",
+        "created_by",
+    ).all()
+
+    if usuario_es_administrador(user):
+        return queryset
+
+    group_ids = get_user_group_ids(user)
+
+    return queryset.filter(
+        Q(created_by=user)
+        | Q(workspace_group_id__in=group_ids)
+    ).distinct()
+
+
 def visible_tasks_queryset(user):
     queryset = (
         Task.objects.select_related(
             "group",
+            "task_list",
             "created_by",
             "assigned_to",
             "related_contact_request",
@@ -334,6 +355,90 @@ class WorkspaceMembershipViewSet(viewsets.ModelViewSet):
         instance.delete()
 
 
+class WorkspaceTaskListViewSet(viewsets.ModelViewSet):
+    serializer_class = WorkspaceTaskListSerializer
+    permission_classes = [EsUsuarioWorkspace]
+
+    def get_queryset(self):
+        queryset = visible_task_lists_queryset(self.request.user)
+        search = self.request.query_params.get("search")
+        is_active = self.request.query_params.get("is_active")
+        workspace_group = self.request.query_params.get("workspace_group")
+
+        if search:
+            queryset = queryset.filter(
+                Q(name__icontains=search)
+                | Q(description__icontains=search)
+            )
+
+        if is_active == "true":
+            queryset = queryset.filter(is_active=True)
+
+        if is_active == "false":
+            queryset = queryset.filter(is_active=False)
+
+        if workspace_group:
+            queryset = queryset.filter(workspace_group_id=workspace_group)
+
+        return queryset.order_by("position", "name", "id").distinct()
+
+    def perform_create(self, serializer):
+        workspace_group = serializer.validated_data.get("workspace_group")
+
+        if (
+            workspace_group
+            and not usuario_puede_gestionar_grupo(
+                self.request.user,
+                workspace_group,
+            )
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para crear listas compartidas en este equipo."
+            )
+
+        serializer.save(created_by=self.request.user)
+
+    def perform_update(self, serializer):
+        task_list = self.get_object()
+
+        if not usuario_puede_gestionar_lista_tareas(
+            self.request.user,
+            task_list,
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para modificar esta lista."
+            )
+
+        workspace_group = serializer.validated_data.get(
+            "workspace_group",
+            task_list.workspace_group,
+        )
+
+        if (
+            workspace_group
+            and not usuario_puede_gestionar_grupo(
+                self.request.user,
+                workspace_group,
+            )
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para mover esta lista a ese equipo."
+            )
+
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if not usuario_puede_gestionar_lista_tareas(
+            self.request.user,
+            instance,
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para eliminar esta lista."
+            )
+
+        instance.delete()
+
+
 class TaskViewSet(viewsets.ModelViewSet):
     serializer_class = TaskSerializer
     permission_classes = [EsUsuarioWorkspace]
@@ -372,6 +477,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         priority = self.request.query_params.get("priority")
         task_type = self.request.query_params.get("task_type")
         group = self.request.query_params.get("group")
+        task_list = self.request.query_params.get("task_list")
         assigned_to = self.request.query_params.get("assigned_to")
         search = self.request.query_params.get("search")
         due = self.request.query_params.get("due")
@@ -389,6 +495,9 @@ class TaskViewSet(viewsets.ModelViewSet):
 
         if group:
             queryset = queryset.filter(group_id=group)
+
+        if task_list:
+            queryset = queryset.filter(task_list_id=task_list)
 
         if assigned_to:
             queryset = queryset.filter(assigned_to_id=assigned_to)
@@ -424,6 +533,7 @@ class TaskViewSet(viewsets.ModelViewSet):
                 Q(title__icontains=search)
                 | Q(description__icontains=search)
                 | Q(group__name__icontains=search)
+                | Q(task_list__name__icontains=search)
                 | Q(assigned_to__username__icontains=search)
                 | Q(assigned_to__first_name__icontains=search)
                 | Q(assigned_to__last_name__icontains=search)
@@ -441,6 +551,25 @@ class TaskViewSet(viewsets.ModelViewSet):
             assigned_to = self.request.user
 
         group = serializer.validated_data.get("group")
+        task_list = serializer.validated_data.get("task_list")
+
+        if task_list and not usuario_puede_ver_lista_tareas(
+            self.request.user,
+            task_list,
+        ):
+            raise PermissionDenied(
+                "No tienes acceso a la lista seleccionada."
+            )
+
+        if task_list and task_list.workspace_group_id:
+            if (
+                group
+                and group.id != task_list.workspace_group_id
+            ):
+                raise PermissionDenied(
+                    "La lista y el equipo de trabajo no coinciden."
+                )
+            group = task_list.workspace_group
 
         if group and not usuario_es_miembro_activo(self.request.user, group):
             raise PermissionDenied(
@@ -452,10 +581,14 @@ class TaskViewSet(viewsets.ModelViewSet):
                 "No tienes permiso para asignar tareas a otro usuario."
             )
 
-        task = serializer.save(
-            created_by=self.request.user,
-            assigned_to=assigned_to,
-        )
+        save_kwargs = {
+            "created_by": self.request.user,
+            "assigned_to": assigned_to,
+        }
+        if task_list and task_list.workspace_group_id:
+            save_kwargs["group"] = group
+
+        task = serializer.save(**save_kwargs)
 
         notify_task_assigned(
             task,
@@ -472,6 +605,25 @@ class TaskViewSet(viewsets.ModelViewSet):
 
         assigned_to = serializer.validated_data.get("assigned_to", task.assigned_to)
         group = serializer.validated_data.get("group", task.group)
+        task_list = serializer.validated_data.get("task_list", task.task_list)
+
+        if task_list and not usuario_puede_ver_lista_tareas(
+            self.request.user,
+            task_list,
+        ):
+            raise PermissionDenied(
+                "No tienes acceso a la lista seleccionada."
+            )
+
+        if task_list and task_list.workspace_group_id:
+            if (
+                group
+                and group.id != task_list.workspace_group_id
+            ):
+                raise PermissionDenied(
+                    "La lista y el equipo de trabajo no coinciden."
+                )
+            group = task_list.workspace_group
 
         if group and not usuario_es_miembro_activo(self.request.user, group):
             raise PermissionDenied(
@@ -488,7 +640,11 @@ class TaskViewSet(viewsets.ModelViewSet):
             )
 
         old_assigned_to = task.assigned_to
-        updated_task = serializer.save()
+        save_kwargs = {}
+        if task_list and task_list.workspace_group_id:
+            save_kwargs["group"] = group
+
+        updated_task = serializer.save(**save_kwargs)
 
         notify_task_assigned(
             updated_task,
