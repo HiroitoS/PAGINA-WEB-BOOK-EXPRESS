@@ -358,6 +358,11 @@ class WorkspaceMembershipViewSet(viewsets.ModelViewSet):
 class WorkspaceTaskListViewSet(viewsets.ModelViewSet):
     serializer_class = WorkspaceTaskListSerializer
     permission_classes = [EsUsuarioWorkspace]
+    # Las listas alimentan directamente la navegación de ToDo y deben
+    # recuperarse completas para el usuario actual. No son un listado
+    # operativo masivo como las tareas, por lo que paginarlas obligaría al
+    # frontend a reconstruir la barra lateral página por página.
+    pagination_class = None
 
     def get_queryset(self):
         queryset = visible_task_lists_queryset(self.request.user)
