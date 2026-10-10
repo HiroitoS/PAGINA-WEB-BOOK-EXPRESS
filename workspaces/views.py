@@ -1550,7 +1550,7 @@ class WorkspaceCalendarAPIView(APIView):
         reminders = visible_reminders_queryset(request.user).filter(
             remind_at__range=(start, end),
         ).exclude(
-            status="completed",
+            status__in=["completed", "dismissed"],
         )
 
         if group:
@@ -1564,9 +1564,14 @@ class WorkspaceCalendarAPIView(APIView):
             can_edit_details = usuario_puede_editar_datos_tarea(request.user, task)
             can_follow_up = usuario_puede_dar_seguimiento_tarea(request.user, task)
             can_complete = usuario_puede_completar_tarea(request.user, task)
-            is_read_only = not can_edit_details and not can_follow_up
+            is_read_only = (
+                not can_edit_details
+                and not can_follow_up
+                and not can_complete
+            )
+            display_at = task.due_at or task.start_at
 
-            if task.due_at:
+            if display_at:
                 calendar_items.append({
                     "id": f"task-{task.id}",
                     "real_id": task.id,
@@ -1574,8 +1579,12 @@ class WorkspaceCalendarAPIView(APIView):
                     "type": "task",
                     "title": task.title,
                     "description": task.description,
-                    "start": task.due_at,
-                    "end": task.due_at,
+                    "start": display_at,
+                    "end": display_at,
+                    "start_at": task.start_at,
+                    "due_at": task.due_at,
+                    "task_type": task.task_type,
+                    "task_type_display": task.get_task_type_display(),
                     "status": task.status,
                     "status_display": task.get_status_display(),
                     "priority": task.priority,
