@@ -1,7 +1,9 @@
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Permission
 from django.db import IntegrityError, transaction
+from django.db.models.deletion import ProtectedError
 from django.test import TestCase
 from django.utils import timezone
 
@@ -283,6 +285,34 @@ class CRMActivityAndWorkItemTests(TestCase):
         self.assertFalse(
             CRMWorkItemLink.objects.filter(reminder=reminder).exists()
         )
+
+    def test_crm_linked_task_cannot_be_deleted_or_cascade(self):
+        task = Task.objects.create(
+            title="Preparar propuesta para adopción",
+            created_by=self.admin,
+            assigned_to=self.advisor,
+        )
+        link = link_work_item_to_opportunity(
+            opportunity=self.opportunity,
+            created_by=self.admin,
+            task=task,
+        )
+
+        workspace_permission = Permission.objects.get(
+            content_type__app_label="workspaces",
+            codename="use_workspace",
+        )
+        self.admin.user_permissions.add(workspace_permission)
+        self.client.force_login(self.admin)
+
+        response = self.client.delete(f"/api/admin/tasks/{task.id}/")
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(Task.objects.filter(pk=task.id).exists())
+        self.assertTrue(CRMWorkItemLink.objects.filter(pk=link.pk).exists())
+
+        with self.assertRaises(ProtectedError):
+            task.delete()
+        self.assertTrue(CRMWorkItemLink.objects.filter(pk=link.pk).exists())
 
     def test_link_accepts_exactly_one_workspace_item(self):
         task = Task.objects.create(
