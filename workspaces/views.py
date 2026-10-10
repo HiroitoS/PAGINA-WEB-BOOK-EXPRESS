@@ -180,10 +180,13 @@ def visible_tasks_queryset(user):
 
     group_ids = get_user_group_ids(user)
 
+    # Una tarea privada no es visible por pertenecer al mismo equipo.
+    # El creador y el responsable conservan el acceso; el administrador
+    # dispone del acceso de supervisión definido arriba.
     return queryset.filter(
         Q(created_by=user)
         | Q(assigned_to=user)
-        | Q(group_id__in=group_ids)
+        | Q(is_private=False, group_id__in=group_ids)
     ).distinct()
 
 
@@ -244,6 +247,11 @@ def visible_reminders_queryset(user):
         | Q(group_id__in=managed_group_ids)
         | Q(task__group_id__in=managed_group_ids)
         | Q(event__group_id__in=managed_group_ids)
+    ).filter(
+        Q(task__isnull=True)
+        | Q(task__is_private=False)
+        | Q(task__created_by=user)
+        | Q(task__assigned_to=user)
     ).distinct()
 
 
@@ -744,6 +752,7 @@ class TaskViewSet(viewsets.ModelViewSet):
             previous_assignee=old_assigned_to,
         )
 
+    @transaction.atomic
     def perform_destroy(self, instance):
         if not usuario_puede_editar_datos_tarea(
             self.request.user,
@@ -752,6 +761,23 @@ class TaskViewSet(viewsets.ModelViewSet):
             raise PermissionDenied(
                 "No tienes permiso para eliminar esta tarea."
             )
+
+        # Los registros comerciales y sus seguimientos son evidencias.
+        # Solo se permite eliminar tareas sin actividad ni vínculo CRM.
+        if instance.crm_links.exists():
+            raise ValidationError({
+                "detail": (
+                    "Esta tarea está vinculada al CRM y debe conservarse. "
+                    "Puedes cancelarla con una justificación."
+                ),
+            })
+        if instance.comments.exists() or instance.status_history.exists():
+            raise ValidationError({
+                "detail": (
+                    "La tarea tiene historial de gestión y no se puede "
+                    "eliminar. Puedes cancelarla con una justificación."
+                ),
+            })
 
         instance.delete()
 
