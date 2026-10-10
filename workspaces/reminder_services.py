@@ -91,11 +91,12 @@ def sync_primary_task_reminder(task, *, actor=None):
         return reminder
 
     if not task.reminder_at:
-        if reminder:
+        if reminder and reminder.status != "completed":
             reminder.delete()
+            reminder = None
 
         _update_task_mirror(task, None)
-        return None
+        return reminder
 
     if not task.assigned_to_id:
         raise ValueError(
