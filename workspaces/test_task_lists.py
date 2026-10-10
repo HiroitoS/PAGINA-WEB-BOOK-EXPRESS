@@ -1,10 +1,12 @@
 from django.contrib.auth.models import Permission, User
+from django.utils import timezone
 from django.urls import reverse
 
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from .models import (
+    Reminder,
     Task,
     WorkspaceGroup,
     WorkspaceMembership,
@@ -49,6 +51,82 @@ class WorkspaceTaskListApiTests(APITestCase):
             user=self.member,
             role="member",
         )
+
+    def test_private_group_task_is_hidden_from_other_members(self):
+        task = Task.objects.create(
+            title="Gestión reservada",
+            created_by=self.owner,
+            assigned_to=self.owner,
+            group=self.group,
+            is_private=True,
+        )
+
+        self.client.force_authenticate(self.member)
+        listed = self.client.get(reverse("admin-task-list"))
+        self.assertEqual(listed.status_code, status.HTTP_200_OK)
+        self.assertNotIn(task.id, [item["id"] for item in listed.data])
+
+        detail = self.client.get(
+            reverse("admin-task-detail", args=[task.id]),
+        )
+        self.assertEqual(detail.status_code, status.HTTP_404_NOT_FOUND)
+
+        self.client.force_authenticate(self.owner)
+        detail = self.client.get(
+            reverse("admin-task-detail", args=[task.id]),
+        )
+        self.assertEqual(detail.status_code, status.HTTP_200_OK)
+
+    def test_private_task_reminder_is_not_visible_to_group_coordinator(self):
+        self.group.memberships.filter(user=self.member).update(
+            role="coordinator",
+        )
+        task = Task.objects.create(
+            title="Seguimiento confidencial",
+            created_by=self.owner,
+            assigned_to=self.owner,
+            group=self.group,
+            is_private=True,
+        )
+        reminder = Reminder.objects.create(
+            title="Aviso reservado",
+            task=task,
+            group=self.group,
+            created_by=self.owner,
+            user=self.owner,
+            remind_at=timezone.now(),
+            source="manual",
+        )
+
+        self.client.force_authenticate(self.member)
+        listed = self.client.get("/api/admin/reminders/")
+        self.assertEqual(listed.status_code, status.HTTP_200_OK)
+        items = (
+            listed.data["results"]
+            if isinstance(listed.data, dict)
+            else listed.data
+        )
+        self.assertNotIn(reminder.id, [item["id"] for item in items])
+
+        detail = self.client.get(
+            f"/api/admin/reminders/{reminder.id}/",
+        )
+        self.assertEqual(detail.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_private_task_is_visible_to_its_assignee(self):
+        task = Task.objects.create(
+            title="Tarea privada asignada",
+            created_by=self.owner,
+            assigned_to=self.member,
+            group=self.group,
+            is_private=True,
+        )
+
+        self.client.force_authenticate(self.member)
+        detail = self.client.get(
+            reverse("admin-task-detail", args=[task.id]),
+        )
+        self.assertEqual(detail.status_code, status.HTTP_200_OK)
 
     def test_personal_list_is_only_visible_to_creator(self):
         personal_list = WorkspaceTaskList.objects.create(
