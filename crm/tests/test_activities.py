@@ -21,6 +21,7 @@ from crm.models import (
 from crm.selectors import (
     commercial_activities_for_opportunity,
     commercial_activities_for_school,
+    work_items_for_opportunity,
 )
 from crm.services import (
     CommercialActivityError,
@@ -285,6 +286,54 @@ class CRMActivityAndWorkItemTests(TestCase):
         self.assertFalse(
             CRMWorkItemLink.objects.filter(reminder=reminder).exists()
         )
+
+    def test_private_crm_work_item_is_not_exposed_to_other_users(self):
+        other_user = User.objects.create_user(
+            username="crm-private-task-observer",
+            password="test-password",
+        )
+        task = Task.objects.create(
+            title="Seguimiento reservado",
+            created_by=self.admin,
+            assigned_to=self.advisor,
+            is_private=True,
+        )
+        reminder = Reminder.objects.create(
+            title="Aviso privado de tarea",
+            task=task,
+            created_by=self.admin,
+            user=self.advisor,
+            remind_at=timezone.now() + timedelta(hours=3),
+            source="manual",
+        )
+        task_link = link_work_item_to_opportunity(
+            opportunity=self.opportunity,
+            created_by=self.admin,
+            task=task,
+        )
+        reminder_link = link_work_item_to_opportunity(
+            opportunity=self.opportunity,
+            created_by=self.admin,
+            reminder=reminder,
+        )
+
+        visible_to_other = work_items_for_opportunity(
+            self.opportunity,
+            user=other_user,
+        )
+        self.assertFalse(
+            visible_to_other.filter(pk__in=[task_link.pk, reminder_link.pk]).exists()
+        )
+
+        for allowed_user in [self.admin, self.advisor]:
+            ids = set(
+                work_items_for_opportunity(
+                    self.opportunity,
+                    user=allowed_user,
+                ).values_list("id", flat=True)
+            )
+            self.assertIn(task_link.pk, ids)
+            self.assertIn(reminder_link.pk, ids)
 
     def test_crm_linked_task_cannot_be_deleted_or_cascade(self):
         task = Task.objects.create(
