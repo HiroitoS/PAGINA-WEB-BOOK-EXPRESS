@@ -38,6 +38,7 @@ from .permissions import (
     EsUsuarioWorkspace,
     usuario_puede_asignar_trabajo,
     usuario_puede_crear_grupo,
+    usuario_es_integrante_activo_grupo,
     usuario_es_miembro_activo,
     usuario_puede_completar_recordatorio,
     usuario_puede_completar_tarea,
@@ -550,13 +551,9 @@ class TaskViewSet(viewsets.ModelViewSet):
         return queryset.order_by("status", "due_at", "-created_at").distinct()
 
     def perform_create(self, serializer):
-        assigned_to = serializer.validated_data.get("assigned_to")
-
-        if not assigned_to:
-            assigned_to = self.request.user
-
         group = serializer.validated_data.get("group")
         task_list = serializer.validated_data.get("task_list")
+        assigned_to = serializer.validated_data.get("assigned_to")
 
         if task_list and not usuario_puede_ver_lista_tareas(
             self.request.user,
@@ -581,7 +578,26 @@ class TaskViewSet(viewsets.ModelViewSet):
                 "No perteneces a este grupo de trabajo."
             )
 
-        if not user_can_assign_to_other_user(self.request.user, assigned_to, group):
+        if not group and not assigned_to:
+            assigned_to = self.request.user
+
+        if (
+            group
+            and assigned_to
+            and not usuario_es_integrante_activo_grupo(
+                assigned_to,
+                group,
+            )
+        ):
+            raise PermissionDenied(
+                "El responsable debe ser un integrante activo del equipo."
+            )
+
+        if not user_can_assign_to_other_user(
+            self.request.user,
+            assigned_to,
+            group,
+        ):
             raise PermissionDenied(
                 "No tienes permiso para asignar tareas a otro usuario."
             )
@@ -633,6 +649,18 @@ class TaskViewSet(viewsets.ModelViewSet):
         if group and not usuario_es_miembro_activo(self.request.user, group):
             raise PermissionDenied(
                 "No perteneces a este grupo de trabajo."
+            )
+
+        if (
+            group
+            and assigned_to
+            and not usuario_es_integrante_activo_grupo(
+                assigned_to,
+                group,
+            )
+        ):
+            raise PermissionDenied(
+                "El responsable debe ser un integrante activo del equipo."
             )
 
         if assigned_to and not user_can_assign_to_other_user(
