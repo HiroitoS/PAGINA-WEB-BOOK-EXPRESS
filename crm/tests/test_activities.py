@@ -363,6 +363,84 @@ class CRMActivityAndWorkItemTests(TestCase):
             task.delete()
         self.assertTrue(CRMWorkItemLink.objects.filter(pk=link.pk).exists())
 
+    def test_crm_linked_event_and_reminder_are_protected(self):
+        event = CalendarEvent.objects.create(
+            title="Reunión comercial",
+            created_by=self.admin,
+            assigned_to=self.advisor,
+            start_at=timezone.now() + timedelta(days=1),
+        )
+        reminder = Reminder.objects.create(
+            title="Avisar sobre la reunión",
+            created_by=self.admin,
+            user=self.advisor,
+            event=event,
+            remind_at=timezone.now() + timedelta(hours=2),
+        )
+        event_link = link_work_item_to_opportunity(
+            opportunity=self.opportunity,
+            created_by=self.admin,
+            event=event,
+        )
+        reminder_link = link_work_item_to_opportunity(
+            opportunity=self.opportunity,
+            created_by=self.admin,
+            reminder=reminder,
+        )
+
+        permission = Permission.objects.get(
+            content_type__app_label="workspaces",
+            codename="use_workspace",
+        )
+        self.admin.user_permissions.add(permission)
+        self.client.force_login(self.admin)
+
+        for url in (
+            f"/api/admin/events/{event.id}/",
+            f"/api/admin/reminders/{reminder.id}/",
+        ):
+            response = self.client.delete(url)
+            self.assertEqual(response.status_code, 400)
+
+        with self.assertRaises(ProtectedError):
+            event.delete()
+        with self.assertRaises(ProtectedError):
+            reminder.delete()
+
+        self.assertTrue(CRMWorkItemLink.objects.filter(pk=event_link.pk).exists())
+        self.assertTrue(CRMWorkItemLink.objects.filter(pk=reminder_link.pk).exists())
+
+    def test_task_with_crm_linked_reminder_is_protected(self):
+        task = Task.objects.create(
+            title="Tarea comercial con recordatorio",
+            created_by=self.admin,
+            assigned_to=self.advisor,
+        )
+        reminder = Reminder.objects.create(
+            title="Recordatorio comercial",
+            created_by=self.admin,
+            user=self.advisor,
+            task=task,
+            remind_at=timezone.now() + timedelta(hours=3),
+        )
+        link = link_work_item_to_opportunity(
+            opportunity=self.opportunity,
+            created_by=self.admin,
+            reminder=reminder,
+        )
+
+        permission = Permission.objects.get(
+            content_type__app_label="workspaces",
+            codename="use_workspace",
+        )
+        self.admin.user_permissions.add(permission)
+        self.client.force_login(self.admin)
+
+        response = self.client.delete(f"/api/admin/tasks/{task.id}/")
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(Task.objects.filter(pk=task.pk).exists())
+        self.assertTrue(CRMWorkItemLink.objects.filter(pk=link.pk).exists())
+
     def test_link_accepts_exactly_one_workspace_item(self):
         task = Task.objects.create(
             title="Preparar propuesta",
