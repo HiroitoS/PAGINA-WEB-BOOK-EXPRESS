@@ -24,6 +24,7 @@ from crm.services import (
     CommercialActivityError,
     CRMWorkItemLinkError,
     create_opportunity,
+    create_opportunity_task,
     link_work_item_to_opportunity,
     link_work_item_to_school,
     record_commercial_activity,
@@ -240,6 +241,48 @@ class CRMActivityAndWorkItemTests(TestCase):
 
         self.assertEqual(len(activities), 1)
         self.assertIsNone(activities[0].opportunity)
+
+    def test_crm_next_task_retains_school_opportunity_origin_and_reminder(self):
+        activity = record_commercial_activity(
+            opportunity=self.opportunity,
+            activity_type=CommercialActivity.ActivityType.VISIT,
+            summary="Presentación de textos al colegio",
+            result="Solicitaron una propuesta educativa.",
+            performed_by=self.advisor,
+            created_by=self.advisor,
+            contact=self.contact,
+        )
+        remind_at = timezone.now() + timedelta(hours=4)
+
+        task = create_opportunity_task(
+            opportunity=self.opportunity,
+            actor=self.advisor,
+            title="Enviar propuesta al colegio",
+            reminder_at=remind_at,
+            origin_activity=activity,
+            commercial_action_type=CommercialActivity.ActivityType.FOLLOW_UP,
+        )
+
+        link = CRMWorkItemLink.objects.select_related(
+            "school", "opportunity", "origin_activity", "task"
+        ).get(task=task)
+        reminder = Reminder.objects.get(task=task, source="task")
+
+        self.assertEqual(link.school_id, self.school.id)
+        self.assertEqual(link.opportunity_id, self.opportunity.id)
+        self.assertEqual(link.origin_activity_id, activity.id)
+        self.assertEqual(link.created_by_id, self.advisor.id)
+        self.assertEqual(link.commercial_action_type, "follow_up")
+        self.assertEqual(task.assigned_to_id, self.advisor.id)
+        self.assertEqual(reminder.user_id, self.advisor.id)
+        self.assertEqual(reminder.remind_at, task.reminder_at)
+        self.assertEqual(reminder.status, "pending")
+        self.assertEqual(
+            CRMWorkItemLink.objects.filter(task=task).count(), 1
+        )
+        self.assertFalse(
+            CRMWorkItemLink.objects.filter(reminder=reminder).exists()
+        )
 
     def test_link_accepts_exactly_one_workspace_item(self):
         task = Task.objects.create(
