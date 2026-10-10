@@ -258,6 +258,33 @@ class WorkspaceTaskListApiTests(APITestCase):
             ).exists()
         )
 
+    def test_team_list_rejects_reassignment_outside_group(self):
+        shared_list = WorkspaceTaskList.objects.create(
+            name="Lista con responsable",
+            workspace_group=self.group,
+            created_by=self.owner,
+        )
+        task = Task.objects.create(
+            title="Tarea existente",
+            task_list=shared_list,
+            group=self.group,
+            created_by=self.owner,
+            assigned_to=self.member,
+        )
+
+        self.client.force_authenticate(self.owner)
+        response = self.client.patch(
+            reverse("admin-task-detail", args=[task.id]),
+            {
+                "assigned_to": self.outsider.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        task.refresh_from_db()
+        self.assertEqual(task.assigned_to_id, self.member.id)
+
     def test_user_cannot_attach_task_to_hidden_list(self):
         private_list = WorkspaceTaskList.objects.create(
             name="Lista privada del jefe",
