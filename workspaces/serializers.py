@@ -727,6 +727,19 @@ class ReminderSerializer(serializers.ModelSerializer):
             })
 
         if self.instance and self.instance.source == "task":
+            # Título, nota, responsable y grupo los determina la tarea.
+            # Editarlos aquí produciría dos representaciones contradictorias.
+            task_owned_fields = {
+                "title", "message", "user", "group",
+            }
+            if task_owned_fields.intersection(attrs):
+                raise serializers.ValidationError({
+                    "task": (
+                        "El título, responsable y grupo se administran desde "
+                        "la tarea. Aquí solo puedes reprogramar el aviso."
+                    ),
+                })
+
             if "task" in attrs and task != self.instance.task:
                 raise serializers.ValidationError({
                     "task": "No puedes cambiar la tarea del recordatorio principal.",
