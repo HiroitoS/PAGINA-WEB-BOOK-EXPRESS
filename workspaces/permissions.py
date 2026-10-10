@@ -148,6 +148,10 @@ def usuario_puede_ver_tarea(user, task):
     if task.assigned_to_id == user.id:
         return True
 
+    # Privada: solo creador, responsable o administrador (arriba).
+    if task.is_private:
+        return False
+
     if task.group and usuario_es_miembro_activo(user, task.group):
         return True
 
@@ -299,6 +303,10 @@ def usuario_puede_ver_recordatorio(user, reminder):
         return True
 
     if not user or not user.is_authenticated or not reminder:
+        return False
+
+    # Un aviso vinculado a una tarea privada hereda su privacidad.
+    if reminder.task_id and not usuario_puede_ver_tarea(user, reminder.task):
         return False
 
     if reminder.created_by_id == user.id:
