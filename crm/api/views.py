@@ -988,7 +988,7 @@ class SchoolContactViewSet(viewsets.ModelViewSet):
     )
     def work_items(self, request, pk=None):
         contact = self.get_object()
-        queryset = work_items_for_contact(contact)
+        queryset = work_items_for_contact(contact, user=request.user)
 
         page = self.paginate_queryset(queryset)
 
@@ -2453,7 +2453,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
     )
     def school_work_items(self, request, pk=None):
         school = self.get_object()
-        queryset = work_items_for_school(school)
+        queryset = work_items_for_school(school, user=request.user)
 
         page = self.paginate_queryset(queryset)
 
@@ -2834,6 +2834,19 @@ class OpportunityViewSet(viewsets.ModelViewSet):
             )
             .select_related("task", "event", "reminder")
         )
+
+        if not usuario_es_administrador(self.request.user):
+            next_activity_links = next_activity_links.filter(
+                Q(task__isnull=True)
+                | Q(task__is_private=False)
+                | Q(task__created_by=self.request.user)
+                | Q(task__assigned_to=self.request.user)
+            ).filter(
+                Q(reminder__task__isnull=True)
+                | Q(reminder__task__is_private=False)
+                | Q(reminder__task__created_by=self.request.user)
+                | Q(reminder__task__assigned_to=self.request.user)
+            )
 
         queryset = (
             visible_opportunities_queryset(self.request.user)
@@ -4187,7 +4200,7 @@ class OpportunityViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["get"], url_path="work-items")
     def work_items(self, request, pk=None):
         opportunity = self.get_object()
-        queryset = work_items_for_opportunity(opportunity)
+        queryset = work_items_for_opportunity(opportunity, user=request.user)
         page = self.paginate_queryset(queryset)
         if page is not None:
             return self.get_paginated_response(WorkItemLinkSerializer(page, many=True).data)
