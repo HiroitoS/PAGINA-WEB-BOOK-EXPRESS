@@ -6,7 +6,10 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from notifications.models import Notification
+from workspaces.reminder_alerts import sync_reminder_alerts_for_user
 from workspaces.models import (
+    CalendarEvent,
     Reminder,
     Task,
     WorkspaceGroup,
@@ -305,6 +308,86 @@ class ReminderSynchronizationApiTests(TestCase):
         self.assertEqual(response.status_code, 400, response.data)
         reminder.refresh_from_db()
         self.assertEqual(reminder.task_id, task.id)
+
+
+
+    def test_cannot_attach_reminder_to_another_users_event(self):
+        outsider = User.objects.create_user(
+            username="outside-event-owner",
+            password="test-password",
+        )
+        private_event = CalendarEvent.objects.create(
+            title="Evento de otro asesor",
+            created_by=outsider,
+            assigned_to=outsider,
+            start_at=timezone.now() + timedelta(days=1),
+        )
+        response = self.client.post(
+            "/api/admin/reminders/",
+            {
+                "title": "Aviso de evento ajeno",
+                "event": private_event.id,
+                "remind_at": (timezone.now() + timedelta(hours=1)).isoformat(),
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertFalse(
+            Reminder.objects.filter(event=private_event).exists()
+        )
+
+    def test_partial_update_cannot_add_event_to_linked_reminder(self):
+        task, _ = self.create_task_with_reminder()
+        manual_reminder = Reminder.objects.create(
+            created_by=self.user,
+            user=self.user,
+            task=task,
+            title="Seguimiento adicional",
+            remind_at=timezone.now() + timedelta(days=1),
+            source="manual",
+        )
+        event = CalendarEvent.objects.create(
+            title="Reunión",
+            created_by=self.user,
+            assigned_to=self.user,
+            start_at=timezone.now() + timedelta(days=1),
+        )
+
+        response = self.client.patch(
+            f"/api/admin/reminders/{manual_reminder.id}/",
+            {"event": event.id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        manual_reminder.refresh_from_db()
+        self.assertIsNone(manual_reminder.event_id)
+
+    def test_closing_task_resolves_active_reminder_alert(self):
+        task, reminder = self.create_task_with_reminder()
+        soon = timezone.now() + timedelta(minutes=20)
+        response = self.client.patch(
+            f"/api/admin/tasks/{task.id}/",
+            {"reminder_at": soon.isoformat()},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        sync_reminder_alerts_for_user(self.user)
+
+        alert = Notification.objects.get(
+            recipient=self.user,
+            event_type="workspace.reminder_upcoming",
+            source_id=str(reminder.id),
+        )
+        self.assertFalse(alert.is_resolved)
+
+        response = self.client.post(
+            f"/api/admin/tasks/{task.id}/change-status/",
+            {"status": "completed", "note": "Gestión finalizada"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        alert.refresh_from_db()
+        self.assertTrue(alert.is_resolved)
 
 
 
