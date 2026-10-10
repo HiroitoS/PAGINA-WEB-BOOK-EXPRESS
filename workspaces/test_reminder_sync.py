@@ -108,6 +108,56 @@ class ReminderSynchronizationApiTests(TestCase):
 
         self.assertEqual(task.reminder_at, reminder.remind_at)
 
+    def test_completing_reminder_keeps_original_task_pending(self):
+        task, reminder = self.create_task_with_reminder()
+
+        response = self.client.patch(
+            f"/api/admin/reminders/{reminder.id}/",
+            {"status": "completed", "is_completed": True},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        task.refresh_from_db()
+        reminder.refresh_from_db()
+
+        self.assertEqual(task.status, "pending")
+        self.assertIsNone(task.completed_at)
+        self.assertIsNone(task.reminder_at)
+        self.assertEqual(reminder.status, "completed")
+        self.assertIsNotNone(reminder.completed_at)
+        self.assertEqual(
+            Reminder.objects.filter(task=task, source="task").count(),
+            1,
+        )
+
+    def test_completing_primary_reminder_keeps_independent_manual_reminder(self):
+        task, primary_reminder = self.create_task_with_reminder()
+        manual_reminder = Reminder.objects.create(
+            created_by=self.user,
+            user=self.user,
+            task=task,
+            title="Aviso manual adicional",
+            source="manual",
+            remind_at=timezone.now() + timedelta(days=1),
+        )
+
+        response = self.client.patch(
+            f"/api/admin/reminders/{primary_reminder.id}/",
+            {"is_completed": True},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        task.refresh_from_db()
+        manual_reminder.refresh_from_db()
+        self.assertEqual(task.status, "pending")
+        self.assertEqual(manual_reminder.status, "pending")
+        self.assertEqual(
+            Reminder.objects.filter(task=task, source="manual").count(),
+            1,
+        )
+
     def test_clearing_task_reminder_removes_only_canonical_record(self):
         task, reminder = self.create_task_with_reminder()
 
