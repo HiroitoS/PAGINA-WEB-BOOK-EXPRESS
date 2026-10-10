@@ -18,6 +18,8 @@ from .permissions import (
     usuario_puede_dar_seguimiento_tarea,
     usuario_puede_editar_datos_evento,
     usuario_puede_editar_datos_recordatorio,
+    usuario_puede_ver_evento,
+    usuario_puede_ver_tarea,
     usuario_puede_editar_datos_tarea,
     usuario_puede_gestionar_grupo,
     usuario_puede_gestionar_lista_tareas,
@@ -695,13 +697,55 @@ class ReminderSerializer(serializers.ModelSerializer):
         return not self.get_can_edit_details(obj) and not self.get_can_complete(obj)
 
     def validate(self, attrs):
-        task = attrs.get("task")
-        event = attrs.get("event")
+        task = attrs.get(
+            "task",
+            self.instance.task if self.instance else None,
+        )
+        event = attrs.get(
+            "event",
+            self.instance.event if self.instance else None,
+        )
+        user = get_request_user(self)
 
         if task and event:
             raise serializers.ValidationError({
-                "event": "El recordatorio debe estar vinculado a una tarea o a un evento, no a ambos."
+                "event": (
+                    "El recordatorio debe estar vinculado a una tarea "
+                    "o a un evento, no a ambos."
+                ),
             })
+
+        # El permiso sobre el recordatorio no concede acceso a otro objeto.
+        if task and "task" in attrs and not usuario_puede_ver_tarea(user, task):
+            raise serializers.ValidationError({
+                "task": "No tienes acceso a esta tarea.",
+            })
+
+        if event and "event" in attrs and not usuario_puede_ver_evento(user, event):
+            raise serializers.ValidationError({
+                "event": "No tienes acceso a este evento.",
+            })
+
+        if self.instance and self.instance.source == "task":
+            if "task" in attrs and task != self.instance.task:
+                raise serializers.ValidationError({
+                    "task": "No puedes cambiar la tarea del recordatorio principal.",
+                })
+            if "event" in attrs and attrs["event"] is not None:
+                raise serializers.ValidationError({
+                    "event": "El recordatorio principal pertenece a su tarea.",
+                })
+            if (
+                self.instance.task
+                and self.instance.task.status in {"completed", "cancelled"}
+                and attrs
+            ):
+                raise serializers.ValidationError({
+                    "task": (
+                        "Primero debes reabrir la tarea para modificar "
+                        "su recordatorio principal."
+                    ),
+                })
 
         return attrs
 
