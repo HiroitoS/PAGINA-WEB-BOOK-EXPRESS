@@ -88,6 +88,62 @@ class WorkspaceMembership(TimeStampedModel):
         return f"{self.user} - {self.group}"
 
 
+class WorkspaceTaskList(TimeStampedModel):
+    """
+    Lista funcional de ToDo.
+
+    Se mantiene separada de WorkspaceGroup:
+    - WorkspaceGroup representa un equipo/personas.
+    - WorkspaceTaskList organiza tareas para el usuario o para un equipo.
+    """
+    name = models.CharField(
+        max_length=150,
+        verbose_name="Nombre de la lista",
+    )
+    description = models.TextField(
+        blank=True,
+        verbose_name="Descripción",
+    )
+    color = models.CharField(
+        max_length=30,
+        blank=True,
+        default="#dc2626",
+        verbose_name="Color",
+    )
+    workspace_group = models.ForeignKey(
+        WorkspaceGroup,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="task_lists",
+        verbose_name="Equipo de trabajo",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_workspace_task_lists",
+        verbose_name="Creado por",
+    )
+    position = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Orden",
+    )
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name="Activa",
+    )
+
+    class Meta:
+        verbose_name = "Lista de tareas"
+        verbose_name_plural = "Listas de tareas"
+        ordering = ["position", "name", "id"]
+
+    def __str__(self):
+        return self.name
+
+
 class Task(TimeStampedModel):
     STATUS_CHOICES = [
         ("pending", "Pendiente"),
@@ -154,6 +210,14 @@ class Task(TimeStampedModel):
         blank=True,
         related_name="tasks",
         verbose_name="Grupo de trabajo"
+    )
+    task_list = models.ForeignKey(
+        WorkspaceTaskList,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="tasks",
+        verbose_name="Lista de tareas",
     )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -232,6 +296,49 @@ class Task(TimeStampedModel):
     def mark_completed(self):
         self.status = "completed"
         self.completed_at = timezone.now()
+
+
+class TaskMyDaySelection(TimeStampedModel):
+    """
+    Selección personal y temporal de una tarea para "Mi día".
+
+    La selección pertenece al usuario, no a la tarea compartida. Así dos
+    usuarios que pueden ver la misma tarea pueden organizar su jornada de
+    manera independiente sin alterar la planificación ni la responsabilidad
+    comercial de la tarea.
+    """
+
+    task = models.ForeignKey(
+        Task,
+        on_delete=models.CASCADE,
+        related_name="my_day_selections",
+        verbose_name="Tarea",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="task_my_day_selections",
+        verbose_name="Usuario",
+    )
+    selected_date = models.DateField(
+        default=timezone.localdate,
+        db_index=True,
+        verbose_name="Día seleccionado",
+    )
+
+    class Meta:
+        verbose_name = "Selección de Mi día"
+        verbose_name_plural = "Selecciones de Mi día"
+        ordering = ["-selected_date", "-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["task", "user"],
+                name="workspace_unique_task_my_day_user",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.user} - {self.task} - {self.selected_date}"
 
 
 class TaskComment(TimeStampedModel):
@@ -326,7 +433,14 @@ class CalendarEvent(TimeStampedModel):
     EVENT_TYPE_CHOICES = [
         ("meeting", "Reunión"),
         ("call", "Llamada"),
-        ("visit", "Visita"),
+        ("whatsapp", "WhatsApp"),
+        ("email", "Correo"),
+        ("visit", "Visita coordinada"),
+        ("cold_visit", "Visita en frío"),
+        ("presentation", "Presentación de producto"),
+        ("sample_delivery", "Entrega de muestra"),
+        ("sample_return", "Devolución de muestra"),
+        ("follow_up", "Seguimiento"),
         ("training", "Capacitación"),
         ("delivery", "Entrega"),
         ("deadline", "Fecha límite"),
@@ -429,6 +543,19 @@ class Reminder(TimeStampedModel):
         ("completed", "Completado"),
     ]
 
+    SOURCE_CHOICES = [
+        ("manual", "Manual"),
+        ("task", "Tarea"),
+    ]
+
+    source = models.CharField(
+        max_length=20,
+        choices=SOURCE_CHOICES,
+        default="manual",
+        db_index=True,
+        verbose_name="Origen",
+    )
+
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -494,6 +621,16 @@ class Reminder(TimeStampedModel):
         verbose_name = "Recordatorio"
         verbose_name_plural = "Recordatorios"
         ordering = ["status", "remind_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["task"],
+                condition=models.Q(
+                    source="task",
+                    task__isnull=False,
+                ),
+                name="workspace_unique_primary_task_reminder",
+            ),
+        ]
 
     def __str__(self):
         return self.title

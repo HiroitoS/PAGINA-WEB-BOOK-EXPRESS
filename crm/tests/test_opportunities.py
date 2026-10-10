@@ -11,6 +11,7 @@ from crm.models import (
     Pipeline,
     PipelineStage,
     School,
+    SchoolContact,
 )
 from crm.services import (
     OpportunityTransitionError,
@@ -83,6 +84,14 @@ class CRMOpportunityFlowTests(TestCase):
             category=PipelineStage.Category.OPEN,
             created_by=self.admin,
         )
+        self.quotation_stage = PipelineStage.objects.create(
+            pipeline=self.pipeline,
+            code="cotizacion_enviada",
+            name="Cotización enviada",
+            order=45,
+            category=PipelineStage.Category.OPEN,
+            created_by=self.admin,
+        )
         self.won_stage = PipelineStage.objects.create(
             pipeline=self.pipeline,
             code="adopcion_confirmada",
@@ -113,16 +122,28 @@ class CRMOpportunityFlowTests(TestCase):
                     created_by=self.admin,
                 )
 
-    def test_create_opportunity_uses_initial_stage_and_creates_history(self):
-        opportunity = create_opportunity(
-            title="Adopción escolar 2027",
+    def test_create_opportunity_resolves_school_defaults_and_history(self):
+        contact = SchoolContact.objects.create(
             school=self.school,
-            campaign=self.campaign,
-            pipeline=self.pipeline,
+            full_name="Directora CRM",
+            position="Directora",
+            is_primary=True,
             created_by=self.admin,
         )
 
+        opportunity = create_opportunity(
+            school=self.school,
+            created_by=self.admin,
+        )
+
+        self.assertEqual(
+            opportunity.title,
+            "Campaña escolar 2027 - Colegio CRM",
+        )
+        self.assertEqual(opportunity.campaign, self.campaign)
+        self.assertEqual(opportunity.pipeline, self.pipeline)
         self.assertEqual(opportunity.stage, self.initial_stage)
+        self.assertEqual(opportunity.primary_contact, contact)
         self.assertEqual(opportunity.owner, self.advisor)
         self.assertEqual(opportunity.team, self.team)
         self.assertEqual(opportunity.stage_history.count(), 1)
@@ -135,16 +156,40 @@ class CRMOpportunityFlowTests(TestCase):
         self.assertIsNone(history.from_stage)
         self.assertEqual(history.to_stage, self.initial_stage)
 
-    def test_school_and_campaign_can_have_multiple_opportunities(self):
-        first = create_opportunity(
-            title="Campaña escolar 2027",
+    def test_open_duplicate_for_same_school_campaign_pipeline_is_rejected(
+        self,
+    ):
+        create_opportunity(
             school=self.school,
             campaign=self.campaign,
             pipeline=self.pipeline,
             created_by=self.admin,
         )
+
+        with self.assertRaises(OpportunityTransitionError):
+            create_opportunity(
+                school=self.school,
+                campaign=self.campaign,
+                pipeline=self.pipeline,
+                created_by=self.admin,
+            )
+
+    def test_new_opportunity_is_allowed_after_previous_one_is_closed(self):
+        first = create_opportunity(
+            school=self.school,
+            campaign=self.campaign,
+            pipeline=self.pipeline,
+            created_by=self.admin,
+        )
+
+        transition_opportunity_stage(
+            opportunity=first,
+            to_stage=self.lost_stage,
+            changed_by=self.advisor,
+            note="El colegio no continuará este año.",
+        )
+
         second = create_opportunity(
-            title="Plan lector especial 2027",
             school=self.school,
             campaign=self.campaign,
             pipeline=self.pipeline,
@@ -156,9 +201,11 @@ class CRMOpportunityFlowTests(TestCase):
             Opportunity.objects.filter(
                 school=self.school,
                 campaign=self.campaign,
+                pipeline=self.pipeline,
             ).count(),
             2,
         )
+        self.assertFalse(second.is_closed)
 
     def test_lost_transition_requires_reason_and_closes_opportunity(self):
         opportunity = create_opportunity(
@@ -235,6 +282,77 @@ class CRMOpportunityFlowTests(TestCase):
             latest_history.note,
             "El colegio solicitó retomar la propuesta.",
         )
+
+    def test_manual_transition_to_quotation_sent_is_rejected(self):
+        opportunity = create_opportunity(
+            title="Cotización controlada",
+            school=self.school,
+            campaign=self.campaign,
+            pipeline=self.pipeline,
+            created_by=self.admin,
+        )
+
+        with self.assertRaisesMessage(
+            OpportunityTransitionError,
+            "automáticamente",
+        ):
+            transition_opportunity_stage(
+                opportunity=opportunity,
+                to_stage=self.quotation_stage,
+                changed_by=self.advisor,
+            )
+
+    def test_quotation_sent_stage_cannot_move_back_manually(self):
+        opportunity = create_opportunity(
+            title="Cotización ya enviada",
+            school=self.school,
+            campaign=self.campaign,
+            pipeline=self.pipeline,
+            created_by=self.admin,
+        )
+        opportunity = transition_opportunity_stage(
+            opportunity=opportunity,
+            to_stage=self.quotation_stage,
+            changed_by=self.advisor,
+            allow_quotation_sent=True,
+        )
+
+        with self.assertRaisesMessage(
+            OpportunityTransitionError,
+            "no retrocede manualmente",
+        ):
+            transition_opportunity_stage(
+                opportunity=opportunity,
+                to_stage=self.negotiation_stage,
+                changed_by=self.advisor,
+            )
+
+    def test_won_opportunity_cannot_use_generic_reopen(self):
+        opportunity = create_opportunity(
+            title="Adopción confirmada",
+            school=self.school,
+            campaign=self.campaign,
+            pipeline=self.pipeline,
+            created_by=self.admin,
+        )
+        closed = transition_opportunity_stage(
+            opportunity=opportunity,
+            to_stage=self.won_stage,
+            changed_by=self.admin,
+            note="Adopción confirmada.",
+            allow_won=True,
+        )
+
+        with self.assertRaisesMessage(
+            OpportunityTransitionError,
+            "no se reabre desde el pipeline",
+        ):
+            reopen_opportunity(
+                opportunity=closed,
+                to_stage=self.negotiation_stage,
+                changed_by=self.admin,
+                reason="Cambio posterior a la adopción.",
+            )
 
     def test_won_stage_is_reserved_for_adoption_flow(self):
         opportunity = create_opportunity(

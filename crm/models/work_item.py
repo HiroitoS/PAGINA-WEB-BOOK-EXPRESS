@@ -6,12 +6,29 @@ from core.models import TimeStampedModel
 
 from .activity import CommercialActivity
 from .opportunity import Opportunity
+from .school import School, SchoolContact
 
 
 class CRMWorkItemLink(TimeStampedModel):
+    school = models.ForeignKey(
+        School,
+        on_delete=models.PROTECT,
+        related_name="crm_work_item_links",
+        verbose_name="Colegio",
+    )
+    contact = models.ForeignKey(
+        SchoolContact,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="crm_work_item_links",
+        verbose_name="Contacto del colegio",
+    )
     opportunity = models.ForeignKey(
         Opportunity,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="work_item_links",
         verbose_name="Oportunidad",
     )
@@ -23,9 +40,16 @@ class CRMWorkItemLink(TimeStampedModel):
         related_name="generated_work_item_links",
         verbose_name="Actividad de origen",
     )
+    commercial_action_type = models.CharField(
+        max_length=30,
+        choices=CommercialActivity.ActivityType.choices,
+        blank=True,
+        default="",
+        verbose_name="Próxima acción comercial",
+    )
     task = models.ForeignKey(
         "workspaces.Task",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         null=True,
         blank=True,
         related_name="crm_links",
@@ -99,6 +123,10 @@ class CRMWorkItemLink(TimeStampedModel):
         ]
         indexes = [
             models.Index(
+                fields=["school", "-created_at"],
+                name="crm_work_school_date_idx",
+            ),
+            models.Index(
                 fields=["opportunity", "-created_at"],
                 name="crm_work_opp_date_idx",
             ),
@@ -109,6 +137,8 @@ class CRMWorkItemLink(TimeStampedModel):
         ]
 
     def clean(self):
+        errors = {}
+
         selected_items = sum(
             item is not None
             for item in (self.task_id, self.event_id, self.reminder_id)
@@ -121,18 +151,44 @@ class CRMWorkItemLink(TimeStampedModel):
             )
 
         if (
+            self.school_id
+            and self.contact_id
+            and self.contact.school_id != self.school_id
+        ):
+            errors["contact"] = (
+                "El contacto seleccionado no pertenece al colegio."
+            )
+
+        if (
+            self.school_id
+            and self.opportunity_id
+            and self.opportunity.school_id != self.school_id
+        ):
+            errors["opportunity"] = (
+                "La oportunidad seleccionada no pertenece al colegio."
+            )
+
+        if (
+            self.school_id
+            and self.origin_activity_id
+            and self.origin_activity.school_id != self.school_id
+        ):
+            errors["origin_activity"] = (
+                "La actividad de origen no pertenece al colegio."
+            )
+
+        if (
             self.origin_activity_id
             and self.opportunity_id
+            and self.origin_activity.opportunity_id
             and self.origin_activity.opportunity_id != self.opportunity_id
         ):
-            raise ValidationError(
-                {
-                    "origin_activity": (
-                        "La actividad de origen no pertenece a la "
-                        "oportunidad seleccionada."
-                    )
-                }
+            errors["origin_activity"] = (
+                "La actividad de origen pertenece a otra oportunidad."
             )
+
+        if errors:
+            raise ValidationError(errors)
 
     @property
     def work_item_type(self):
@@ -143,4 +199,4 @@ class CRMWorkItemLink(TimeStampedModel):
         return "reminder"
 
     def __str__(self):
-        return f"{self.opportunity} - {self.work_item_type}"
+        return f"{self.school} - {self.work_item_type}"

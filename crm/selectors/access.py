@@ -104,11 +104,9 @@ def visible_commercial_activities_queryset(user):
     if usuario_es_administrador(user):
         return queryset
 
-    visible_opportunity_ids = visible_opportunities_queryset(
-        user
-    ).values_list(
+    visible_school_ids = visible_schools_queryset(user).values_list(
         "id",
         flat=True,
     )
 
-    return queryset.filter(opportunity_id__in=visible_opportunity_ids)
+    return queryset.filter(school_id__in=visible_school_ids)

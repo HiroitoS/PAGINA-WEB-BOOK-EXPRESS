@@ -4,6 +4,7 @@ from django.db import transaction
 from accounts.permissions import usuario_es_administrador
 
 from .models import CalendarEvent, Reminder, Task
+from .reminder_services import sync_primary_task_reminder
 from .notification_events import (
     notify_event_assigned,
     notify_reminder_assigned,
@@ -114,6 +115,11 @@ def create_workspace_task(
     )
     task.full_clean()
     task.save()
+
+    sync_primary_task_reminder(
+        task,
+        actor=actor,
+    )
 
     notify_task_assigned(
         task,

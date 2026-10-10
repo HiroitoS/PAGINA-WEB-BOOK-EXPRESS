@@ -64,6 +64,44 @@ def usuario_puede_gestionar_grupo(user, group):
     ).exists()
 
 
+def usuario_puede_ver_lista_tareas(user, task_list):
+    if usuario_es_administrador(user):
+        return True
+
+    if not user or not user.is_authenticated or not task_list:
+        return False
+
+    if task_list.created_by_id == user.id:
+        return True
+
+    if (
+        task_list.workspace_group
+        and usuario_es_miembro_activo(user, task_list.workspace_group)
+    ):
+        return True
+
+    return False
+
+
+def usuario_puede_gestionar_lista_tareas(user, task_list):
+    if usuario_es_administrador(user):
+        return True
+
+    if not user or not user.is_authenticated or not task_list:
+        return False
+
+    if task_list.created_by_id == user.id:
+        return True
+
+    if (
+        task_list.workspace_group
+        and usuario_puede_gestionar_grupo(user, task_list.workspace_group)
+    ):
+        return True
+
+    return False
+
+
 def usuario_es_miembro_activo(user, group):
     if usuario_es_administrador(user):
         return True
@@ -73,6 +111,23 @@ def usuario_es_miembro_activo(user, group):
 
     if group.created_by_id == user.id:
         return True
+
+    return group.memberships.filter(
+        user=user,
+        is_active=True,
+    ).exists()
+
+
+def usuario_es_integrante_activo_grupo(user, group):
+    """
+    Valida pertenencia real y activa a un equipo.
+
+    A diferencia de usuario_es_miembro_activo, no concede un bypass por ser
+    administrador. Se usa para validar responsables de tareas: un usuario
+    puede supervisar un equipo sin convertirse automáticamente en integrante.
+    """
+    if not user or not user.is_authenticated or not group:
+        return False
 
     return group.memberships.filter(
         user=user,
@@ -92,6 +147,10 @@ def usuario_puede_ver_tarea(user, task):
 
     if task.assigned_to_id == user.id:
         return True
+
+    # Privada: solo creador, responsable o administrador (arriba).
+    if task.is_private:
+        return False
 
     if task.group and usuario_es_miembro_activo(user, task.group):
         return True
@@ -244,6 +303,10 @@ def usuario_puede_ver_recordatorio(user, reminder):
         return True
 
     if not user or not user.is_authenticated or not reminder:
+        return False
+
+    # Un aviso vinculado a una tarea privada hereda su privacidad.
+    if reminder.task_id and not usuario_puede_ver_tarea(user, reminder.task):
         return False
 
     if reminder.created_by_id == user.id:

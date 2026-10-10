@@ -40,6 +40,7 @@ from workspaces.views import (
     WorkspaceCalendarAPIView,
     WorkspaceGroupViewSet,
     WorkspaceMembershipViewSet,
+    WorkspaceTaskListViewSet,
     WorkspaceSummaryAPIView,
     WorkspaceAssignableUsersAPIView,
 )
@@ -72,6 +73,7 @@ admin_router.register(r"users", AdminUserViewSet, basename="admin-user")
 admin_router.register(r"roles", AdminGroupViewSet, basename="admin-role")
 admin_router.register(r"workspace-groups", WorkspaceGroupViewSet, basename="admin-workspace-group")
 admin_router.register(r"workspace-memberships", WorkspaceMembershipViewSet, basename="admin-workspace-membership")
+admin_router.register(r"task-lists", WorkspaceTaskListViewSet, basename="admin-task-list")
 admin_router.register(r"tasks", TaskViewSet, basename="admin-task")
 admin_router.register(r"calendar-events", CalendarEventViewSet, basename="admin-calendar-event")
 admin_router.register(r"reminders", ReminderViewSet, basename="admin-reminder")

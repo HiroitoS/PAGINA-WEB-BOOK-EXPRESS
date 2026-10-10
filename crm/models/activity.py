@@ -6,7 +6,7 @@ from django.utils import timezone
 from core.models import TimeStampedModel
 
 from .opportunity import Opportunity
-from .school import SchoolContact
+from .school import School, SchoolContact
 
 
 class CommercialActivity(TimeStampedModel):
@@ -15,16 +15,25 @@ class CommercialActivity(TimeStampedModel):
         WHATSAPP = "whatsapp", "WhatsApp"
         EMAIL = "email", "Correo"
         MEETING = "meeting", "Reunión"
-        VISIT = "visit", "Visita"
-        PRESENTATION = "presentation", "Presentación"
+        VISIT = "visit", "Visita coordinada"
+        COLD_VISIT = "cold_visit", "Visita en frío"
+        PRESENTATION = "presentation", "Presentación de producto"
         SAMPLE_DELIVERY = "sample_delivery", "Entrega de muestra"
         SAMPLE_RETURN = "sample_return", "Devolución de muestra"
         FOLLOW_UP = "follow_up", "Seguimiento"
         OTHER = "other", "Otro"
 
+    school = models.ForeignKey(
+        School,
+        on_delete=models.PROTECT,
+        related_name="commercial_activities",
+        verbose_name="Colegio",
+    )
     opportunity = models.ForeignKey(
         Opportunity,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="commercial_activities",
         verbose_name="Oportunidad",
     )
@@ -60,6 +69,32 @@ class CommercialActivity(TimeStampedModel):
         default=timezone.now,
         verbose_name="Fecha de la actividad",
     )
+    latitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        verbose_name="Latitud registrada",
+    )
+    longitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        verbose_name="Longitud registrada",
+    )
+    location_accuracy_m = models.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name="Precisión de ubicación (m)",
+    )
+    location_captured_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Fecha de captura de ubicación",
+    )
     is_important = models.BooleanField(
         default=False,
         verbose_name="Importante",
@@ -79,6 +114,10 @@ class CommercialActivity(TimeStampedModel):
         ordering = ["-occurred_at", "-id"]
         indexes = [
             models.Index(
+                fields=["school", "-occurred_at"],
+                name="crm_act_school_date_idx",
+            ),
+            models.Index(
                 fields=["opportunity", "-occurred_at"],
                 name="crm_act_opp_date_idx",
             ),
@@ -93,19 +132,31 @@ class CommercialActivity(TimeStampedModel):
         ]
 
     def clean(self):
+        errors = {}
+
         if (
-            self.opportunity_id
+            self.school_id
             and self.contact_id
-            and self.contact.school_id != self.opportunity.school_id
+            and self.contact.school_id != self.school_id
         ):
-            raise ValidationError(
-                {
-                    "contact": (
-                        "El contacto seleccionado no pertenece al colegio "
-                        "de la oportunidad."
-                    )
-                }
+            errors["contact"] = (
+                "El contacto seleccionado no pertenece al colegio."
             )
 
+        if (
+            self.school_id
+            and self.opportunity_id
+            and self.opportunity.school_id != self.school_id
+        ):
+            errors["opportunity"] = (
+                "La oportunidad seleccionada no pertenece al colegio."
+            )
+
+        if errors:
+            raise ValidationError(errors)
+
     def __str__(self):
-        return f"{self.get_activity_type_display()} - {self.opportunity}"
+        return (
+            f"{self.get_activity_type_display()} - "
+            f"{self.school.name}"
+        )
