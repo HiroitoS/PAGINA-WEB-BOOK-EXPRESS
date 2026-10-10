@@ -8,6 +8,48 @@ from .models import Task, TaskComment, TaskStatusHistory
 
 class TaskManagementLifecycleTests(TestCase):
 
+    def test_unlinked_task_without_history_can_be_deleted(self):
+        task = self.create_task()
+        self.client.force_login(self.creator)
+
+        response = self.client.delete(f"/api/admin/tasks/{task.id}/")
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Task.objects.filter(pk=task.id).exists())
+
+    def test_task_with_management_comment_cannot_be_deleted(self):
+        task = self.create_task()
+        TaskComment.objects.create(
+            task=task,
+            user=self.assignee,
+            action_type="visit",
+            comment="El colegio confirmó una reunión.",
+        )
+        self.client.force_login(self.creator)
+
+        response = self.client.delete(f"/api/admin/tasks/{task.id}/")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(Task.objects.filter(pk=task.id).exists())
+        self.assertTrue(TaskComment.objects.filter(task=task).exists())
+
+    def test_task_with_status_history_cannot_be_deleted(self):
+        task = self.create_task()
+        TaskStatusHistory.objects.create(
+            task=task,
+            changed_by=self.assignee,
+            old_status="pending",
+            new_status="in_progress",
+            note="En seguimiento",
+        )
+        self.client.force_login(self.creator)
+
+        response = self.client.delete(f"/api/admin/tasks/{task.id}/")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(Task.objects.filter(pk=task.id).exists())
+        self.assertTrue(TaskStatusHistory.objects.filter(task=task).exists())
+
     def test_task_list_preserves_assignee_operational_permissions(self):
         task = self.create_task()
         self.client.force_login(self.assignee)
