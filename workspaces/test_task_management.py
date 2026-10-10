@@ -1,5 +1,6 @@
 from django.contrib.auth.models import Permission, User
 from django.test import TestCase
+from django.db.models.deletion import ProtectedError
 
 from notifications.models import Notification
 
@@ -32,6 +33,8 @@ class TaskManagementLifecycleTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertTrue(Task.objects.filter(pk=task.id).exists())
         self.assertTrue(TaskComment.objects.filter(task=task).exists())
+        with self.assertRaises(ProtectedError):
+            task.delete()
 
     def test_task_with_status_history_cannot_be_deleted(self):
         task = self.create_task()
@@ -49,6 +52,8 @@ class TaskManagementLifecycleTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertTrue(Task.objects.filter(pk=task.id).exists())
         self.assertTrue(TaskStatusHistory.objects.filter(task=task).exists())
+        with self.assertRaises(ProtectedError):
+            task.delete()
 
     def test_task_list_preserves_assignee_operational_permissions(self):
         task = self.create_task()
