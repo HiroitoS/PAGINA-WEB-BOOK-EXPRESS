@@ -181,6 +181,83 @@ class WorkspaceTaskListApiTests(APITestCase):
         self.assertEqual(task.group_id, self.group.id)
         self.assertEqual(task.assigned_to_id, self.member.id)
 
+    def test_team_list_task_can_stay_unassigned(self):
+        shared_list = WorkspaceTaskList.objects.create(
+            name="Pendientes del equipo",
+            workspace_group=self.group,
+            created_by=self.owner,
+        )
+
+        self.client.force_authenticate(self.owner)
+        response = self.client.post(
+            reverse("admin-task-list"),
+            {
+                "title": "Preparar material de campaña",
+                "task_list": shared_list.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        task = Task.objects.get(pk=response.data["id"])
+        self.assertEqual(task.group_id, self.group.id)
+        self.assertIsNone(task.assigned_to_id)
+
+    def test_team_list_rejects_assignee_outside_group(self):
+        shared_list = WorkspaceTaskList.objects.create(
+            name="Seguimiento del equipo",
+            workspace_group=self.group,
+            created_by=self.owner,
+        )
+
+        self.client.force_authenticate(self.owner)
+        response = self.client.post(
+            reverse("admin-task-list"),
+            {
+                "title": "Tarea inválida",
+                "task_list": shared_list.id,
+                "assigned_to": self.outsider.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(
+            Task.objects.filter(title="Tarea inválida").exists()
+        )
+
+    def test_team_list_rejects_inactive_member_as_assignee(self):
+        shared_list = WorkspaceTaskList.objects.create(
+            name="Campaña activa",
+            workspace_group=self.group,
+            created_by=self.owner,
+        )
+        membership = WorkspaceMembership.objects.get(
+            group=self.group,
+            user=self.member,
+        )
+        membership.is_active = False
+        membership.save(update_fields=["is_active", "updated_at"])
+
+        self.client.force_authenticate(self.owner)
+        response = self.client.post(
+            reverse("admin-task-list"),
+            {
+                "title": "Tarea para miembro inactivo",
+                "task_list": shared_list.id,
+                "assigned_to": self.member.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(
+            Task.objects.filter(
+                title="Tarea para miembro inactivo",
+            ).exists()
+        )
+
     def test_user_cannot_attach_task_to_hidden_list(self):
         private_list = WorkspaceTaskList.objects.create(
             name="Lista privada del jefe",
