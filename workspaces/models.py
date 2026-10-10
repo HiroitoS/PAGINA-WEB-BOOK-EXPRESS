@@ -543,6 +543,19 @@ class Reminder(TimeStampedModel):
         ("completed", "Completado"),
     ]
 
+    SOURCE_CHOICES = [
+        ("manual", "Manual"),
+        ("task", "Tarea"),
+    ]
+
+    source = models.CharField(
+        max_length=20,
+        choices=SOURCE_CHOICES,
+        default="manual",
+        db_index=True,
+        verbose_name="Origen",
+    )
+
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -608,6 +621,16 @@ class Reminder(TimeStampedModel):
         verbose_name = "Recordatorio"
         verbose_name_plural = "Recordatorios"
         ordering = ["status", "remind_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["task"],
+                condition=models.Q(
+                    source="task",
+                    task__isnull=False,
+                ),
+                name="workspace_unique_primary_task_reminder",
+            ),
+        ]
 
     def __str__(self):
         return self.title
