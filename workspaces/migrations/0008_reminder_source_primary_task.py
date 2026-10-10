@@ -64,15 +64,4 @@ class Migration(migrations.Migration):
             backfill_primary_task_reminders,
             remove_backfilled_primary_task_reminders,
         ),
-        migrations.AddConstraint(
-            model_name="reminder",
-            constraint=models.UniqueConstraint(
-                condition=models.Q(
-                    source="task",
-                    task__isnull=False,
-                ),
-                fields=("task",),
-                name="workspace_unique_primary_task_reminder",
-            ),
-        ),
     ]
