@@ -605,6 +605,10 @@ class ReminderSerializer(serializers.ModelSerializer):
         source="get_status_display",
         read_only=True,
     )
+    source_display = serializers.CharField(
+        source="get_source_display",
+        read_only=True,
+    )
     is_completed = serializers.BooleanField(
         required=False,
     )
@@ -635,6 +639,8 @@ class ReminderSerializer(serializers.ModelSerializer):
             "message",
             "description",
             "remind_at",
+            "source",
+            "source_display",
             "status",
             "status_display",
             "is_completed",
@@ -656,6 +662,8 @@ class ReminderSerializer(serializers.ModelSerializer):
             "group_name",
             "task_title",
             "event_title",
+            "source",
+            "source_display",
             "status_display",
             "is_overdue",
             "can_edit_details",
