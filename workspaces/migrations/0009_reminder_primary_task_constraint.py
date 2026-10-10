@@ -8,6 +8,20 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        migrations.AlterField(
+            model_name="reminder",
+            name="source",
+            field=models.CharField(
+                choices=[
+                    ("manual", "Manual"),
+                    ("task", "Tarea"),
+                ],
+                db_index=True,
+                default="manual",
+                max_length=20,
+                verbose_name="Origen",
+            ),
+        ),
         migrations.AddConstraint(
             model_name="reminder",
             constraint=models.UniqueConstraint(
