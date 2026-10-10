@@ -565,6 +565,7 @@ class TaskViewSet(viewsets.ModelViewSet):
 
         return queryset.order_by("status", "due_at", "-created_at").distinct()
 
+    @transaction.atomic
     def perform_create(self, serializer):
         group = serializer.validated_data.get("group")
         task_list = serializer.validated_data.get("task_list")
@@ -655,6 +656,7 @@ class TaskViewSet(viewsets.ModelViewSet):
             actor=self.request.user,
         )
 
+    @transaction.atomic
     def perform_update(self, serializer):
         task = self.get_object()
 
@@ -973,6 +975,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         methods=["post"],
         url_path="change-status",
     )
+    @transaction.atomic
     def change_status(self, request, pk=None):
         task = self.get_object()
 
@@ -1305,6 +1308,7 @@ class ReminderViewSet(viewsets.ModelViewSet):
             status=status.HTTP_200_OK,
         )
 
+    @transaction.atomic
     def perform_create(self, serializer):
         assigned_user = serializer.validated_data.get("user")
         group = serializer.validated_data.get("group")
@@ -1342,6 +1346,7 @@ class ReminderViewSet(viewsets.ModelViewSet):
             actor=self.request.user,
         )
 
+    @transaction.atomic
     def perform_update(self, serializer):
         reminder = self.get_object()
         incoming_keys = set(self.request.data.keys())
@@ -1409,6 +1414,7 @@ class ReminderViewSet(viewsets.ModelViewSet):
             previous_user=old_user,
         )
 
+    @transaction.atomic
     def perform_destroy(self, instance):
         if not usuario_puede_editar_datos_recordatorio(
             self.request.user,
