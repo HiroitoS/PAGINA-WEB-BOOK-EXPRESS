@@ -57,7 +57,7 @@ class CRMWorkItemLink(TimeStampedModel):
     )
     event = models.ForeignKey(
         "workspaces.CalendarEvent",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         null=True,
         blank=True,
         related_name="crm_links",
@@ -65,7 +65,7 @@ class CRMWorkItemLink(TimeStampedModel):
     )
     reminder = models.ForeignKey(
         "workspaces.Reminder",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         null=True,
         blank=True,
         related_name="crm_links",
