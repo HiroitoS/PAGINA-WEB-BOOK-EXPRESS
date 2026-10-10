@@ -8,7 +8,7 @@ from django.utils.dateparse import parse_date, parse_datetime
 
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -24,6 +24,11 @@ from .models import (
     WorkspaceGroup,
     WorkspaceMembership,
     WorkspaceTaskList,
+)
+from .reminder_services import (
+    clear_task_mirror_for_reminder,
+    sync_primary_task_reminder,
+    sync_task_mirror_from_reminder,
 )
 from .notification_events import (
     notify_event_assigned,
@@ -221,14 +226,20 @@ def visible_reminders_queryset(user):
     if usuario_es_administrador(user):
         return queryset
 
-    group_ids = get_user_group_ids(user)
+    managed_group_ids = WorkspaceMembership.objects.filter(
+        user=user,
+        is_active=True,
+        role__in=["owner", "coordinator"],
+        group__is_active=True,
+    ).values_list("group_id", flat=True)
 
     return queryset.filter(
         Q(created_by=user)
         | Q(user=user)
-        | Q(group_id__in=group_ids)
-        | Q(task__group_id__in=group_ids)
-        | Q(event__group_id__in=group_ids)
+        | Q(group__created_by=user)
+        | Q(group_id__in=managed_group_ids)
+        | Q(task__group_id__in=managed_group_ids)
+        | Q(event__group_id__in=managed_group_ids)
     ).distinct()
 
 
@@ -300,6 +311,7 @@ class WorkspaceGroupViewSet(viewsets.ModelViewSet):
                 "No tienes permiso para eliminar este grupo."
             )
 
+        clear_task_mirror_for_reminder(instance)
         instance.delete()
 
 
@@ -618,7 +630,22 @@ class TaskViewSet(viewsets.ModelViewSet):
         if task_list and task_list.workspace_group_id:
             save_kwargs["group"] = group
 
+        reminder_at = serializer.validated_data.get("reminder_at")
+
+        if reminder_at and not assigned_to:
+            raise ValidationError({
+                "reminder_at": (
+                    "Asigna un responsable antes de programar "
+                    "un recordatorio."
+                )
+            })
+
         task = serializer.save(**save_kwargs)
+
+        sync_primary_task_reminder(
+            task,
+            actor=self.request.user,
+        )
 
         notify_task_assigned(
             task,
@@ -681,12 +708,30 @@ class TaskViewSet(viewsets.ModelViewSet):
                 "No tienes permiso para asignar tareas a otro usuario."
             )
 
+        reminder_at = serializer.validated_data.get(
+            "reminder_at",
+            task.reminder_at,
+        )
+
+        if reminder_at and not assigned_to:
+            raise ValidationError({
+                "reminder_at": (
+                    "Asigna un responsable antes de programar "
+                    "un recordatorio."
+                )
+            })
+
         old_assigned_to = task.assigned_to
         save_kwargs = {}
         if task_list and task_list.workspace_group_id:
             save_kwargs["group"] = group
 
         updated_task = serializer.save(**save_kwargs)
+
+        sync_primary_task_reminder(
+            updated_task,
+            actor=self.request.user,
+        )
 
         notify_task_assigned(
             updated_task,
@@ -843,6 +888,12 @@ class TaskViewSet(viewsets.ModelViewSet):
                 ]
             )
 
+            if new_status in ["completed", "cancelled"]:
+                sync_primary_task_reminder(
+                    task,
+                    actor=request.user,
+                )
+
             self._register_status_history(
                 task=task,
                 old_status=old_status,
@@ -959,6 +1010,12 @@ class TaskViewSet(viewsets.ModelViewSet):
                 "updated_at",
             ]
         )
+
+        if new_status in ["completed", "cancelled"]:
+            sync_primary_task_reminder(
+                task,
+                actor=request.user,
+            )
 
         self._register_status_history(
             task=task,
@@ -1284,7 +1341,8 @@ class ReminderViewSet(viewsets.ModelViewSet):
                     "No tienes permiso para completar este recordatorio."
                 )
 
-            serializer.save()
+            updated_reminder = serializer.save()
+            sync_task_mirror_from_reminder(updated_reminder)
             return
 
         if not usuario_puede_editar_datos_recordatorio(self.request.user, reminder):
@@ -1306,7 +1364,19 @@ class ReminderViewSet(viewsets.ModelViewSet):
             )
 
         old_user = reminder.user
-        updated_reminder = serializer.save()
+
+        save_kwargs = {}
+        if reminder.source == "task" and reminder.task_id:
+            save_kwargs = {
+                "user": reminder.task.assigned_to,
+                "group": reminder.task.group,
+                "task": reminder.task,
+                "event": None,
+                "source": "task",
+            }
+
+        updated_reminder = serializer.save(**save_kwargs)
+        sync_task_mirror_from_reminder(updated_reminder)
 
         notify_reminder_assigned(
             updated_reminder,
@@ -1442,7 +1512,6 @@ class WorkspaceCalendarAPIView(APIView):
         tasks = visible_tasks_queryset(request.user).filter(
             Q(due_at__range=(start, end))
             | Q(start_at__range=(start, end))
-            | Q(reminder_at__range=(start, end))
         ).exclude(
             status__in=["completed", "cancelled"],
         )
@@ -1480,32 +1549,6 @@ class WorkspaceCalendarAPIView(APIView):
                     "description": task.description,
                     "start": task.due_at,
                     "end": task.due_at,
-                    "status": task.status,
-                    "status_display": task.get_status_display(),
-                    "priority": task.priority,
-                    "priority_display": task.get_priority_display(),
-                    "group": task.group_id,
-                    "group_name": task.group.name if task.group else "",
-                    "assigned_to": task.assigned_to_id,
-                    "assigned_to_name": get_display_name(task.assigned_to),
-                    "is_overdue": task.is_overdue,
-                    "completed_at": task.completed_at,
-                    "can_edit_details": can_edit_details,
-                    "can_follow_up": can_follow_up,
-                    "can_complete": can_complete,
-                    "is_read_only": is_read_only,
-                })
-
-            if task.reminder_at:
-                calendar_items.append({
-                    "id": f"task-reminder-{task.id}",
-                    "real_id": task.id,
-                    "task_id": task.id,
-                    "type": "task_reminder",
-                    "title": f"Recordatorio: {task.title}",
-                    "description": task.description,
-                    "start": task.reminder_at,
-                    "end": task.reminder_at,
                     "status": task.status,
                     "status_display": task.get_status_display(),
                     "priority": task.priority,
