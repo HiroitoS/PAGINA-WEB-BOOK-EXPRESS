@@ -118,6 +118,23 @@ def usuario_es_miembro_activo(user, group):
     ).exists()
 
 
+def usuario_es_integrante_activo_grupo(user, group):
+    """
+    Valida pertenencia real y activa a un equipo.
+
+    A diferencia de usuario_es_miembro_activo, no concede un bypass por ser
+    administrador. Se usa para validar responsables de tareas: un usuario
+    puede supervisar un equipo sin convertirse automáticamente en integrante.
+    """
+    if not user or not user.is_authenticated or not group:
+        return False
+
+    return group.memberships.filter(
+        user=user,
+        is_active=True,
+    ).exists()
+
+
 def usuario_puede_ver_tarea(user, task):
     if usuario_es_administrador(user):
         return True
