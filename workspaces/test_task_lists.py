@@ -156,6 +156,103 @@ class WorkspaceTaskListApiTests(APITestCase):
         )
         self.assertFalse(member_group["can_manage"])
 
+    def test_group_member_can_view_but_cannot_manage_another_members_task(self):
+        second_member = User.objects.create_user(
+            username="todo-list-second-member",
+            password="PruebaSegura123",
+        )
+        use_workspace = Permission.objects.get(
+            content_type__app_label="workspaces",
+            codename="use_workspace",
+        )
+        second_member.user_permissions.add(use_workspace)
+        WorkspaceMembership.objects.create(
+            group=self.group,
+            user=second_member,
+            role="member",
+        )
+
+        shared_list = WorkspaceTaskList.objects.create(
+            name="Trabajo compartido",
+            workspace_group=self.group,
+            created_by=self.owner,
+        )
+        task = Task.objects.create(
+            title="Tarea asignada a otra persona",
+            task_list=shared_list,
+            group=self.group,
+            created_by=self.owner,
+            assigned_to=second_member,
+        )
+
+        self.client.force_authenticate(self.member)
+
+        detail_response = self.client.get(
+            reverse("admin-task-detail", args=[task.id]),
+        )
+
+        self.assertEqual(
+            detail_response.status_code,
+            status.HTTP_200_OK,
+        )
+        self.assertFalse(detail_response.data["can_edit_details"])
+        self.assertFalse(detail_response.data["can_follow_up"])
+        self.assertFalse(detail_response.data["can_complete"])
+        self.assertTrue(detail_response.data["is_read_only"])
+
+        update_response = self.client.patch(
+            reverse("admin-task-detail", args=[task.id]),
+            {"priority": "urgent"},
+            format="json",
+        )
+        self.assertEqual(
+            update_response.status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+
+        management_response = self.client.post(
+            reverse("admin-task-register-management", args=[task.id]),
+            {
+                "action_type": "comment",
+                "comment": "Intento de gestión no autorizado.",
+            },
+            format="json",
+        )
+        self.assertEqual(
+            management_response.status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+
+        status_response = self.client.post(
+            reverse("admin-task-change-status", args=[task.id]),
+            {
+                "status": "in_progress",
+                "note": "Intento de cambio no autorizado.",
+            },
+            format="json",
+        )
+        self.assertEqual(
+            status_response.status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+
+        comment_response = self.client.post(
+            reverse("admin-task-add-comment", args=[task.id]),
+            {
+                "action_type": "comment",
+                "comment": "Intento de comentario no autorizado.",
+            },
+            format="json",
+        )
+        self.assertEqual(
+            comment_response.status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+
+        task.refresh_from_db()
+        self.assertEqual(task.priority, "medium")
+        self.assertEqual(task.status, "pending")
+
     def test_team_list_keeps_task_and_workspace_group_consistent(self):
         shared_list = WorkspaceTaskList.objects.create(
             name="Seguimiento colegios",
