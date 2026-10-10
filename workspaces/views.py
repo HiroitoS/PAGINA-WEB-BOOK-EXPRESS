@@ -311,7 +311,6 @@ class WorkspaceGroupViewSet(viewsets.ModelViewSet):
                 "No tienes permiso para eliminar este grupo."
             )
 
-        clear_task_mirror_for_reminder(instance)
         instance.delete()
 
 
@@ -1393,6 +1392,7 @@ class ReminderViewSet(viewsets.ModelViewSet):
                 "No tienes permiso para eliminar este recordatorio."
             )
 
+        clear_task_mirror_for_reminder(instance)
         instance.delete()
 
 
