@@ -1341,7 +1341,7 @@ class ReminderViewSet(viewsets.ModelViewSet):
                 | Q(user__last_name__icontains=search)
             )
 
-        return queryset.order_by("status", "remind_at", "-created_at").distinct()
+        return queryset.order_by("status", "remind_at", "-created_at", "-id").distinct()
 
     @action(
         detail=False,
