@@ -108,6 +108,46 @@ class ReminderSynchronizationApiTests(TestCase):
 
         self.assertEqual(task.reminder_at, reminder.remind_at)
 
+    def test_primary_reminder_metadata_cannot_be_detached_from_task(self):
+        task, reminder = self.create_task_with_reminder()
+        for payload in (
+            {"title": "Título diferente"},
+            {"description": "Nota que no pertenece a la tarea"},
+            {"assigned_to": self.user.id},
+            {"group": None},
+        ):
+            response = self.client.patch(
+                f"/api/admin/reminders/{reminder.id}/",
+                payload,
+                format="json",
+            )
+            self.assertEqual(response.status_code, 400, response.data)
+
+        reminder.refresh_from_db()
+        task.refresh_from_db()
+        self.assertEqual(reminder.title, task.title)
+        self.assertEqual(reminder.user_id, task.assigned_to_id)
+        self.assertEqual(reminder.group_id, task.group_id)
+        self.assertEqual(reminder.message, "")
+
+    def test_manual_reminder_can_update_its_own_metadata(self):
+        reminder = Reminder.objects.create(
+            title="Aviso manual",
+            created_by=self.user,
+            user=self.user,
+            remind_at=timezone.now() + timedelta(hours=1),
+            source="manual",
+        )
+        response = self.client.patch(
+            f"/api/admin/reminders/{reminder.id}/",
+            {"title": "Aviso manual actualizado", "description": "Nota nueva"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        reminder.refresh_from_db()
+        self.assertEqual(reminder.title, "Aviso manual actualizado")
+        self.assertEqual(reminder.message, "Nota nueva")
+
     def test_completing_reminder_keeps_original_task_pending(self):
         task, reminder = self.create_task_with_reminder()
 
