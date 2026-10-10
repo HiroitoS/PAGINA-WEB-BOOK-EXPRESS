@@ -95,6 +95,57 @@ class WorkspaceTaskListApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data, [])
 
+    def test_backend_exposes_list_and_group_management_scope(self):
+        personal_list = WorkspaceTaskList.objects.create(
+            name="Lista personal",
+            created_by=self.owner,
+        )
+        shared_list = WorkspaceTaskList.objects.create(
+            name="Lista compartida",
+            workspace_group=self.group,
+            created_by=self.owner,
+        )
+
+        self.client.force_authenticate(self.owner)
+        response = self.client.get(reverse("admin-task-list-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        owner_lists = {
+            item["id"]: item
+            for item in response.data
+        }
+        self.assertFalse(owner_lists[personal_list.id]["is_shared"])
+        self.assertTrue(owner_lists[personal_list.id]["can_manage"])
+        self.assertTrue(owner_lists[shared_list.id]["is_shared"])
+        self.assertTrue(owner_lists[shared_list.id]["can_manage"])
+
+        group_response = self.client.get(reverse("admin-workspace-group-list"))
+        self.assertEqual(group_response.status_code, status.HTTP_200_OK)
+        owner_group = next(
+            item
+            for item in group_response.data
+            if item["id"] == self.group.id
+        )
+        self.assertTrue(owner_group["can_manage"])
+
+        self.client.force_authenticate(self.member)
+        response = self.client.get(reverse("admin-task-list-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["id"], shared_list.id)
+        self.assertTrue(response.data[0]["is_shared"])
+        self.assertFalse(response.data[0]["can_manage"])
+
+        group_response = self.client.get(reverse("admin-workspace-group-list"))
+        self.assertEqual(group_response.status_code, status.HTTP_200_OK)
+        member_group = next(
+            item
+            for item in group_response.data
+            if item["id"] == self.group.id
+        )
+        self.assertFalse(member_group["can_manage"])
+
     def test_team_list_keeps_task_and_workspace_group_consistent(self):
         shared_list = WorkspaceTaskList.objects.create(
             name="Seguimiento colegios",

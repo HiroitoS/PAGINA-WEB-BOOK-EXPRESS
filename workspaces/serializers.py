@@ -19,6 +19,8 @@ from .permissions import (
     usuario_puede_editar_datos_evento,
     usuario_puede_editar_datos_recordatorio,
     usuario_puede_editar_datos_tarea,
+    usuario_puede_gestionar_grupo,
+    usuario_puede_gestionar_lista_tareas,
     usuario_puede_reabrir_tarea,
 )
 
@@ -88,6 +90,7 @@ class WorkspaceGroupSerializer(serializers.ModelSerializer):
         many=True,
         read_only=True,
     )
+    can_manage = serializers.SerializerMethodField()
 
     class Meta:
         model = WorkspaceGroup
@@ -100,6 +103,7 @@ class WorkspaceGroupSerializer(serializers.ModelSerializer):
             "created_by",
             "created_by_name",
             "memberships",
+            "can_manage",
             "created_at",
             "updated_at",
         ]
@@ -108,12 +112,17 @@ class WorkspaceGroupSerializer(serializers.ModelSerializer):
             "created_by",
             "created_by_name",
             "memberships",
+            "can_manage",
             "created_at",
             "updated_at",
         ]
 
     def get_created_by_name(self, obj):
         return get_user_display_name(obj.created_by)
+
+    def get_can_manage(self, obj):
+        user = get_request_user(self)
+        return usuario_puede_gestionar_grupo(user, obj)
 
 
 class WorkspaceTaskListSerializer(serializers.ModelSerializer):
@@ -122,6 +131,8 @@ class WorkspaceTaskListSerializer(serializers.ModelSerializer):
         source="workspace_group.name",
         read_only=True,
     )
+    can_manage = serializers.SerializerMethodField()
+    is_shared = serializers.SerializerMethodField()
 
     class Meta:
         model = WorkspaceTaskList
@@ -136,6 +147,8 @@ class WorkspaceTaskListSerializer(serializers.ModelSerializer):
             "created_by_name",
             "position",
             "is_active",
+            "is_shared",
+            "can_manage",
             "created_at",
             "updated_at",
         ]
@@ -144,12 +157,21 @@ class WorkspaceTaskListSerializer(serializers.ModelSerializer):
             "created_by",
             "created_by_name",
             "workspace_group_name",
+            "is_shared",
+            "can_manage",
             "created_at",
             "updated_at",
         ]
 
     def get_created_by_name(self, obj):
         return get_user_display_name(obj.created_by)
+
+    def get_is_shared(self, obj):
+        return bool(obj.workspace_group_id)
+
+    def get_can_manage(self, obj):
+        user = get_request_user(self)
+        return usuario_puede_gestionar_lista_tareas(user, obj)
 
 
 class TaskCommentSerializer(serializers.ModelSerializer):
