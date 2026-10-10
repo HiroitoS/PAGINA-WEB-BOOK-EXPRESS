@@ -356,7 +356,7 @@ class TaskComment(TimeStampedModel):
 
     task = models.ForeignKey(
         Task,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="comments",
         verbose_name="Tarea"
     )
@@ -390,7 +390,7 @@ class TaskComment(TimeStampedModel):
 class TaskStatusHistory(models.Model):
     task = models.ForeignKey(
         Task,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="status_history",
         verbose_name="Tarea"
     )
