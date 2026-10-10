@@ -121,9 +121,14 @@ class WorkspaceTaskListApiTests(APITestCase):
 
         group_response = self.client.get(reverse("admin-workspace-group-list"))
         self.assertEqual(group_response.status_code, status.HTTP_200_OK)
+        owner_group_items = (
+            group_response.data["results"]
+            if isinstance(group_response.data, dict)
+            else group_response.data
+        )
         owner_group = next(
             item
-            for item in group_response.data
+            for item in owner_group_items
             if item["id"] == self.group.id
         )
         self.assertTrue(owner_group["can_manage"])
@@ -139,9 +144,14 @@ class WorkspaceTaskListApiTests(APITestCase):
 
         group_response = self.client.get(reverse("admin-workspace-group-list"))
         self.assertEqual(group_response.status_code, status.HTTP_200_OK)
+        member_group_items = (
+            group_response.data["results"]
+            if isinstance(group_response.data, dict)
+            else group_response.data
+        )
         member_group = next(
             item
-            for item in group_response.data
+            for item in member_group_items
             if item["id"] == self.group.id
         )
         self.assertFalse(member_group["can_manage"])
