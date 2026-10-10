@@ -764,7 +764,10 @@ class TaskViewSet(viewsets.ModelViewSet):
 
         # Los registros comerciales y sus seguimientos son evidencias.
         # Solo se permite eliminar tareas sin actividad ni vínculo CRM.
-        if instance.crm_links.exists():
+        if (
+            instance.crm_links.exists()
+            or instance.reminders.filter(crm_links__isnull=False).exists()
+        ):
             raise ValidationError({
                 "detail": (
                     "Esta tarea está vinculada al CRM y debe conservarse. "
@@ -1242,6 +1245,7 @@ class CalendarEventViewSet(viewsets.ModelViewSet):
             previous_assignee=old_assigned_to,
         )
 
+    @transaction.atomic
     def perform_destroy(self, instance):
         if not usuario_puede_editar_datos_evento(
             self.request.user,
@@ -1250,6 +1254,16 @@ class CalendarEventViewSet(viewsets.ModelViewSet):
             raise PermissionDenied(
                 "No tienes permiso para eliminar este evento."
             )
+
+        if (
+            instance.crm_links.exists()
+            or instance.reminders.filter(crm_links__isnull=False).exists()
+        ):
+            raise ValidationError({
+                "detail": (
+                    "Este evento está vinculado al CRM y debe conservarse."
+                ),
+            })
 
         instance.delete()
 
@@ -1449,6 +1463,14 @@ class ReminderViewSet(viewsets.ModelViewSet):
             raise PermissionDenied(
                 "No tienes permiso para eliminar este recordatorio."
             )
+
+        if instance.crm_links.exists():
+            raise ValidationError({
+                "detail": (
+                    "Este recordatorio está vinculado al CRM y debe "
+                    "conservarse. Puedes marcarlo como completado."
+                ),
+            })
 
         resolve_reminder_alert_notifications(instance)
         clear_task_mirror_for_reminder(instance)
