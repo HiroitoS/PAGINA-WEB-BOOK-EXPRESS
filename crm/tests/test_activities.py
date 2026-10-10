@@ -396,7 +396,7 @@ class CRMActivityAndWorkItemTests(TestCase):
         self.client.force_login(self.admin)
 
         for url in (
-            f"/api/admin/events/{event.id}/",
+            f"/api/admin/calendar-events/{event.id}/",
             f"/api/admin/reminders/{reminder.id}/",
         ):
             response = self.client.delete(url)
