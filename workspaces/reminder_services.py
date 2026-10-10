@@ -2,6 +2,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from .models import Reminder, Task
+from .reminder_alerts import resolve_reminder_alert_notifications
 
 
 TASK_REMINDER_SOURCE = "task"
@@ -87,11 +88,16 @@ def sync_primary_task_reminder(task, *, actor=None):
                 ]
             )
 
+        if reminder:
+            resolve_reminder_alert_notifications(reminder)
+
         _update_task_mirror(task, None)
         return reminder
 
     if not task.reminder_at:
-        if reminder and reminder.status != "completed":
+        # Conservar el historial de los avisos ya atendidos o descartados.
+        if reminder and reminder.status in {"pending", "seen"}:
+            resolve_reminder_alert_notifications(reminder)
             reminder.delete()
             reminder = None
 
@@ -109,13 +115,20 @@ def sync_primary_task_reminder(task, *, actor=None):
     reminder_creator = actor or task.created_by or reminder_user
 
     if reminder:
+        previous_user_id = reminder.user_id
+        was_rescheduled = reminder.remind_at != task.reminder_at
+
         reminder.user = reminder_user
         reminder.group = reminder_group
         reminder.event = None
         reminder.title = task.title
         reminder.remind_at = task.reminder_at
-        reminder.status = "pending"
-        reminder.completed_at = None
+
+        # Editar el título o responsable no debe reactivar un aviso atendido.
+        if was_rescheduled:
+            reminder.status = "pending"
+            reminder.completed_at = None
+
         reminder.save(
             update_fields=[
                 "user",
@@ -128,6 +141,8 @@ def sync_primary_task_reminder(task, *, actor=None):
                 "updated_at",
             ]
         )
+        if was_rescheduled or previous_user_id != reminder.user_id:
+            resolve_reminder_alert_notifications(reminder)
     else:
         reminder = Reminder.objects.create(
             created_by=reminder_creator,
@@ -142,7 +157,12 @@ def sync_primary_task_reminder(task, *, actor=None):
             source=TASK_REMINDER_SOURCE,
         )
 
-    _update_task_mirror(task, reminder.remind_at)
+    _update_task_mirror(
+        task,
+        reminder.remind_at
+        if reminder.status not in {"completed", "dismissed"}
+        else None,
+    )
     return reminder
 
 
@@ -164,6 +184,11 @@ def sync_task_mirror_from_reminder(reminder):
     task = Task.objects.select_for_update().get(
         pk=reminder.task_id,
     )
+
+    # No reprogramar la tarea cerrada desde un recordatorio.
+    if task.status in CLOSED_TASK_STATUSES:
+        _update_task_mirror(task, None)
+        return task
 
     if reminder.status in {"completed", "dismissed"}:
         reminder_at = None
