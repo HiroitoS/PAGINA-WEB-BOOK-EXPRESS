@@ -9,6 +9,7 @@ from django.utils.dateparse import parse_date, parse_datetime
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -1268,8 +1269,15 @@ class CalendarEventViewSet(viewsets.ModelViewSet):
         instance.delete()
 
 
+class WorkspaceReminderPagination(PageNumberPagination):
+    page_size = 100
+    page_size_query_param = "page_size"
+    max_page_size = 200
+
+
 class ReminderViewSet(viewsets.ModelViewSet):
     serializer_class = ReminderSerializer
+    pagination_class = WorkspaceReminderPagination
     permission_classes = [EsUsuarioWorkspace]
 
     def get_queryset(self):
