@@ -25,6 +25,10 @@ from .models import (
     WorkspaceMembership,
     WorkspaceTaskList,
 )
+from .reminder_alerts import (
+    resolve_reminder_alert_notifications,
+    sync_reminder_alerts_for_user,
+)
 from .reminder_services import (
     clear_task_mirror_for_reminder,
     sync_primary_task_reminder,
@@ -1288,6 +1292,19 @@ class ReminderViewSet(viewsets.ModelViewSet):
 
         return queryset.order_by("status", "remind_at", "-created_at").distinct()
 
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="sync-alerts",
+    )
+    def sync_alerts(self, request):
+        result = sync_reminder_alerts_for_user(request.user)
+
+        return Response(
+            result,
+            status=status.HTTP_200_OK,
+        )
+
     def perform_create(self, serializer):
         assigned_user = serializer.validated_data.get("user")
         group = serializer.validated_data.get("group")
@@ -1342,6 +1359,7 @@ class ReminderViewSet(viewsets.ModelViewSet):
 
             updated_reminder = serializer.save()
             sync_task_mirror_from_reminder(updated_reminder)
+            resolve_reminder_alert_notifications(updated_reminder)
             return
 
         if not usuario_puede_editar_datos_recordatorio(self.request.user, reminder):
@@ -1363,6 +1381,8 @@ class ReminderViewSet(viewsets.ModelViewSet):
             )
 
         old_user = reminder.user
+        old_user_id = reminder.user_id
+        old_remind_at = reminder.remind_at
 
         save_kwargs = {}
         if reminder.source == "task" and reminder.task_id:
@@ -1376,6 +1396,12 @@ class ReminderViewSet(viewsets.ModelViewSet):
 
         updated_reminder = serializer.save(**save_kwargs)
         sync_task_mirror_from_reminder(updated_reminder)
+
+        if (
+            updated_reminder.user_id != old_user_id
+            or updated_reminder.remind_at != old_remind_at
+        ):
+            resolve_reminder_alert_notifications(updated_reminder)
 
         notify_reminder_assigned(
             updated_reminder,
@@ -1392,6 +1418,7 @@ class ReminderViewSet(viewsets.ModelViewSet):
                 "No tienes permiso para eliminar este recordatorio."
             )
 
+        resolve_reminder_alert_notifications(instance)
         clear_task_mirror_for_reminder(instance)
         instance.delete()
 
