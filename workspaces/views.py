@@ -578,8 +578,17 @@ class TaskViewSet(viewsets.ModelViewSet):
                 "No perteneces a este grupo de trabajo."
             )
 
-        if not group and not assigned_to:
-            assigned_to = self.request.user
+        if not assigned_to:
+            if task_list and task_list.workspace_group_id:
+                assigned_to = None
+            elif (
+                not group
+                or usuario_es_integrante_activo_grupo(
+                    self.request.user,
+                    group,
+                )
+            ):
+                assigned_to = self.request.user
 
         if (
             group
