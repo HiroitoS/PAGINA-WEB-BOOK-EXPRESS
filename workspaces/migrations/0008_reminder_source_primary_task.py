@@ -54,7 +54,7 @@ class Migration(migrations.Migration):
                     ("manual", "Manual"),
                     ("task", "Tarea"),
                 ],
-                db_index=True,
+                db_index=False,
                 default="manual",
                 max_length=20,
                 verbose_name="Origen",
