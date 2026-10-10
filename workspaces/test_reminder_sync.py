@@ -221,7 +221,12 @@ class ReminderVisibilityApiTests(TestCase):
         response = client.get("/api/admin/reminders/")
 
         self.assertEqual(response.status_code, 200)
-        reminder_ids = [item["id"] for item in response.data]
+        response_items = (
+            response.data.get("results", [])
+            if isinstance(response.data, dict)
+            else response.data
+        )
+        reminder_ids = [item["id"] for item in response_items]
 
         self.assertNotIn(self.reminder.id, reminder_ids)
 
@@ -232,6 +237,11 @@ class ReminderVisibilityApiTests(TestCase):
         response = client.get("/api/admin/reminders/")
 
         self.assertEqual(response.status_code, 200)
-        reminder_ids = [item["id"] for item in response.data]
+        response_items = (
+            response.data.get("results", [])
+            if isinstance(response.data, dict)
+            else response.data
+        )
+        reminder_ids = [item["id"] for item in response_items]
 
         self.assertIn(self.reminder.id, reminder_ids)
