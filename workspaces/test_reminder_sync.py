@@ -55,6 +55,35 @@ class ReminderSynchronizationApiTests(TestCase):
         )
         return task, reminder
 
+    def test_reminder_list_paginates_without_hiding_items(self):
+        for index in range(3):
+            Reminder.objects.create(
+                title=f"Aviso manual {index}",
+                created_by=self.user,
+                user=self.user,
+                remind_at=timezone.now() + timedelta(hours=index + 1),
+            )
+
+        first = self.client.get(
+            "/api/admin/reminders/", {"page_size": 2, "page": 1},
+        )
+        second = self.client.get(
+            "/api/admin/reminders/", {"page_size": 2, "page": 2},
+        )
+
+        self.assertEqual(first.status_code, 200, first.data)
+        self.assertEqual(second.status_code, 200, second.data)
+        self.assertEqual(first.data["count"], 3)
+        self.assertEqual(len(first.data["results"]), 2)
+        self.assertEqual(len(second.data["results"]), 1)
+        self.assertIsNotNone(first.data["next"])
+        ids = {
+            item["id"]
+            for page in [first, second]
+            for item in page.data["results"]
+        }
+        self.assertEqual(len(ids), 3)
+
     def test_task_reminder_creates_canonical_reminder(self):
         task, reminder = self.create_task_with_reminder()
 
