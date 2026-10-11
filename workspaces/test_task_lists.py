@@ -149,6 +149,70 @@ class WorkspaceTaskListApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data, [])
 
+    def test_personal_list_creation_and_task_persist_with_owner_scope(self):
+        self.client.force_authenticate(self.member)
+        list_response = self.client.post(
+            reverse("admin-task-list-list"),
+            {
+                "name": "QA-TD02 Lista personal asesor",
+                "workspace_group": None,
+                "color": "#dc2626",
+            },
+            format="json",
+        )
+        self.assertEqual(
+            list_response.status_code,
+            status.HTTP_201_CREATED,
+            list_response.data,
+        )
+        task_list_id = list_response.data["id"]
+
+        task_response = self.client.post(
+            reverse("admin-task-list"),
+            {
+                "title": "QA-TD02 Preparar visita comercial",
+                "task_list": task_list_id,
+            },
+            format="json",
+        )
+        self.assertEqual(
+            task_response.status_code,
+            status.HTTP_201_CREATED,
+            task_response.data,
+        )
+        task_id = task_response.data["id"]
+
+        task = Task.objects.get(pk=task_id)
+        self.assertEqual(task.task_list_id, task_list_id)
+        self.assertEqual(task.created_by_id, self.member.id)
+        self.assertEqual(task.assigned_to_id, self.member.id)
+        self.assertIsNone(task.group_id)
+
+        # A second request must see persisted data, not only local UI state.
+        list_detail = self.client.get(
+            reverse("admin-task-list-detail", args=[task_list_id]),
+        )
+        self.assertEqual(list_detail.status_code, status.HTTP_200_OK)
+        self.assertFalse(list_detail.data["is_shared"])
+
+        filtered = self.client.get(
+            reverse("admin-task-list"),
+            {"task_list": task_list_id},
+        )
+        self.assertEqual(filtered.status_code, status.HTTP_200_OK)
+        self.assertEqual([item["id"] for item in filtered.data], [task_id])
+
+        # A teammate cannot see personal lists or their task records.
+        self.client.force_authenticate(self.outsider)
+        private_list = self.client.get(
+            reverse("admin-task-list-detail", args=[task_list_id]),
+        )
+        self.assertEqual(private_list.status_code, status.HTTP_404_NOT_FOUND)
+        private_task = self.client.get(
+            reverse("admin-task-detail", args=[task_id]),
+        )
+        self.assertEqual(private_task.status_code, status.HTTP_404_NOT_FOUND)
+
     def test_shared_list_is_visible_to_active_group_members(self):
         shared_list = WorkspaceTaskList.objects.create(
             name="Campaña escolar 2027",
