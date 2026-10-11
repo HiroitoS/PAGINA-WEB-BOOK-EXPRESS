@@ -420,6 +420,74 @@ class WorkspaceTaskListApiTests(APITestCase):
         self.assertEqual(task.group_id, self.group.id)
         self.assertEqual(task.assigned_to_id, self.member.id)
 
+    def test_team_manager_assigns_member_during_task_creation_without_list(self):
+        self.client.force_authenticate(self.owner)
+        response = self.client.post(
+            reverse("admin-task-list"),
+            {
+                "title": "QA-TD02 Asignación desde ToDo",
+                "group": self.group.id,
+                "assigned_to": self.member.id,
+            },
+            format="json",
+        )
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+            response.data,
+        )
+        task = Task.objects.get(pk=response.data["id"])
+        self.assertEqual(task.group_id, self.group.id)
+        self.assertEqual(task.assigned_to_id, self.member.id)
+        self.assertEqual(task.created_by_id, self.owner.id)
+
+        self.client.force_authenticate(self.member)
+        visible = self.client.get(
+            reverse("admin-task-detail", args=[task.id]),
+        )
+        self.assertEqual(visible.status_code, status.HTTP_200_OK)
+        self.assertTrue(visible.data["can_follow_up"])
+        self.assertFalse(visible.data["can_edit_details"])
+
+    def test_team_quick_assignment_rejects_outsider_and_ordinary_member(self):
+        self.client.force_authenticate(self.owner)
+        outsider_response = self.client.post(
+            reverse("admin-task-list"),
+            {
+                "title": "Asignación externa no autorizada",
+                "group": self.group.id,
+                "assigned_to": self.outsider.id,
+            },
+            format="json",
+        )
+        self.assertEqual(
+            outsider_response.status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+
+        self.client.force_authenticate(self.member)
+        ordinary_member_response = self.client.post(
+            reverse("admin-task-list"),
+            {
+                "title": "Delegación sin permiso",
+                "group": self.group.id,
+                "assigned_to": self.owner.id,
+            },
+            format="json",
+        )
+        self.assertEqual(
+            ordinary_member_response.status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+        self.assertFalse(
+            Task.objects.filter(
+                title__in=[
+                    "Asignación externa no autorizada",
+                    "Delegación sin permiso",
+                ],
+            ).exists(),
+        )
+
     def test_team_list_task_can_stay_unassigned(self):
         shared_list = WorkspaceTaskList.objects.create(
             name="Pendientes del equipo",
