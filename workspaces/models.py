@@ -429,6 +429,42 @@ class TaskStatusHistory(models.Model):
         return f"{self.old_status} → {self.new_status}"
 
 
+
+class TaskChangeHistory(models.Model):
+    """Auditoría inmutable de cambios de planificación de una tarea."""
+
+    task = models.ForeignKey(
+        Task,
+        on_delete=models.PROTECT,
+        related_name="change_history",
+        verbose_name="Tarea",
+    )
+    changed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="task_metadata_changes",
+        verbose_name="Modificado por",
+    )
+    changes = models.JSONField(
+        default=list,
+        verbose_name="Cambios realizados",
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name="Fecha de modificación",
+    )
+
+    class Meta:
+        verbose_name = "Auditoría de tarea"
+        verbose_name_plural = "Auditorías de tareas"
+        ordering = ["-created_at", "-pk"]
+
+    def __str__(self):
+        return f"Modificación de tarea {self.task_id}"
+
+
 class CalendarEvent(TimeStampedModel):
     EVENT_TYPE_CHOICES = [
         ("meeting", "Reunión"),
