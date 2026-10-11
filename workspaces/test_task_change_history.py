@@ -44,11 +44,13 @@ class TaskChangeHistoryApiTests(APITestCase):
     def test_supervisor_change_is_audited_once_with_actor_and_values(self):
         self.client.force_authenticate(self.supervisor)
         new_due = self.original_due + timedelta(days=3)
+        new_reminder = new_due - timedelta(days=1)
 
         response = self.client.patch(
             f"/api/admin/tasks/{self.task.pk}/",
             {
                 "due_at": new_due.isoformat(),
+                "reminder_at": new_reminder.isoformat(),
                 "assigned_to": self.replacement.pk,
                 "priority": "high",
             },
@@ -59,6 +61,7 @@ class TaskChangeHistoryApiTests(APITestCase):
         self.task.refresh_from_db()
         self.assertEqual(self.task.assigned_to_id, self.replacement.pk)
         self.assertEqual(self.task.due_at, new_due)
+        self.assertEqual(self.task.reminder_at, new_reminder)
         self.assertEqual(TaskChangeHistory.objects.filter(task=self.task).count(), 1)
 
         entry = TaskChangeHistory.objects.get(task=self.task)
@@ -68,7 +71,7 @@ class TaskChangeHistoryApiTests(APITestCase):
         by_field = {change["field"]: change for change in entry.changes}
         self.assertEqual(
             set(by_field),
-            {"due_at", "assigned_to", "priority"},
+            {"due_at", "reminder_at", "assigned_to", "priority"},
         )
         self.assertEqual(
             by_field["assigned_to"]["old_id"],
