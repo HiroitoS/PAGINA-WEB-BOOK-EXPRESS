@@ -26,6 +26,7 @@ from .models import (
     WorkspaceMembership,
     WorkspaceTaskList,
 )
+from .task_audit import record_task_plan_change, snapshot_task_plan
 from .reminder_alerts import (
     resolve_reminder_alert_notifications,
     sync_reminder_alerts_for_user,
@@ -501,6 +502,7 @@ class TaskViewSet(viewsets.ModelViewSet):
             queryset = queryset.prefetch_related(
             "comments__user",
             "status_history__changed_by",
+            "change_history__changed_by",
         )
 
         status_param = self.request.query_params.get("status")
@@ -736,11 +738,17 @@ class TaskViewSet(viewsets.ModelViewSet):
             })
 
         old_assigned_to = task.assigned_to
+        previous_plan = snapshot_task_plan(task)
         save_kwargs = {}
         if task_list and task_list.workspace_group_id:
             save_kwargs["group"] = group
 
         updated_task = serializer.save(**save_kwargs)
+        record_task_plan_change(
+            task=updated_task,
+            previous=previous_plan,
+            actor=self.request.user,
+        )
 
         sync_primary_task_reminder(
             updated_task,
@@ -775,7 +783,11 @@ class TaskViewSet(viewsets.ModelViewSet):
                     "Puedes cancelarla con una justificación."
                 ),
             })
-        if instance.comments.exists() or instance.status_history.exists():
+        if (
+            instance.comments.exists()
+            or instance.status_history.exists()
+            or instance.change_history.exists()
+        ):
             raise ValidationError({
                 "detail": (
                     "La tarea tiene historial de gestión y no se puede "
