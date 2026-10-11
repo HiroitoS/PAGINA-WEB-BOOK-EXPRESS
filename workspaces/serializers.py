@@ -7,6 +7,7 @@ from .models import (
     Reminder,
     Task,
     TaskComment,
+    TaskChangeHistory,
     TaskStatusHistory,
     WorkspaceGroup,
     WorkspaceMembership,
@@ -247,6 +248,25 @@ class TaskStatusHistorySerializer(serializers.ModelSerializer):
         )
 
 
+class TaskChangeHistorySerializer(serializers.ModelSerializer):
+    changed_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = TaskChangeHistory
+        fields = [
+            "id",
+            "task",
+            "changed_by",
+            "changed_by_name",
+            "changes",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_changed_by_name(self, obj):
+        return get_user_display_name(obj.changed_by)
+
+
 class TaskListSerializer(serializers.ModelSerializer):
     """
     Serializer liviano para listados de tareas.
@@ -406,16 +426,22 @@ class TaskSerializer(TaskListSerializer):
         many=True,
         read_only=True,
     )
+    change_history = TaskChangeHistorySerializer(
+        many=True,
+        read_only=True,
+    )
 
     class Meta(TaskListSerializer.Meta):
         fields = TaskListSerializer.Meta.fields + [
             "comments",
             "status_history",
+            "change_history",
         ]
 
         read_only_fields = TaskListSerializer.Meta.read_only_fields + [
             "comments",
             "status_history",
+            "change_history",
         ]
 
 class TaskStatusUpdateSerializer(serializers.Serializer):
