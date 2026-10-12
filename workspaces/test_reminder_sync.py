@@ -335,6 +335,154 @@ class ReminderSynchronizationApiTests(TestCase):
         self.assertIsNone(task.reminder_at)
         self.assertEqual(reminder.status, "dismissed")
 
+    def test_attend_pending_legacy_reminder_of_closed_task(self):
+        # Simula un aviso pendiente que quedó ligado a una tarea ya cerrada.
+        task, reminder = self.create_task_with_reminder()
+        Task.objects.filter(pk=task.pk).update(
+            status="completed",
+            completed_at=timezone.now(),
+            reminder_at=None,
+        )
+
+        response = self.client.patch(
+            f"/api/admin/reminders/{reminder.pk}/",
+            {
+                "status": "completed",
+                "is_completed": True,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertFalse(response.data["can_reopen"])
+        self.assertFalse(response.data["can_edit_details"])
+
+        task.refresh_from_db()
+        reminder.refresh_from_db()
+        self.assertEqual(task.status, "completed")
+        self.assertIsNotNone(task.completed_at)
+        self.assertIsNone(task.reminder_at)
+        self.assertEqual(reminder.status, "completed")
+        self.assertIsNotNone(reminder.completed_at)
+
+    def test_attend_pending_reminder_of_cancelled_task(self):
+        task, reminder = self.create_task_with_reminder()
+        Task.objects.filter(pk=task.pk).update(
+            status="cancelled",
+            reminder_at=None,
+        )
+
+        response = self.client.patch(
+            f"/api/admin/reminders/{reminder.pk}/",
+            {"is_completed": True},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        reminder.refresh_from_db()
+        task.refresh_from_db()
+        self.assertEqual(task.status, "cancelled")
+        self.assertEqual(reminder.status, "completed")
+
+    def test_closed_task_primary_reminder_cannot_be_replanned(self):
+        task, reminder = self.create_task_with_reminder()
+        old_remind_at = reminder.remind_at
+        Task.objects.filter(pk=task.pk).update(
+            status="completed",
+            completed_at=timezone.now(),
+            reminder_at=None,
+        )
+
+        response = self.client.patch(
+            f"/api/admin/reminders/{reminder.pk}/",
+            {"remind_at": (timezone.now() + timedelta(days=2)).isoformat()},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        reminder.refresh_from_db()
+        self.assertEqual(reminder.remind_at, old_remind_at)
+
+    def test_closed_task_primary_reminder_cannot_be_reopened_with_status(self):
+        task, reminder = self.create_task_with_reminder()
+        Task.objects.filter(pk=task.pk).update(
+            status="completed",
+            completed_at=timezone.now(),
+            reminder_at=None,
+        )
+        response = self.client.patch(
+            f"/api/admin/reminders/{reminder.pk}/",
+            {"status": "pending"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        reminder.refresh_from_db()
+        self.assertEqual(reminder.status, "pending")
+
+    def test_incompatible_completion_fields_are_rejected(self):
+        _task, reminder = self.create_task_with_reminder()
+        response = self.client.patch(
+            f"/api/admin/reminders/{reminder.pk}/",
+            {"status": "pending", "is_completed": True},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        reminder.refresh_from_db()
+        self.assertEqual(reminder.status, "pending")
+
+    def test_admin_can_acknowledge_an_advisors_closed_task_reminder(self):
+        task, reminder = self.create_task_with_reminder()
+        Task.objects.filter(pk=task.pk).update(
+            status="completed",
+            completed_at=timezone.now(),
+            reminder_at=None,
+        )
+        admin = User.objects.create_superuser(
+            username="reminder-supervisor",
+            password="test-password",
+        )
+        client = APIClient()
+        client.force_authenticate(admin)
+        response = client.patch(
+            f"/api/admin/reminders/{reminder.pk}/",
+            {"is_completed": True},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        task.refresh_from_db()
+        reminder.refresh_from_db()
+        self.assertEqual(task.status, "completed")
+        self.assertEqual(reminder.status, "completed")
+
+    def test_manual_reminder_of_closed_task_is_independent(self):
+        task, _ = self.create_task_with_reminder()
+        manual_reminder = Reminder.objects.create(
+            created_by=self.user,
+            user=self.user,
+            task=task,
+            title="Aviso adicional",
+            remind_at=timezone.now() + timedelta(hours=1),
+            source="manual",
+        )
+        Task.objects.filter(pk=task.pk).update(
+            status="completed",
+            completed_at=timezone.now(),
+            reminder_at=None,
+        )
+        response = self.client.patch(
+            f"/api/admin/reminders/{manual_reminder.pk}/",
+            {"is_completed": True},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        response = self.client.patch(
+            f"/api/admin/reminders/{manual_reminder.pk}/",
+            {"is_completed": False},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        manual_reminder.refresh_from_db()
+        task.refresh_from_db()
+        self.assertEqual(manual_reminder.status, "pending")
+        self.assertEqual(task.status, "completed")
+
     def test_primary_reminder_cannot_be_reopened_while_task_is_closed(self):
         task, reminder = self.create_task_with_reminder()
         response = self.client.post(
