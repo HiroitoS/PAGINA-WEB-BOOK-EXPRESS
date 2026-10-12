@@ -33,6 +33,25 @@ def usuario_puede_asignar_trabajo(user):
     )
 
 
+def user_can_assign_to_other_user(request_user, assigned_user, group=None):
+    if not assigned_user:
+        return True
+
+    if assigned_user.id == request_user.id:
+        return True
+
+    if usuario_es_administrador(request_user):
+        return True
+
+    if group and usuario_puede_gestionar_grupo(request_user, group):
+        return True
+
+    if usuario_puede_asignar_trabajo(request_user):
+        return True
+
+    return False
+
+
 def usuario_puede_supervisar_workspace(user):
     """
     Capacidad reservada para supervisión transversal.
