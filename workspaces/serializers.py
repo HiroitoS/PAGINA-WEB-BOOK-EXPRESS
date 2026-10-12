@@ -645,6 +645,7 @@ class ReminderSerializer(serializers.ModelSerializer):
     )
     can_edit_details = serializers.SerializerMethodField()
     can_complete = serializers.SerializerMethodField()
+    can_reopen = serializers.SerializerMethodField()
     is_read_only = serializers.SerializerMethodField()
 
     class Meta:
@@ -675,6 +676,7 @@ class ReminderSerializer(serializers.ModelSerializer):
             "is_overdue",
             "can_edit_details",
             "can_complete",
+            "can_reopen",
             "is_read_only",
             "completed_at",
             "created_at",
@@ -696,6 +698,7 @@ class ReminderSerializer(serializers.ModelSerializer):
             "is_overdue",
             "can_edit_details",
             "can_complete",
+            "can_reopen",
             "is_read_only",
             "completed_at",
             "created_at",
@@ -712,12 +715,30 @@ class ReminderSerializer(serializers.ModelSerializer):
         return get_user_display_name(obj.user)
 
     def get_can_edit_details(self, obj):
+        # El aviso principal de una tarea cerrada conserva su planificación histórica.
+        if (
+            obj.source == "task"
+            and obj.task_id
+            and obj.task.status in {"completed", "cancelled"}
+        ):
+            return False
+
         user = get_request_user(self)
         return usuario_puede_editar_datos_recordatorio(user, obj)
 
     def get_can_complete(self, obj):
         user = get_request_user(self)
         return usuario_puede_completar_recordatorio(user, obj)
+
+    def get_can_reopen(self, obj):
+        # Reabrir el aviso de una tarea cerrada generaría un pendiente sin tarea activa.
+        if (
+            obj.source == "task"
+            and obj.task_id
+            and obj.task.status in {"completed", "cancelled"}
+        ):
+            return False
+        return self.get_can_complete(obj)
 
     def get_is_read_only(self, obj):
         return not self.get_can_edit_details(obj) and not self.get_can_complete(obj)
@@ -777,13 +798,30 @@ class ReminderSerializer(serializers.ModelSerializer):
             if (
                 self.instance.task
                 and self.instance.task.status in {"completed", "cancelled"}
-                and attrs
             ):
+                # Atender un aviso no edita ni reabre la tarea.
+                # Solo se bloquea cambiar su planificación o reactivar el aviso.
+                acknowledgement_fields = {"is_completed", "status"}
+                attempts_to_edit = set(attrs) - acknowledgement_fields
+                attempts_to_reactivate = (
+                    attrs.get("is_completed") is False
+                    or (
+                        "status" in attrs
+                        and attrs["status"] != "completed"
+                    )
+                )
+                if attempts_to_edit or attempts_to_reactivate:
+                    raise serializers.ValidationError({
+                        "task": (
+                            "Esta tarea está cerrada. Puedes atender el aviso, "
+                            "pero para reprogramarlo debes reabrir la tarea."
+                        ),
+                    })
+
+        if "is_completed" in attrs and "status" in attrs:
+            if attrs["is_completed"] != (attrs["status"] == "completed"):
                 raise serializers.ValidationError({
-                    "task": (
-                        "Primero debes reabrir la tarea para modificar "
-                        "su recordatorio principal."
-                    ),
+                    "status": "El estado y la acción del aviso no coinciden.",
                 })
 
         return attrs
