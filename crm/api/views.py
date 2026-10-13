@@ -2,7 +2,7 @@ import unicodedata
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Count, Prefetch, Q
+from django.db.models import CharField, Count, F, Func, Prefetch, Q, Value
 from django.http import HttpResponse
 from django.utils import timezone
 from django.utils.dateparse import parse_date
@@ -222,6 +222,17 @@ def _matching_location_values(queryset, field_name, requested_value):
     ]
 
 
+def _accentless_search_expression(field_name):
+    """Portable PostgreSQL accent folding without the unaccent extension."""
+    return Func(
+        F(field_name),
+        Value("ÁÉÍÓÚÜÑáéíóúüñ"),
+        Value("AEIOUUNaeiouun"),
+        function="TRANSLATE",
+        output_field=CharField(),
+    )
+
+
 def _apply_school_filters(queryset, params):
     search = str(params.get("search", "") or "").strip()
     team = params.get("team")
@@ -233,8 +244,16 @@ def _apply_school_filters(queryset, params):
     is_active = params.get("is_active")
 
     if search:
-        queryset = queryset.filter(
-            Q(name__unaccent__icontains=search)
+        normalized_search = _normalize_location_token(search)
+        queryset = queryset.alias(
+            _search_school_name=_accentless_search_expression("name"),
+            _search_owner_username=_accentless_search_expression("owner__username"),
+            _search_owner_first_name=_accentless_search_expression("owner__first_name"),
+            _search_owner_last_name=_accentless_search_expression("owner__last_name"),
+            _search_campus_address=_accentless_search_expression("campuses__address"),
+            _search_campus_district=_accentless_search_expression("campuses__district"),
+        ).filter(
+            Q(_search_school_name__icontains=normalized_search)
             | Q(book_express_code__icontains=search)
             | Q(institution_code__icontains=search)
             | Q(modular_code__icontains=search)
@@ -243,11 +262,11 @@ def _apply_school_filters(queryset, params):
             | Q(phone__icontains=search)
             | Q(whatsapp__icontains=search)
             | Q(email__icontains=search)
-            | Q(owner__username__unaccent__icontains=search)
-            | Q(owner__first_name__unaccent__icontains=search)
-            | Q(owner__last_name__unaccent__icontains=search)
-            | Q(campuses__address__unaccent__icontains=search)
-            | Q(campuses__district__unaccent__icontains=search)
+            | Q(_search_owner_username__icontains=normalized_search)
+            | Q(_search_owner_first_name__icontains=normalized_search)
+            | Q(_search_owner_last_name__icontains=normalized_search)
+            | Q(_search_campus_address__icontains=normalized_search)
+            | Q(_search_campus_district__icontains=normalized_search)
         )
 
     if team:
