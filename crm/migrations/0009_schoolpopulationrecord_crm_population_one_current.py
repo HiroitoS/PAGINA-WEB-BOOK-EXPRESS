@@ -4,6 +4,26 @@ from django.conf import settings
 from django.db import migrations, models
 
 
+def demote_older_current_population(apps, schema_editor):
+    Population = apps.get_model("crm", "SchoolPopulationRecord")
+    database = schema_editor.connection.alias
+    seen_services = set()
+    current_rows = (
+        Population.objects.using(database)
+        .filter(is_current=True)
+        .order_by("service_id", "-year", "-id")
+        .values_list("id", "service_id")
+    )
+    older_ids = []
+    for record_id, service_id in current_rows.iterator():
+        if service_id in seen_services:
+            older_ids.append(record_id)
+        else:
+            seen_services.add(service_id)
+    if older_ids:
+        Population.objects.using(database).filter(pk__in=older_ids).update(is_current=False)
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -12,6 +32,10 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        migrations.RunPython(
+            demote_older_current_population,
+            migrations.RunPython.noop,
+        ),
         migrations.AddConstraint(
             model_name='schoolpopulationrecord',
             constraint=models.UniqueConstraint(condition=models.Q(('is_current', True)), fields=('service',), name='crm_population_one_current'),
