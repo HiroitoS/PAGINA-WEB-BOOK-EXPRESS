@@ -80,6 +80,20 @@ class CRMApiTests(TestCase):
     def authenticate(self, user):
         self.client.force_authenticate(user=user)
 
+    def test_school_search_without_unaccent_extension(self):
+        from crm.api.views import _apply_school_filters
+
+        self.school.name = "Colegio José María Arguedas"
+        self.school.save(update_fields=["name"])
+
+        schools = _apply_school_filters(
+            School.objects.all(), {"search": "jose maria"}
+        )
+        self.assertIn(self.school.pk, list(schools.values_list("pk", flat=True)))
+        self.assertNotIn(
+            self.other_school.pk, list(schools.values_list("pk", flat=True))
+        )
+
     def _create_quote_product(self):
         provider, _ = Provider.objects.get_or_create(
             name="Editorial cotización API",
