@@ -1,5 +1,7 @@
 from django.contrib.auth.models import Group, User
 from rest_framework import serializers
+
+from .models import UserProfile
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from .permission_registry import (
@@ -151,6 +153,18 @@ class GroupSerializer(serializers.ModelSerializer):
 
 
 class AdminUserSerializer(serializers.ModelSerializer):
+    phone = serializers.CharField(
+        source="book_express_profile.phone",
+        required=False,
+        allow_blank=True,
+        max_length=30,
+    )
+    whatsapp = serializers.CharField(
+        source="book_express_profile.whatsapp",
+        required=False,
+        allow_blank=True,
+        max_length=30,
+    )
     password = serializers.CharField(
         write_only=True,
         required=False,
@@ -181,6 +195,8 @@ class AdminUserSerializer(serializers.ModelSerializer):
             "email",
             "first_name",
             "last_name",
+            "phone",
+            "whatsapp",
             "password",
             "is_active",
             "is_staff",
@@ -296,6 +312,7 @@ class AdminUserSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         password = validated_data.pop("password", None)
+        profile_data = validated_data.pop("book_express_profile", {})
         groups = validated_data.pop("groups", [])
         functional_permissions = validated_data.pop(
             "functional_permission_ids",
@@ -316,6 +333,13 @@ class AdminUserSerializer(serializers.ModelSerializer):
             })
 
         user.save()
+        UserProfile.objects.update_or_create(
+            user=user,
+            defaults={
+                "phone": profile_data.get("phone", ""),
+                "whatsapp": profile_data.get("whatsapp", ""),
+            },
+        )
         user.groups.set(groups)
         self._set_functional_permissions(
             user,
@@ -326,6 +350,7 @@ class AdminUserSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         password = validated_data.pop("password", None)
+        profile_data = validated_data.pop("book_express_profile", None)
         groups = validated_data.pop("groups", None)
         functional_permissions = validated_data.pop(
             "functional_permission_ids",
@@ -339,6 +364,15 @@ class AdminUserSerializer(serializers.ModelSerializer):
             instance.set_password(password)
 
         instance.save()
+
+        if profile_data is not None:
+            profile, _ = UserProfile.objects.get_or_create(user=instance)
+            profile.phone = profile_data.get("phone", profile.phone)
+            profile.whatsapp = profile_data.get(
+                "whatsapp",
+                profile.whatsapp,
+            )
+            profile.save(update_fields=["phone", "whatsapp"])
 
         if groups is not None:
             instance.groups.set(groups)

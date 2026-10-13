@@ -8,6 +8,7 @@ from .models import (
     TaskStatusHistory,
     WorkspaceGroup,
     WorkspaceMembership,
+    WorkspaceTaskList,
 )
 
 
@@ -89,6 +90,29 @@ class WorkspaceMembershipAdmin(admin.ModelAdmin):
     )
 
 
+@admin.register(WorkspaceTaskList)
+class WorkspaceTaskListAdmin(admin.ModelAdmin):
+    list_display = (
+        "name",
+        "workspace_group",
+        "created_by",
+        "position",
+        "is_active",
+        "created_at",
+    )
+    list_filter = (
+        "is_active",
+        "workspace_group",
+        "created_at",
+    )
+    search_fields = (
+        "name",
+        "description",
+        "workspace_group__name",
+        "created_by__username",
+    )
+
+
 @admin.register(Task)
 class TaskAdmin(admin.ModelAdmin):
     list_display = (
@@ -98,6 +122,7 @@ class TaskAdmin(admin.ModelAdmin):
         "priority",
         "assigned_to",
         "group",
+        "task_list",
         "due_at",
         "is_important",
         "is_private",
@@ -108,6 +133,7 @@ class TaskAdmin(admin.ModelAdmin):
         "priority",
         "task_type",
         "group",
+        "task_list",
         "assigned_to",
         "is_important",
         "is_private",
@@ -121,6 +147,7 @@ class TaskAdmin(admin.ModelAdmin):
         "assigned_to__first_name",
         "assigned_to__last_name",
         "group__name",
+        "task_list__name",
     )
     readonly_fields = (
         "created_at",

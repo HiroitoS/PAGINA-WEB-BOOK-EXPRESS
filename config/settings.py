@@ -2,6 +2,8 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
+
 from dotenv import load_dotenv
 
 
@@ -25,12 +27,21 @@ def get_list_env(name, default=""):
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-SECRET_KEY = os.environ.get(
-    "SECRET_KEY",
-    "solo-para-desarrollo-local-cambiar-en-produccion",
-)
-
 DEBUG = get_bool_env("DEBUG", True)
+
+# En producción no aceptar la clave local de desarrollo ni claves débiles.
+SECRET_KEY = os.environ.get("SECRET_KEY") or ""
+if not DEBUG and (
+    len(SECRET_KEY) < 50
+    or len(set(SECRET_KEY)) < 5
+    or SECRET_KEY.startswith("django-insecure-")
+):
+    raise ImproperlyConfigured(
+        "Configura SECRET_KEY con un valor seguro y único antes de iniciar producción."
+    )
+
+if not SECRET_KEY:
+    SECRET_KEY = "solo-para-desarrollo-local-cambiar-en-produccion"
 
 ALLOWED_HOSTS = get_list_env(
     "ALLOWED_HOSTS",
@@ -46,6 +57,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "django.contrib.postgres",
 
     # Terceros
     "corsheaders",
@@ -182,6 +194,10 @@ SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 
 SECURE_SSL_REDIRECT = get_bool_env("SECURE_SSL_REDIRECT", False)
+# Activar HSTS solo después de comprobar HTTPS para el dominio real.
+SECURE_HSTS_SECONDS = int(os.environ.get("SECURE_HSTS_SECONDS", "0"))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = get_bool_env("SECURE_HSTS_INCLUDE_SUBDOMAINS", False)
+SECURE_HSTS_PRELOAD = get_bool_env("SECURE_HSTS_PRELOAD", False)
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 X_FRAME_OPTIONS = "DENY"

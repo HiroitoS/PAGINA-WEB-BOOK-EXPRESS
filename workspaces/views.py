@@ -2,13 +2,13 @@ from datetime import datetime, time
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -16,26 +16,38 @@ from accounts.permissions import usuario_es_administrador
 
 from .models import (
     CalendarEvent,
-    Reminder,
     Task,
     TaskComment,
+    TaskMyDaySelection,
     TaskStatusHistory,
     WorkspaceGroup,
     WorkspaceMembership,
+    WorkspaceTaskList,
 )
+from .selectors import (
+    get_user_group_ids,
+    visible_events_queryset,
+    visible_groups_queryset,
+    visible_reminders_queryset,
+    visible_task_lists_queryset,
+    visible_tasks_queryset,
+)
+from .task_audit import record_task_plan_change, snapshot_task_plan
+from .reminder_services import sync_primary_task_reminder
 from .notification_events import (
     notify_event_assigned,
     notify_group_membership_created,
-    notify_reminder_assigned,
     notify_task_assigned,
     notify_task_comment_created,
     notify_task_reopened,
     resolve_task_notifications,
 )
 from .permissions import (
+    user_can_assign_to_other_user,
     EsUsuarioWorkspace,
     usuario_puede_asignar_trabajo,
     usuario_puede_crear_grupo,
+    usuario_es_integrante_activo_grupo,
     usuario_es_miembro_activo,
     usuario_puede_completar_recordatorio,
     usuario_puede_completar_tarea,
@@ -44,14 +56,14 @@ from .permissions import (
     usuario_puede_editar_datos_recordatorio,
     usuario_puede_editar_datos_tarea,
     usuario_puede_gestionar_grupo,
+    usuario_puede_gestionar_lista_tareas,
     usuario_puede_reabrir_tarea,
     usuario_puede_ver_evento,
-    usuario_puede_ver_recordatorio,
     usuario_puede_ver_tarea,
+    usuario_puede_ver_lista_tareas,
 )
 from .serializers import (
     CalendarEventSerializer,
-    ReminderSerializer,
     TaskAddCommentSerializer,
     TaskCommentSerializer,
     TaskListSerializer,
@@ -62,8 +74,9 @@ from .serializers import (
     TaskStatusUpdateSerializer,
     WorkspaceGroupSerializer,
     WorkspaceMembershipSerializer,
-    
+    WorkspaceTaskListSerializer,
 )
+from .reminder_views import ReminderViewSet, WorkspaceReminderPagination
 
 
 def make_aware_if_needed(value):
@@ -88,125 +101,6 @@ def parse_range_datetime(value, default_value):
         return make_aware_if_needed(datetime.combine(parsed_date, time.min))
 
     return default_value
-
-
-def get_user_group_ids(user):
-    return WorkspaceMembership.objects.filter(
-        user=user,
-        is_active=True,
-        group__is_active=True,
-    ).values_list("group_id", flat=True)
-
-
-def user_can_assign_to_other_user(request_user, assigned_user, group=None):
-    if not assigned_user:
-        return True
-
-    if assigned_user.id == request_user.id:
-        return True
-
-    if usuario_es_administrador(request_user):
-        return True
-
-    if group and usuario_puede_gestionar_grupo(request_user, group):
-        return True
-
-    if usuario_puede_asignar_trabajo(request_user):
-        return True
-
-    return False
-
-
-def visible_groups_queryset(user):
-    queryset = WorkspaceGroup.objects.prefetch_related(
-        "memberships",
-        "memberships__user",
-    ).all()
-
-    if usuario_es_administrador(user):
-        return queryset
-
-    return queryset.filter(
-        Q(created_by=user)
-        | Q(memberships__user=user, memberships__is_active=True)
-    ).distinct()
-
-
-def visible_tasks_queryset(user):
-    queryset = (
-        Task.objects.select_related(
-            "group",
-            "created_by",
-            "assigned_to",
-            "related_contact_request",
-        )
-        .all()
-    )
-
-    if usuario_es_administrador(user):
-        return queryset
-
-    group_ids = get_user_group_ids(user)
-
-    return queryset.filter(
-        Q(created_by=user)
-        | Q(assigned_to=user)
-        | Q(group_id__in=group_ids)
-    ).distinct()
-
-
-def visible_events_queryset(user):
-    queryset = (
-        CalendarEvent.objects.select_related(
-            "group",
-            "created_by",
-            "assigned_to",
-            "related_task",
-            "related_contact_request",
-        )
-        .prefetch_related("participants")
-        .all()
-    )
-
-    if usuario_es_administrador(user):
-        return queryset
-
-    group_ids = get_user_group_ids(user)
-
-    return queryset.filter(
-        Q(created_by=user)
-        | Q(assigned_to=user)
-        | Q(participants=user)
-        | Q(group_id__in=group_ids)
-    ).distinct()
-
-
-def visible_reminders_queryset(user):
-    queryset = (
-        Reminder.objects.select_related(
-            "created_by",
-            "user",
-            "group",
-            "task",
-            "task__group",
-            "event",
-            "event__group",
-        )
-        .all()
-    )
-
-    if usuario_es_administrador(user):
-        return queryset
-
-    group_ids = get_user_group_ids(user)
-
-    return queryset.filter(
-        Q(created_by=user)
-        | Q(user=user)
-        | Q(group_id__in=group_ids)
-        | Q(task__group_id__in=group_ids)
-        | Q(event__group_id__in=group_ids)
-    ).distinct()
 
 
 def get_display_name(user):
@@ -333,6 +227,95 @@ class WorkspaceMembershipViewSet(viewsets.ModelViewSet):
         instance.delete()
 
 
+class WorkspaceTaskListViewSet(viewsets.ModelViewSet):
+    serializer_class = WorkspaceTaskListSerializer
+    permission_classes = [EsUsuarioWorkspace]
+    # Las listas alimentan directamente la navegación de ToDo y deben
+    # recuperarse completas para el usuario actual. No son un listado
+    # operativo masivo como las tareas, por lo que paginarlas obligaría al
+    # frontend a reconstruir la barra lateral página por página.
+    pagination_class = None
+
+    def get_queryset(self):
+        queryset = visible_task_lists_queryset(self.request.user)
+        search = self.request.query_params.get("search")
+        is_active = self.request.query_params.get("is_active")
+        workspace_group = self.request.query_params.get("workspace_group")
+
+        if search:
+            queryset = queryset.filter(
+                Q(name__icontains=search)
+                | Q(description__icontains=search)
+            )
+
+        if is_active == "true":
+            queryset = queryset.filter(is_active=True)
+
+        if is_active == "false":
+            queryset = queryset.filter(is_active=False)
+
+        if workspace_group:
+            queryset = queryset.filter(workspace_group_id=workspace_group)
+
+        return queryset.order_by("position", "name", "id").distinct()
+
+    def perform_create(self, serializer):
+        workspace_group = serializer.validated_data.get("workspace_group")
+
+        if (
+            workspace_group
+            and not usuario_puede_gestionar_grupo(
+                self.request.user,
+                workspace_group,
+            )
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para crear listas compartidas en este equipo."
+            )
+
+        serializer.save(created_by=self.request.user)
+
+    def perform_update(self, serializer):
+        task_list = self.get_object()
+
+        if not usuario_puede_gestionar_lista_tareas(
+            self.request.user,
+            task_list,
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para modificar esta lista."
+            )
+
+        workspace_group = serializer.validated_data.get(
+            "workspace_group",
+            task_list.workspace_group,
+        )
+
+        if (
+            workspace_group
+            and not usuario_puede_gestionar_grupo(
+                self.request.user,
+                workspace_group,
+            )
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para mover esta lista a ese equipo."
+            )
+
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if not usuario_puede_gestionar_lista_tareas(
+            self.request.user,
+            instance,
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para eliminar esta lista."
+            )
+
+        instance.delete()
+
+
 class TaskViewSet(viewsets.ModelViewSet):
     serializer_class = TaskSerializer
     permission_classes = [EsUsuarioWorkspace]
@@ -352,19 +335,31 @@ class TaskViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         queryset = visible_tasks_queryset(self.request.user)
 
+        my_day_selections = TaskMyDaySelection.objects.filter(
+            task_id=OuterRef("pk"),
+            user=self.request.user,
+            selected_date=timezone.localdate(),
+        )
+        queryset = queryset.annotate(
+            in_my_day=Exists(my_day_selections),
+        )
+
         if self.action == "retrieve":
             queryset = queryset.prefetch_related(
             "comments__user",
             "status_history__changed_by",
+            "change_history__changed_by",
         )
 
         status_param = self.request.query_params.get("status")
         priority = self.request.query_params.get("priority")
         task_type = self.request.query_params.get("task_type")
         group = self.request.query_params.get("group")
+        task_list = self.request.query_params.get("task_list")
         assigned_to = self.request.query_params.get("assigned_to")
         search = self.request.query_params.get("search")
         due = self.request.query_params.get("due")
+        my_day = self.request.query_params.get("my_day")
         ordering = self.request.query_params.get("ordering")
 
         if status_param:
@@ -378,6 +373,9 @@ class TaskViewSet(viewsets.ModelViewSet):
 
         if group:
             queryset = queryset.filter(group_id=group)
+
+        if task_list:
+            queryset = queryset.filter(task_list_id=task_list)
 
         if assigned_to:
             queryset = queryset.filter(assigned_to_id=assigned_to)
@@ -402,11 +400,18 @@ class TaskViewSet(viewsets.ModelViewSet):
                 status__in=["completed", "cancelled"],
             )
 
+        if my_day == "true":
+            queryset = queryset.filter(in_my_day=True)
+
+        if my_day == "false":
+            queryset = queryset.filter(in_my_day=False)
+
         if search:
             queryset = queryset.filter(
                 Q(title__icontains=search)
                 | Q(description__icontains=search)
                 | Q(group__name__icontains=search)
+                | Q(task_list__name__icontains=search)
                 | Q(assigned_to__username__icontains=search)
                 | Q(assigned_to__first_name__icontains=search)
                 | Q(assigned_to__last_name__icontains=search)
@@ -417,27 +422,90 @@ class TaskViewSet(viewsets.ModelViewSet):
 
         return queryset.order_by("status", "due_at", "-created_at").distinct()
 
+    @transaction.atomic
     def perform_create(self, serializer):
+        group = serializer.validated_data.get("group")
+        task_list = serializer.validated_data.get("task_list")
         assigned_to = serializer.validated_data.get("assigned_to")
 
-        if not assigned_to:
-            assigned_to = self.request.user
+        if task_list and not usuario_puede_ver_lista_tareas(
+            self.request.user,
+            task_list,
+        ):
+            raise PermissionDenied(
+                "No tienes acceso a la lista seleccionada."
+            )
 
-        group = serializer.validated_data.get("group")
+        if task_list and task_list.workspace_group_id:
+            if (
+                group
+                and group.id != task_list.workspace_group_id
+            ):
+                raise PermissionDenied(
+                    "La lista y el equipo de trabajo no coinciden."
+                )
+            group = task_list.workspace_group
 
         if group and not usuario_es_miembro_activo(self.request.user, group):
             raise PermissionDenied(
                 "No perteneces a este grupo de trabajo."
             )
 
-        if not user_can_assign_to_other_user(self.request.user, assigned_to, group):
+        if not assigned_to:
+            if task_list and task_list.workspace_group_id:
+                assigned_to = None
+            elif (
+                not group
+                or usuario_es_integrante_activo_grupo(
+                    self.request.user,
+                    group,
+                )
+            ):
+                assigned_to = self.request.user
+
+        if (
+            group
+            and assigned_to
+            and not usuario_es_integrante_activo_grupo(
+                assigned_to,
+                group,
+            )
+        ):
+            raise PermissionDenied(
+                "El responsable debe ser un integrante activo del equipo."
+            )
+
+        if not user_can_assign_to_other_user(
+            self.request.user,
+            assigned_to,
+            group,
+        ):
             raise PermissionDenied(
                 "No tienes permiso para asignar tareas a otro usuario."
             )
 
-        task = serializer.save(
-            created_by=self.request.user,
-            assigned_to=assigned_to,
+        save_kwargs = {
+            "created_by": self.request.user,
+            "assigned_to": assigned_to,
+        }
+        if task_list and task_list.workspace_group_id:
+            save_kwargs["group"] = group
+
+        reminder_at = serializer.validated_data.get("reminder_at")
+
+        if reminder_at and not assigned_to:
+            raise ValidationError({
+                "reminder_at": (
+                    "Asigna un responsable antes de programar "
+                    "un recordatorio."
+                )
+            })
+
+        task = serializer.save(**save_kwargs)
+
+        sync_primary_task_reminder(
+            task,
+            actor=self.request.user,
         )
 
         notify_task_assigned(
@@ -445,6 +513,7 @@ class TaskViewSet(viewsets.ModelViewSet):
             actor=self.request.user,
         )
 
+    @transaction.atomic
     def perform_update(self, serializer):
         task = self.get_object()
 
@@ -455,10 +524,41 @@ class TaskViewSet(viewsets.ModelViewSet):
 
         assigned_to = serializer.validated_data.get("assigned_to", task.assigned_to)
         group = serializer.validated_data.get("group", task.group)
+        task_list = serializer.validated_data.get("task_list", task.task_list)
+
+        if task_list and not usuario_puede_ver_lista_tareas(
+            self.request.user,
+            task_list,
+        ):
+            raise PermissionDenied(
+                "No tienes acceso a la lista seleccionada."
+            )
+
+        if task_list and task_list.workspace_group_id:
+            if (
+                group
+                and group.id != task_list.workspace_group_id
+            ):
+                raise PermissionDenied(
+                    "La lista y el equipo de trabajo no coinciden."
+                )
+            group = task_list.workspace_group
 
         if group and not usuario_es_miembro_activo(self.request.user, group):
             raise PermissionDenied(
                 "No perteneces a este grupo de trabajo."
+            )
+
+        if (
+            group
+            and assigned_to
+            and not usuario_es_integrante_activo_grupo(
+                assigned_to,
+                group,
+            )
+        ):
+            raise PermissionDenied(
+                "El responsable debe ser un integrante activo del equipo."
             )
 
         if assigned_to and not user_can_assign_to_other_user(
@@ -470,8 +570,36 @@ class TaskViewSet(viewsets.ModelViewSet):
                 "No tienes permiso para asignar tareas a otro usuario."
             )
 
+        reminder_at = serializer.validated_data.get(
+            "reminder_at",
+            task.reminder_at,
+        )
+
+        if reminder_at and not assigned_to:
+            raise ValidationError({
+                "reminder_at": (
+                    "Asigna un responsable antes de programar "
+                    "un recordatorio."
+                )
+            })
+
         old_assigned_to = task.assigned_to
-        updated_task = serializer.save()
+        previous_plan = snapshot_task_plan(task)
+        save_kwargs = {}
+        if task_list and task_list.workspace_group_id:
+            save_kwargs["group"] = group
+
+        updated_task = serializer.save(**save_kwargs)
+        record_task_plan_change(
+            task=updated_task,
+            previous=previous_plan,
+            actor=self.request.user,
+        )
+
+        sync_primary_task_reminder(
+            updated_task,
+            actor=self.request.user,
+        )
 
         notify_task_assigned(
             updated_task,
@@ -479,6 +607,7 @@ class TaskViewSet(viewsets.ModelViewSet):
             previous_assignee=old_assigned_to,
         )
 
+    @transaction.atomic
     def perform_destroy(self, instance):
         if not usuario_puede_editar_datos_tarea(
             self.request.user,
@@ -487,6 +616,30 @@ class TaskViewSet(viewsets.ModelViewSet):
             raise PermissionDenied(
                 "No tienes permiso para eliminar esta tarea."
             )
+
+        # Los registros comerciales y sus seguimientos son evidencias.
+        # Solo se permite eliminar tareas sin actividad ni vínculo CRM.
+        if (
+            instance.crm_links.exists()
+            or instance.reminders.filter(crm_links__isnull=False).exists()
+        ):
+            raise ValidationError({
+                "detail": (
+                    "Esta tarea está vinculada al CRM y debe conservarse. "
+                    "Puedes cancelarla con una justificación."
+                ),
+            })
+        if (
+            instance.comments.exists()
+            or instance.status_history.exists()
+            or instance.change_history.exists()
+        ):
+            raise ValidationError({
+                "detail": (
+                    "La tarea tiene historial de gestión y no se puede "
+                    "eliminar. Puedes cancelarla con una justificación."
+                ),
+            })
 
         instance.delete()
 
@@ -516,6 +669,52 @@ class TaskViewSet(viewsets.ModelViewSet):
             old_status=old_status or "",
             new_status=new_status,
             note=note,
+        )
+
+    @action(
+        detail=True,
+        methods=["post", "delete"],
+        url_path="my-day",
+    )
+    def my_day(self, request, pk=None):
+        """
+        Agrega o quita una tarea del Mi día personal del usuario autenticado.
+
+        Esta acción no cambia responsable, fecha límite, prioridad ni ninguna
+        otra planificación compartida de la tarea.
+        """
+        task = self.get_object()
+
+        if request.method == "POST":
+            if task.status in ["completed", "cancelled"]:
+                return Response(
+                    {
+                        "detail": (
+                            "No puedes agregar una tarea cerrada a Mi día. "
+                            "Reábrela primero si necesitas retomarla."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            TaskMyDaySelection.objects.update_or_create(
+                task=task,
+                user=request.user,
+                defaults={
+                    "selected_date": timezone.localdate(),
+                },
+            )
+        else:
+            TaskMyDaySelection.objects.filter(
+                task=task,
+                user=request.user,
+            ).delete()
+
+        refreshed_task = self.get_queryset().get(pk=task.pk)
+
+        return Response(
+            self.get_serializer(refreshed_task).data,
+            status=status.HTTP_200_OK,
         )
 
     @action(
@@ -581,6 +780,12 @@ class TaskViewSet(viewsets.ModelViewSet):
                     "updated_at",
                 ]
             )
+
+            if new_status in ["completed", "cancelled"]:
+                sync_primary_task_reminder(
+                    task,
+                    actor=request.user,
+                )
 
             self._register_status_history(
                 task=task,
@@ -658,6 +863,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         methods=["post"],
         url_path="change-status",
     )
+    @transaction.atomic
     def change_status(self, request, pk=None):
         task = self.get_object()
 
@@ -698,6 +904,12 @@ class TaskViewSet(viewsets.ModelViewSet):
                 "updated_at",
             ]
         )
+
+        if new_status in ["completed", "cancelled"]:
+            sync_primary_task_reminder(
+                task,
+                actor=request.user,
+            )
 
         self._register_status_history(
             task=task,
@@ -892,6 +1104,7 @@ class CalendarEventViewSet(viewsets.ModelViewSet):
             previous_assignee=old_assigned_to,
         )
 
+    @transaction.atomic
     def perform_destroy(self, instance):
         if not usuario_puede_editar_datos_evento(
             self.request.user,
@@ -901,166 +1114,15 @@ class CalendarEventViewSet(viewsets.ModelViewSet):
                 "No tienes permiso para eliminar este evento."
             )
 
-        instance.delete()
-
-
-class ReminderViewSet(viewsets.ModelViewSet):
-    serializer_class = ReminderSerializer
-    permission_classes = [EsUsuarioWorkspace]
-
-    def get_queryset(self):
-        queryset = visible_reminders_queryset(self.request.user)
-
-        reminder_status = self.request.query_params.get("status")
-        scope = self.request.query_params.get("scope")
-        group = self.request.query_params.get("group")
-        assigned_to = self.request.query_params.get("assigned_to")
-        user = self.request.query_params.get("user")
-        search = self.request.query_params.get("search")
-        is_completed = self.request.query_params.get("is_completed")
-        now = timezone.now()
-
-        if reminder_status:
-            queryset = queryset.filter(status=reminder_status)
-
-        if group:
-            queryset = queryset.filter(group_id=group)
-
-        if assigned_to:
-            queryset = queryset.filter(user_id=assigned_to)
-
-        if user:
-            queryset = queryset.filter(user_id=user)
-
-        if is_completed == "true":
-            queryset = queryset.filter(status="completed")
-
-        if is_completed == "false":
-            queryset = queryset.exclude(status="completed")
-
-        if scope == "overdue":
-            queryset = queryset.filter(
-                remind_at__lt=now,
-                status="pending",
-            )
-
-        if scope == "upcoming":
-            queryset = queryset.filter(
-                remind_at__gte=now,
-                status="pending",
-            )
-
-        if scope == "today":
-            queryset = queryset.filter(
-                remind_at__date=timezone.localdate(),
-                status="pending",
-            )
-
-        if scope == "completed":
-            queryset = queryset.filter(status="completed")
-
-        if search:
-            queryset = queryset.filter(
-                Q(title__icontains=search)
-                | Q(message__icontains=search)
-                | Q(group__name__icontains=search)
-                | Q(user__username__icontains=search)
-                | Q(user__first_name__icontains=search)
-                | Q(user__last_name__icontains=search)
-            )
-
-        return queryset.order_by("status", "remind_at", "-created_at").distinct()
-
-    def perform_create(self, serializer):
-        assigned_user = serializer.validated_data.get("user")
-        group = serializer.validated_data.get("group")
-        task = serializer.validated_data.get("task")
-        event = serializer.validated_data.get("event")
-
-        if not assigned_user:
-            assigned_user = self.request.user
-
-        if not group:
-            if task and task.group:
-                group = task.group
-
-            if event and event.group:
-                group = event.group
-
-        if group and not usuario_es_miembro_activo(self.request.user, group):
-            raise PermissionDenied(
-                "No perteneces a este grupo de trabajo."
-            )
-
-        if not user_can_assign_to_other_user(self.request.user, assigned_user, group):
-            raise PermissionDenied(
-                "No tienes permiso para asignar recordatorios a otro usuario."
-            )
-
-        reminder = serializer.save(
-            created_by=self.request.user,
-            user=assigned_user,
-            group=group,
-        )
-
-        notify_reminder_assigned(
-            reminder,
-            actor=self.request.user,
-        )
-
-    def perform_update(self, serializer):
-        reminder = self.get_object()
-        incoming_keys = set(self.request.data.keys())
-
-        completion_keys = {"is_completed", "status", "completed_at"}
-        only_completion_update = bool(incoming_keys) and incoming_keys.issubset(
-            completion_keys,
-        )
-
-        if only_completion_update:
-            if not usuario_puede_completar_recordatorio(self.request.user, reminder):
-                raise PermissionDenied(
-                    "No tienes permiso para completar este recordatorio."
-                )
-
-            serializer.save()
-            return
-
-        if not usuario_puede_editar_datos_recordatorio(self.request.user, reminder):
-            raise PermissionDenied(
-                "No tienes permiso para modificar este recordatorio."
-            )
-
-        assigned_user = serializer.validated_data.get("user", reminder.user)
-        group = serializer.validated_data.get("group", reminder.group)
-
-        if group and not usuario_es_miembro_activo(self.request.user, group):
-            raise PermissionDenied(
-                "No perteneces a este grupo de trabajo."
-            )
-
-        if not user_can_assign_to_other_user(self.request.user, assigned_user, group):
-            raise PermissionDenied(
-                "No tienes permiso para asignar recordatorios a otro usuario."
-            )
-
-        old_user = reminder.user
-        updated_reminder = serializer.save()
-
-        notify_reminder_assigned(
-            updated_reminder,
-            actor=self.request.user,
-            previous_user=old_user,
-        )
-
-    def perform_destroy(self, instance):
-        if not usuario_puede_editar_datos_recordatorio(
-            self.request.user,
-            instance,
+        if (
+            instance.crm_links.exists()
+            or instance.reminders.filter(crm_links__isnull=False).exists()
         ):
-            raise PermissionDenied(
-                "No tienes permiso para eliminar este recordatorio."
-            )
+            raise ValidationError({
+                "detail": (
+                    "Este evento está vinculado al CRM y debe conservarse."
+                ),
+            })
 
         instance.delete()
 
@@ -1181,7 +1243,6 @@ class WorkspaceCalendarAPIView(APIView):
         tasks = visible_tasks_queryset(request.user).filter(
             Q(due_at__range=(start, end))
             | Q(start_at__range=(start, end))
-            | Q(reminder_at__range=(start, end))
         ).exclude(
             status__in=["completed", "cancelled"],
         )
@@ -1193,7 +1254,7 @@ class WorkspaceCalendarAPIView(APIView):
         reminders = visible_reminders_queryset(request.user).filter(
             remind_at__range=(start, end),
         ).exclude(
-            status="completed",
+            status__in=["completed", "dismissed"],
         )
 
         if group:
@@ -1207,9 +1268,14 @@ class WorkspaceCalendarAPIView(APIView):
             can_edit_details = usuario_puede_editar_datos_tarea(request.user, task)
             can_follow_up = usuario_puede_dar_seguimiento_tarea(request.user, task)
             can_complete = usuario_puede_completar_tarea(request.user, task)
-            is_read_only = not can_edit_details and not can_follow_up
+            is_read_only = (
+                not can_edit_details
+                and not can_follow_up
+                and not can_complete
+            )
+            display_at = task.due_at or task.start_at
 
-            if task.due_at:
+            if display_at:
                 calendar_items.append({
                     "id": f"task-{task.id}",
                     "real_id": task.id,
@@ -1217,34 +1283,12 @@ class WorkspaceCalendarAPIView(APIView):
                     "type": "task",
                     "title": task.title,
                     "description": task.description,
-                    "start": task.due_at,
-                    "end": task.due_at,
-                    "status": task.status,
-                    "status_display": task.get_status_display(),
-                    "priority": task.priority,
-                    "priority_display": task.get_priority_display(),
-                    "group": task.group_id,
-                    "group_name": task.group.name if task.group else "",
-                    "assigned_to": task.assigned_to_id,
-                    "assigned_to_name": get_display_name(task.assigned_to),
-                    "is_overdue": task.is_overdue,
-                    "completed_at": task.completed_at,
-                    "can_edit_details": can_edit_details,
-                    "can_follow_up": can_follow_up,
-                    "can_complete": can_complete,
-                    "is_read_only": is_read_only,
-                })
-
-            if task.reminder_at:
-                calendar_items.append({
-                    "id": f"task-reminder-{task.id}",
-                    "real_id": task.id,
-                    "task_id": task.id,
-                    "type": "task_reminder",
-                    "title": f"Recordatorio: {task.title}",
-                    "description": task.description,
-                    "start": task.reminder_at,
-                    "end": task.reminder_at,
+                    "start": display_at,
+                    "end": display_at,
+                    "start_at": task.start_at,
+                    "due_at": task.due_at,
+                    "task_type": task.task_type,
+                    "task_type_display": task.get_task_type_display(),
                     "status": task.status,
                     "status_display": task.get_status_display(),
                     "priority": task.priority,

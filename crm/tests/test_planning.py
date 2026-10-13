@@ -19,10 +19,13 @@ from crm.services import (
     create_opportunity_event,
     create_opportunity_reminder,
     create_opportunity_task,
+    create_school_task,
+    record_commercial_activity,
     transition_opportunity_stage,
 )
 from notifications.models import Notification
 from workspaces.models import Task
+from workspaces.views import visible_tasks_queryset
 
 
 User = get_user_model()
@@ -126,6 +129,41 @@ class CRMPlanningTests(TestCase):
             ).exists()
         )
 
+    def test_school_next_action_is_visible_in_todo_and_linked_to_activity(self):
+        activity = record_commercial_activity(
+            school=self.school,
+            opportunity=self.opportunity,
+            activity_type="call",
+            summary="Llamada al colegio",
+            result="Se acordó realizar un seguimiento.",
+            performed_by=self.advisor,
+            created_by=self.advisor,
+        )
+        scheduled_at = timezone.now() + timedelta(days=2)
+
+        task = create_school_task(
+            school=self.school,
+            opportunity=self.opportunity,
+            origin_activity=activity,
+            commercial_action_type="visit",
+            actor=self.advisor,
+            title="Realizar seguimiento de propuesta",
+            due_at=scheduled_at,
+        )
+
+        self.assertEqual(task.status, "pending")
+        self.assertEqual(task.assigned_to, self.advisor)
+        self.assertEqual(task.due_at, scheduled_at)
+        self.assertTrue(
+            visible_tasks_queryset(self.advisor).filter(pk=task.pk).exists()
+        )
+        link = CRMWorkItemLink.objects.get(origin_activity=activity)
+        self.assertEqual(link.school, self.school)
+        self.assertEqual(link.opportunity, self.opportunity)
+        self.assertEqual(link.task, task)
+        self.assertIsNone(link.event)
+        self.assertEqual(link.commercial_action_type, "visit")
+
     def test_event_is_created_and_linked_to_opportunity(self):
         event = create_opportunity_event(
             opportunity=self.opportunity,
@@ -169,10 +207,17 @@ class CRMPlanningTests(TestCase):
         )
 
     def test_reminder_rejects_task_from_another_opportunity(self):
+        other_campaign = Campaign.objects.create(
+            code="CRM-PLAN-2028-OTHER",
+            name="Campaña CRM 2028",
+            year=2028,
+            status=Campaign.Status.PLANNING,
+            created_by=self.admin,
+        )
         other_opportunity = create_opportunity(
             title="Otra oportunidad",
             school=self.school,
-            campaign=self.campaign,
+            campaign=other_campaign,
             pipeline=self.pipeline,
             created_by=self.admin,
         )

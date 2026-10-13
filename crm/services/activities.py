@@ -2,7 +2,9 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
-from crm.models import CommercialActivity, Opportunity
+from crm.models import CommercialActivity, Opportunity, School
+
+from .history import record_history_event
 
 
 class CommercialActivityError(ValidationError):
@@ -12,35 +14,60 @@ class CommercialActivityError(ValidationError):
 @transaction.atomic
 def record_commercial_activity(
     *,
-    opportunity,
     activity_type,
     summary,
     result,
     performed_by,
     created_by,
+    school=None,
+    opportunity=None,
     contact=None,
     occurred_at=None,
+    latitude=None,
+    longitude=None,
+    location_accuracy_m=None,
+    location_captured_at=None,
     is_important=False,
 ):
-    locked_opportunity = (
-        Opportunity.objects
-        .select_for_update()
-        .select_related("school", "stage")
-        .get(pk=opportunity.pk)
-    )
+    locked_opportunity = None
 
-    if locked_opportunity.is_closed:
+    if opportunity is not None:
+        locked_opportunity = (
+            Opportunity.objects
+            .select_for_update()
+            .select_related("school", "stage")
+            .get(pk=opportunity.pk)
+        )
+
+        if locked_opportunity.is_closed:
+            raise CommercialActivityError(
+                "La oportunidad está cerrada. Debe reabrirse antes de "
+                "registrar nueva actividad comercial."
+            )
+
+        resolved_school = locked_opportunity.school
+
+        if school is not None and school.pk != resolved_school.pk:
+            raise CommercialActivityError(
+                "La oportunidad no pertenece al colegio indicado."
+            )
+    elif school is not None:
+        resolved_school = (
+            School.objects
+            .select_for_update()
+            .get(pk=school.pk)
+        )
+    else:
         raise CommercialActivityError(
-            "La oportunidad está cerrada. Debe reabrirse antes de "
-            "registrar nueva actividad comercial."
+            "Debe indicar el colegio de la actividad."
         )
 
     if (
         contact is not None
-        and contact.school_id != locked_opportunity.school_id
+        and contact.school_id != resolved_school.id
     ):
         raise CommercialActivityError(
-            "El contacto no pertenece al colegio de la oportunidad."
+            "El contacto no pertenece al colegio."
         )
 
     cleaned_summary = summary.strip()
@@ -58,7 +85,14 @@ def record_commercial_activity(
 
     activity_date = occurred_at or timezone.now()
 
+    if activity_date > timezone.now():
+        raise CommercialActivityError(
+            "La fecha de una actividad realizada no puede estar en el futuro. "
+            "Programa la acción futura en ToDo / Agenda."
+        )
+
     activity = CommercialActivity(
+        school=resolved_school,
         opportunity=locked_opportunity,
         contact=contact,
         performed_by=performed_by,
@@ -66,13 +100,17 @@ def record_commercial_activity(
         summary=cleaned_summary,
         result=cleaned_result,
         occurred_at=activity_date,
+        latitude=latitude,
+        longitude=longitude,
+        location_accuracy_m=location_accuracy_m,
+        location_captured_at=location_captured_at,
         is_important=is_important,
         created_by=created_by,
     )
     activity.full_clean()
     activity.save()
 
-    if (
+    if locked_opportunity and (
         locked_opportunity.last_activity_at is None
         or activity_date > locked_opportunity.last_activity_at
     ):
@@ -80,5 +118,28 @@ def record_commercial_activity(
         locked_opportunity.save(
             update_fields=["last_activity_at", "updated_at"]
         )
+
+    record_history_event(
+        school=resolved_school,
+        opportunity=locked_opportunity,
+        contact=contact,
+        actor=performed_by or created_by,
+        category="activity",
+        event_type=activity.activity_type,
+        title=activity.summary,
+        description=activity.result,
+        source_type="commercial_activity",
+        source_id=activity.id,
+        metadata={
+            "activity_id": activity.id,
+            "contact_id": activity.contact_id,
+            "opportunity_id": activity.opportunity_id,
+            "has_location": (
+                activity.latitude is not None
+                and activity.longitude is not None
+            ),
+        },
+        occurred_at=activity.occurred_at,
+    )
 
     return activity

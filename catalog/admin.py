@@ -76,6 +76,7 @@ class ProductAdmin(admin.ModelAdmin):
         "grade",
         "area",
         "product_type",
+        "commercial_line",
         "is_featured",
         "is_active",
     )
@@ -85,6 +86,7 @@ class ProductAdmin(admin.ModelAdmin):
         "grade",
         "area",
         "product_type",
+        "commercial_line",
         "is_featured",
         "is_active",
     )

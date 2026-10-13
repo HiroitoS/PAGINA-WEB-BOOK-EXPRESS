@@ -7,9 +7,11 @@ from .models import (
     Reminder,
     Task,
     TaskComment,
+    TaskChangeHistory,
     TaskStatusHistory,
     WorkspaceGroup,
     WorkspaceMembership,
+    WorkspaceTaskList,
 )
 from .permissions import (
     usuario_puede_completar_recordatorio,
@@ -17,7 +19,11 @@ from .permissions import (
     usuario_puede_dar_seguimiento_tarea,
     usuario_puede_editar_datos_evento,
     usuario_puede_editar_datos_recordatorio,
+    usuario_puede_ver_evento,
+    usuario_puede_ver_tarea,
     usuario_puede_editar_datos_tarea,
+    usuario_puede_gestionar_grupo,
+    usuario_puede_gestionar_lista_tareas,
     usuario_puede_reabrir_tarea,
 )
 
@@ -87,6 +93,7 @@ class WorkspaceGroupSerializer(serializers.ModelSerializer):
         many=True,
         read_only=True,
     )
+    can_manage = serializers.SerializerMethodField()
 
     class Meta:
         model = WorkspaceGroup
@@ -99,6 +106,7 @@ class WorkspaceGroupSerializer(serializers.ModelSerializer):
             "created_by",
             "created_by_name",
             "memberships",
+            "can_manage",
             "created_at",
             "updated_at",
         ]
@@ -107,12 +115,66 @@ class WorkspaceGroupSerializer(serializers.ModelSerializer):
             "created_by",
             "created_by_name",
             "memberships",
+            "can_manage",
             "created_at",
             "updated_at",
         ]
 
     def get_created_by_name(self, obj):
         return get_user_display_name(obj.created_by)
+
+    def get_can_manage(self, obj):
+        user = get_request_user(self)
+        return usuario_puede_gestionar_grupo(user, obj)
+
+
+class WorkspaceTaskListSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.SerializerMethodField()
+    workspace_group_name = serializers.CharField(
+        source="workspace_group.name",
+        read_only=True,
+    )
+    can_manage = serializers.SerializerMethodField()
+    is_shared = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WorkspaceTaskList
+        fields = [
+            "id",
+            "name",
+            "description",
+            "color",
+            "workspace_group",
+            "workspace_group_name",
+            "created_by",
+            "created_by_name",
+            "position",
+            "is_active",
+            "is_shared",
+            "can_manage",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "created_by",
+            "created_by_name",
+            "workspace_group_name",
+            "is_shared",
+            "can_manage",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_created_by_name(self, obj):
+        return get_user_display_name(obj.created_by)
+
+    def get_is_shared(self, obj):
+        return bool(obj.workspace_group_id)
+
+    def get_can_manage(self, obj):
+        user = get_request_user(self)
+        return usuario_puede_gestionar_lista_tareas(user, obj)
 
 
 class TaskCommentSerializer(serializers.ModelSerializer):
@@ -186,6 +248,25 @@ class TaskStatusHistorySerializer(serializers.ModelSerializer):
         )
 
 
+class TaskChangeHistorySerializer(serializers.ModelSerializer):
+    changed_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = TaskChangeHistory
+        fields = [
+            "id",
+            "task",
+            "changed_by",
+            "changed_by_name",
+            "changes",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_changed_by_name(self, obj):
+        return get_user_display_name(obj.changed_by)
+
+
 class TaskListSerializer(serializers.ModelSerializer):
     """
     Serializer liviano para listados de tareas.
@@ -198,6 +279,10 @@ class TaskListSerializer(serializers.ModelSerializer):
     assigned_to_name = serializers.SerializerMethodField()
     group_name = serializers.CharField(
         source="group.name",
+        read_only=True,
+    )
+    task_list_name = serializers.CharField(
+        source="task_list.name",
         read_only=True,
     )
     status_display = serializers.CharField(
@@ -213,6 +298,7 @@ class TaskListSerializer(serializers.ModelSerializer):
         read_only=True,
     )
     is_overdue = serializers.BooleanField(read_only=True)
+    in_my_day = serializers.SerializerMethodField()
 
     assigned_to = serializers.PrimaryKeyRelatedField(
         queryset=User.objects.filter(is_active=True),
@@ -240,6 +326,8 @@ class TaskListSerializer(serializers.ModelSerializer):
             "priority_display",
             "group",
             "group_name",
+            "task_list",
+            "task_list_name",
             "created_by",
             "created_by_name",
             "assigned_to",
@@ -251,6 +339,7 @@ class TaskListSerializer(serializers.ModelSerializer):
             "is_important",
             "is_private",
             "is_overdue",
+            "in_my_day",
             "related_contact_request",
             "can_edit_details",
             "can_follow_up",
@@ -265,6 +354,7 @@ class TaskListSerializer(serializers.ModelSerializer):
             "id",
             "created_by",
             "created_by_name",
+            "task_list_name",
             "assigned_to_name",
             "status",
             "completed_at",
@@ -283,6 +373,22 @@ class TaskListSerializer(serializers.ModelSerializer):
 
     def get_assigned_to_name(self, obj):
         return get_user_display_name(obj.assigned_to)
+
+    def get_in_my_day(self, obj):
+        annotated_value = getattr(obj, "in_my_day", None)
+
+        if annotated_value is not None:
+            return bool(annotated_value)
+
+        user = get_request_user(self)
+
+        if not user or not user.is_authenticated:
+            return False
+
+        return obj.my_day_selections.filter(
+            user=user,
+            selected_date=timezone.localdate(),
+        ).exists()
 
     def get_can_edit_details(self, obj):
         user = get_request_user(self)
@@ -320,16 +426,22 @@ class TaskSerializer(TaskListSerializer):
         many=True,
         read_only=True,
     )
+    change_history = TaskChangeHistorySerializer(
+        many=True,
+        read_only=True,
+    )
 
     class Meta(TaskListSerializer.Meta):
         fields = TaskListSerializer.Meta.fields + [
             "comments",
             "status_history",
+            "change_history",
         ]
 
         read_only_fields = TaskListSerializer.Meta.read_only_fields + [
             "comments",
             "status_history",
+            "change_history",
         ]
 
 class TaskStatusUpdateSerializer(serializers.Serializer):
@@ -521,6 +633,10 @@ class ReminderSerializer(serializers.ModelSerializer):
         source="get_status_display",
         read_only=True,
     )
+    source_display = serializers.CharField(
+        source="get_source_display",
+        read_only=True,
+    )
     is_completed = serializers.BooleanField(
         required=False,
     )
@@ -529,6 +645,7 @@ class ReminderSerializer(serializers.ModelSerializer):
     )
     can_edit_details = serializers.SerializerMethodField()
     can_complete = serializers.SerializerMethodField()
+    can_reopen = serializers.SerializerMethodField()
     is_read_only = serializers.SerializerMethodField()
 
     class Meta:
@@ -551,12 +668,15 @@ class ReminderSerializer(serializers.ModelSerializer):
             "message",
             "description",
             "remind_at",
+            "source",
+            "source_display",
             "status",
             "status_display",
             "is_completed",
             "is_overdue",
             "can_edit_details",
             "can_complete",
+            "can_reopen",
             "is_read_only",
             "completed_at",
             "created_at",
@@ -572,10 +692,13 @@ class ReminderSerializer(serializers.ModelSerializer):
             "group_name",
             "task_title",
             "event_title",
+            "source",
+            "source_display",
             "status_display",
             "is_overdue",
             "can_edit_details",
             "can_complete",
+            "can_reopen",
             "is_read_only",
             "completed_at",
             "created_at",
@@ -592,6 +715,14 @@ class ReminderSerializer(serializers.ModelSerializer):
         return get_user_display_name(obj.user)
 
     def get_can_edit_details(self, obj):
+        # El aviso principal de una tarea cerrada conserva su planificación histórica.
+        if (
+            obj.source == "task"
+            and obj.task_id
+            and obj.task.status in {"completed", "cancelled"}
+        ):
+            return False
+
         user = get_request_user(self)
         return usuario_puede_editar_datos_recordatorio(user, obj)
 
@@ -599,17 +730,99 @@ class ReminderSerializer(serializers.ModelSerializer):
         user = get_request_user(self)
         return usuario_puede_completar_recordatorio(user, obj)
 
+    def get_can_reopen(self, obj):
+        # Reabrir el aviso de una tarea cerrada generaría un pendiente sin tarea activa.
+        if (
+            obj.source == "task"
+            and obj.task_id
+            and obj.task.status in {"completed", "cancelled"}
+        ):
+            return False
+        return self.get_can_complete(obj)
+
     def get_is_read_only(self, obj):
         return not self.get_can_edit_details(obj) and not self.get_can_complete(obj)
 
     def validate(self, attrs):
-        task = attrs.get("task")
-        event = attrs.get("event")
+        task = attrs.get(
+            "task",
+            self.instance.task if self.instance else None,
+        )
+        event = attrs.get(
+            "event",
+            self.instance.event if self.instance else None,
+        )
+        user = get_request_user(self)
 
         if task and event:
             raise serializers.ValidationError({
-                "event": "El recordatorio debe estar vinculado a una tarea o a un evento, no a ambos."
+                "event": (
+                    "El recordatorio debe estar vinculado a una tarea "
+                    "o a un evento, no a ambos."
+                ),
             })
+
+        # El permiso sobre el recordatorio no concede acceso a otro objeto.
+        if task and "task" in attrs and not usuario_puede_ver_tarea(user, task):
+            raise serializers.ValidationError({
+                "task": "No tienes acceso a esta tarea.",
+            })
+
+        if event and "event" in attrs and not usuario_puede_ver_evento(user, event):
+            raise serializers.ValidationError({
+                "event": "No tienes acceso a este evento.",
+            })
+
+        if self.instance and self.instance.source == "task":
+            # Título, nota, responsable y grupo los determina la tarea.
+            # Editarlos aquí produciría dos representaciones contradictorias.
+            task_owned_fields = {
+                "title", "message", "user", "group",
+            }
+            if task_owned_fields.intersection(attrs):
+                raise serializers.ValidationError({
+                    "task": (
+                        "El título, responsable y grupo se administran desde "
+                        "la tarea. Aquí solo puedes reprogramar el aviso."
+                    ),
+                })
+
+            if "task" in attrs and task != self.instance.task:
+                raise serializers.ValidationError({
+                    "task": "No puedes cambiar la tarea del recordatorio principal.",
+                })
+            if "event" in attrs and attrs["event"] is not None:
+                raise serializers.ValidationError({
+                    "event": "El recordatorio principal pertenece a su tarea.",
+                })
+            if (
+                self.instance.task
+                and self.instance.task.status in {"completed", "cancelled"}
+            ):
+                # Atender un aviso no edita ni reabre la tarea.
+                # Solo se bloquea cambiar su planificación o reactivar el aviso.
+                acknowledgement_fields = {"is_completed", "status"}
+                attempts_to_edit = set(attrs) - acknowledgement_fields
+                attempts_to_reactivate = (
+                    attrs.get("is_completed") is False
+                    or (
+                        "status" in attrs
+                        and attrs["status"] != "completed"
+                    )
+                )
+                if attempts_to_edit or attempts_to_reactivate:
+                    raise serializers.ValidationError({
+                        "task": (
+                            "Esta tarea está cerrada. Puedes atender el aviso, "
+                            "pero para reprogramarlo debes reabrir la tarea."
+                        ),
+                    })
+
+        if "is_completed" in attrs and "status" in attrs:
+            if attrs["is_completed"] != (attrs["status"] == "completed"):
+                raise serializers.ValidationError({
+                    "status": "El estado y la acción del aviso no coinciden.",
+                })
 
         return attrs
 

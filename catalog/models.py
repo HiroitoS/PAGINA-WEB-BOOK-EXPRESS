@@ -214,6 +214,11 @@ class ProductType(TimeStampedModel):
 
 
 class Product(TimeStampedModel):
+    class CommercialLine(models.TextChoices):
+        SCHOOL_TEXT = "school_text", "Texto escolar"
+        READING_PLAN = "reading_plan", "Plan lector"
+        OTHER = "other", "Sin clasificar"
+
     provider = models.ForeignKey(
         Provider,
         on_delete=models.PROTECT,
@@ -278,6 +283,13 @@ class Product(TimeStampedModel):
         blank=True,
         related_name="products",
         verbose_name="Tipo de producto"
+    )
+    commercial_line = models.CharField(
+        max_length=20,
+        choices=CommercialLine.choices,
+        default=CommercialLine.OTHER,
+        db_index=True,
+        verbose_name="Línea comercial",
     )
 
     cover_image = models.ImageField(
