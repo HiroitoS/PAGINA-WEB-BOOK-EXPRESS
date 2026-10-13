@@ -34,7 +34,7 @@ jobs:
     timeout-minutes: 45
     services:
       postgres:
-        image: postgres:17
+        image: postgres:16
         env:
           POSTGRES_DB: bookexpress_ci
           POSTGRES_USER: postgres
@@ -60,7 +60,7 @@ jobs:
       - name: Preparar Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
+          python-version: "3.11"
           cache: pip
       - name: Instalar dependencias
         run: |
