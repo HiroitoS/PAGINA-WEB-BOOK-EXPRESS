@@ -1739,6 +1739,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
             school=school,
             created_by=request.user,
         )
+        school.levels.add(service.level_id)
 
         return Response(
             SchoolEducationalServiceSerializer(service).data,
@@ -1790,7 +1791,15 @@ class SchoolViewSet(viewsets.ModelViewSet):
         )
         serializer.is_valid(raise_exception=True)
 
+        previous_level_id = service.level_id
         service = serializer.save()
+        school.levels.add(service.level_id)
+        if previous_level_id != service.level_id:
+            other_services = school.educational_services.filter(
+                level_id=previous_level_id,
+            ).exclude(pk=service.pk)
+            if not other_services.exists():
+                school.levels.remove(previous_level_id)
 
         return Response(
             SchoolEducationalServiceSerializer(service).data
