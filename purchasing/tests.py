@@ -1,5 +1,5 @@
 """Model contract tests for the first ERP purchase-order milestone."""
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 
 from purchasing.models import PurchaseOrder, PurchaseOrderEvent, PurchaseOrderItem
 
@@ -38,7 +38,7 @@ from django.core.exceptions import PermissionDenied
 from purchasing.order_creation import create_orders_from_adoption
 
 
-class PurchaseOrderCreationPermissionTests(SimpleTestCase):
+class PurchaseOrderCreationPermissionTests(TestCase):
     def test_anonymous_actor_is_rejected_before_database_access(self):
         with self.assertRaises(PermissionDenied):
             create_orders_from_adoption(adoption_id=1, actor=None)
