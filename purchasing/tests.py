@@ -50,3 +50,37 @@ class PurchaseOrderCreationPermissionTests(TestCase):
         with patch("purchasing.order_creation.usuario_tiene_permiso", return_value=False):
             with self.assertRaises(PermissionDenied):
                 create_orders_from_adoption(adoption_id=1, actor=User())
+
+from types import SimpleNamespace
+from django.core.exceptions import ValidationError
+
+from purchasing.order_creation import group_adoption_items_by_provider
+
+
+class PurchaseOrderEditorialGroupingTests(SimpleTestCase):
+    @staticmethod
+    def _line(line_id, provider_id, quantity):
+        return SimpleNamespace(
+            pk=line_id,
+            quantity=quantity,
+            product=SimpleNamespace(provider_id=provider_id),
+        )
+
+    def test_adoption_lines_split_by_provider_without_changing_quantities(self):
+        lines = [self._line(1, 10, 100), self._line(2, 20, 40), self._line(3, 10, 80)]
+        grouped = group_adoption_items_by_provider(lines)
+        self.assertEqual(set(grouped), {10, 20})
+        self.assertEqual([line.pk for line in grouped[10]], [1, 3])
+        self.assertEqual([line.quantity for line in grouped[10]], [100, 80])
+        self.assertEqual([line.pk for line in grouped[20]], [2])
+
+    def test_empty_lines_do_not_generate_groups(self):
+        self.assertEqual(group_adoption_items_by_provider([]), {})
+
+    def test_zero_quantity_is_rejected(self):
+        with self.assertRaises(ValidationError):
+            group_adoption_items_by_provider([self._line(1, 10, 0)])
+
+    def test_missing_provider_is_rejected(self):
+        with self.assertRaises(ValidationError):
+            group_adoption_items_by_provider([self._line(1, None, 1)])
