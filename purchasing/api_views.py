@@ -1,5 +1,6 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.http import Http404
+from django.db.models import Count, Q
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -36,6 +37,46 @@ class PurchaseOrderViewSet(viewsets.ReadOnlyModelViewSet):
                 raise ValidationError({"status": "Estado no válido."})
             queryset = queryset.filter(status=state)
         return queryset
+
+    @action(detail=False, methods=["get"], url_path="adopciones-confirmadas")
+    def confirmed_adoptions(self, request):
+        if not usuario_tiene_permiso(request.user, "purchasing.manage_purchasing"):
+            raise PermissionDenied("No tienes permiso para preparar pedidos.")
+        queryset = (
+            Adoption.objects.filter(is_current=True, confirmed_at__isnull=False)
+            .select_related("school", "campaign")
+            .annotate(items_count=Count("items", distinct=True))
+            .filter(items_count__gt=0)
+            .order_by("-confirmed_at", "-pk")
+        )
+        search = request.query_params.get("buscar", "").strip()
+        if search:
+            queryset = queryset.filter(
+                Q(school__name__icontains=search)
+                | Q(school_name_snapshot__icontains=search)
+            )
+        campaign = request.query_params.get("campania", "").strip()
+        if campaign:
+            if not campaign.isdecimal():
+                raise ValidationError({"campania": "Campaña no válida."})
+            queryset = queryset.filter(campaign_id=int(campaign))
+        page = self.paginate_queryset(queryset)
+        records = page if page is not None else queryset[:50]
+        data = [
+            {
+                "id": adoption.pk,
+                "colegio": adoption.school_name_snapshot,
+                "campania": adoption.campaign_name_snapshot,
+                "version": adoption.version,
+                "productos": adoption.items_count,
+                "confirmada": adoption.confirmed_at,
+                "pedidos_existentes": PurchaseOrder.objects.filter(adoption=adoption).count(),
+            }
+            for adoption in records
+        ]
+        if page is not None:
+            return self.get_paginated_response(data)
+        return Response(data)
 
     @action(detail=False, methods=["post"], url_path="generar-desde-adopcion")
     def generate_from_adoption(self, request):
