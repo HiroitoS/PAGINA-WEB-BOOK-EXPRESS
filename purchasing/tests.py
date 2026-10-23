@@ -30,3 +30,23 @@ class PurchaseOrderModelContractTests(SimpleTestCase):
     def test_purchase_item_has_database_quantity_guard(self):
         names = {constraint.name for constraint in PurchaseOrderItem._meta.constraints}
         self.assertIn("purch_item_quantity_positive", names)
+
+from unittest.mock import patch
+
+from django.core.exceptions import PermissionDenied
+
+from purchasing.order_creation import create_orders_from_adoption
+
+
+class PurchaseOrderCreationPermissionTests(SimpleTestCase):
+    def test_anonymous_actor_is_rejected_before_database_access(self):
+        with self.assertRaises(PermissionDenied):
+            create_orders_from_adoption(adoption_id=1, actor=None)
+
+    def test_authenticated_user_without_purchasing_permission_is_rejected(self):
+        class User:
+            is_authenticated = True
+
+        with patch("purchasing.order_creation.usuario_tiene_permiso", return_value=False):
+            with self.assertRaises(PermissionDenied):
+                create_orders_from_adoption(adoption_id=1, actor=User())
