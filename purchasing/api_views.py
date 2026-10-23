@@ -78,6 +78,54 @@ class PurchaseOrderViewSet(viewsets.ReadOnlyModelViewSet):
             return self.get_paginated_response(data)
         return Response(data)
 
+    @action(detail=False, methods=["get"], url_path="adopciones-por-editorial")
+    def adoptions_by_editorial(self, request):
+        if not usuario_tiene_permiso(request.user, "purchasing.manage_purchasing"):
+            raise PermissionDenied("No tienes permiso para preparar pedidos.")
+        search = request.query_params.get("buscar", "").strip()
+        adoptions = (
+            Adoption.objects.filter(is_current=True, confirmed_at__isnull=False)
+            .select_related("campaign")
+            .prefetch_related("items__product__provider", "purchase_orders")
+            .order_by("-confirmed_at", "-pk")
+        )
+        if search:
+            adoptions = adoptions.filter(school_name_snapshot__icontains=search)
+        groups = {}
+        for adoption in adoptions[:200]:
+            existing = {order.provider_id: order for order in adoption.purchase_orders.all()}
+            providers = {}
+            for line in adoption.items.all():
+                if line.quantity < 1 or not line.product.provider_id:
+                    continue
+                provider = line.product.provider
+                record = providers.setdefault(provider.pk, {
+                    "editorial_id": provider.pk,
+                    "editorial": provider.name,
+                    "lineas": 0,
+                    "unidades": 0,
+                })
+                record["lineas"] += 1
+                record["unidades"] += line.quantity
+            for provider_id, detail in providers.items():
+                group = groups.setdefault(provider_id, {
+                    "editorial_id": provider_id,
+                    "editorial": detail["editorial"],
+                    "adopciones": [],
+                })
+                order = existing.get(provider_id)
+                group["adopciones"].append({
+                    "id": adoption.pk,
+                    "colegio": adoption.school_name_snapshot,
+                    "campania": adoption.campaign_name_snapshot,
+                    "confirmada": adoption.confirmed_at,
+                    "lineas": detail["lineas"],
+                    "unidades": detail["unidades"],
+                    "pedido_id": order.pk if order else None,
+                    "estado_pedido": order.status if order else "pendiente",
+                })
+        return Response(sorted(groups.values(), key=lambda group: group["editorial"].casefold()))
+
     @action(detail=False, methods=["post"], url_path="generar-desde-adopcion")
     def generate_from_adoption(self, request):
         if not usuario_tiene_permiso(request.user, "purchasing.manage_purchasing"):
