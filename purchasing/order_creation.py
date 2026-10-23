@@ -6,12 +6,26 @@ idempotent. Lock the adoption row to serialize concurrent generators.
 from collections import defaultdict
 
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import IntegrityError, transaction
+from django.db import transaction
 
 from accounts.permissions import usuario_tiene_permiso
 from crm.models import Adoption
 
 from purchasing.models import PurchaseOrder, PurchaseOrderEvent, PurchaseOrderItem
+
+
+def snapshot_order_line(item, order):
+    """Capture adopted quantities and supplier cost without recomputing prices."""
+    return PurchaseOrderItem(
+        order=order,
+        product=item.product,
+        adoption_item=item,
+        product_name_snapshot=item.product_name_snapshot,
+        product_code_snapshot=item.product.code or "",
+        quantity_ordered=item.quantity,
+        unit_supplier_cost=item.supplier_cost,
+        currency="PEN",
+    )
 
 
 def group_adoption_items_by_provider(lines):
@@ -82,16 +96,7 @@ def create_orders_from_adoption(*, adoption_id, actor):
 
         order_lines = []
         for item in items:
-            line = PurchaseOrderItem(
-                order=order,
-                product=item.product,
-                adoption_item=item,
-                product_name_snapshot=item.product_name_snapshot,
-                product_code_snapshot=item.product.code or "",
-                quantity_ordered=item.quantity,
-                unit_supplier_cost=item.supplier_cost,
-                currency="PEN",
-            )
+            line = snapshot_order_line(item, order)
             line.full_clean()
             order_lines.append(line)
         PurchaseOrderItem.objects.bulk_create(order_lines)
