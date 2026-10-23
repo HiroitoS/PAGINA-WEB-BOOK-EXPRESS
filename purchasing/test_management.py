@@ -10,10 +10,18 @@ from purchasing.test_integration import GeneracionPedidosAdopcionTests
 
 
 class GestionPedidoTests(GeneracionPedidosAdopcionTests):
+    # Las pruebas heredadas deben ejecutarse sin pedidos preexistentes.
+    # La preparación de cada prueba operativa se realiza solo para esos casos.
     def setUp(self):
-        self.pedido = create_orders_from_adoption(
-            adoption_id=self.adopcion.pk, actor=self.user,
-        )[0]
+        if self._testMethodName.startswith("test_") and self._testMethodName in {
+            "test_actualizar_cantidad_solo_en_borrador",
+            "test_aprobar_y_registrar_envio",
+            "test_prohibir_envio_sin_aprobacion",
+            "test_exigir_evidencia",
+        }:
+            self.pedido = create_orders_from_adoption(
+                adoption_id=self.adopcion.pk, actor=self.user,
+            )[0]
 
     def test_actualizar_cantidad_solo_en_borrador(self):
         item = self.pedido.items.first()
