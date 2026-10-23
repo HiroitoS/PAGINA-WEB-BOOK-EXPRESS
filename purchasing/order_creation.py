@@ -14,6 +14,18 @@ from crm.models import Adoption
 from purchasing.models import PurchaseOrder, PurchaseOrderEvent, PurchaseOrderItem
 
 
+def group_adoption_items_by_provider(lines):
+    """Keep each adoption line under its catalog editorial; never merge schools."""
+    grouped = defaultdict(list)
+    for line in lines:
+        if line.quantity < 1:
+            raise ValidationError(f"Cantidad inválida en el ítem {line.pk}.")
+        if not line.product.provider_id:
+            raise ValidationError(f"El producto del ítem {line.pk} no tiene editorial.")
+        grouped[line.product.provider_id].append(line)
+    return grouped
+
+
 @transaction.atomic
 def create_orders_from_adoption(*, adoption_id, actor):
     """Return existing or newly generated draft orders, one per editorial.
@@ -42,11 +54,7 @@ def create_orders_from_adoption(*, adoption_id, actor):
     if not lines:
         raise ValidationError("La adopción confirmada no contiene productos.")
 
-    grouped = defaultdict(list)
-    for line in lines:
-        if line.quantity < 1:
-            raise ValidationError(f"Cantidad inválida en el ítem {line.pk}.")
-        grouped[line.product.provider_id].append(line)
+    grouped = group_adoption_items_by_provider(lines)
 
     result = []
     for provider_id, items in sorted(grouped.items()):
