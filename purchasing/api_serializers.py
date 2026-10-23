@@ -28,3 +28,12 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
 
 class GenerateFromAdoptionSerializer(serializers.Serializer):
     adoption_id = serializers.IntegerField(min_value=1)
+
+
+class ChangeQuantitySerializer(serializers.Serializer):
+    item_id = serializers.IntegerField(min_value=1)
+    quantity = serializers.IntegerField(min_value=1)
+
+
+class DispatchEvidenceSerializer(serializers.Serializer):
+    evidence = serializers.CharField(max_length=2000, allow_blank=False, trim_whitespace=True)
