@@ -84,3 +84,33 @@ class PurchaseOrderEditorialGroupingTests(SimpleTestCase):
     def test_missing_provider_is_rejected(self):
         with self.assertRaises(ValidationError):
             group_adoption_items_by_provider([self._line(1, None, 1)])
+
+from decimal import Decimal
+
+from purchasing.order_creation import snapshot_order_line
+
+
+class PurchaseOrderSnapshotTests(SimpleTestCase):
+    def test_preserves_adopted_quantity_cost_and_product_code(self):
+        product = SimpleNamespace(pk=9, code="978000000001")
+        adopted = SimpleNamespace(
+            pk=15, product=product, product_name_snapshot="Matemática",
+            quantity=100, supplier_cost=Decimal("29.40"),
+        )
+        order = PurchaseOrder(pk=4)
+        line = snapshot_order_line(adopted, order)
+        self.assertEqual(line.quantity_ordered, 100)
+        self.assertEqual(line.unit_supplier_cost, Decimal("29.40"))
+        self.assertEqual(line.product_code_snapshot, "978000000001")
+        self.assertEqual(line.product_name_snapshot, "Matemática")
+        self.assertEqual(line.adoption_item_id, 15)
+
+    def test_missing_product_code_is_not_invented(self):
+        product = SimpleNamespace(pk=9, code="")
+        adopted = SimpleNamespace(
+            pk=15, product=product, product_name_snapshot="Libro",
+            quantity=80, supplier_cost=Decimal("0.00"),
+        )
+        line = snapshot_order_line(adopted, PurchaseOrder(pk=4))
+        self.assertEqual(line.product_code_snapshot, "")
+        self.assertEqual(line.quantity_ordered, 80)
