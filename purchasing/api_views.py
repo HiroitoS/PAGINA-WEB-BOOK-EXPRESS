@@ -7,7 +7,9 @@ from rest_framework.response import Response
 
 from accounts.permissions import usuario_tiene_permiso
 from crm.models import Adoption
-from purchasing.api_serializers import GenerateFromAdoptionSerializer, PurchaseOrderSerializer
+from purchasing.api_serializers import (GenerateFromAdoptionSerializer, PurchaseOrderSerializer,
+    ChangeQuantitySerializer, DispatchEvidenceSerializer)
+from purchasing.order_management import actualizar_cantidad_borrador, aprobar_pedido, registrar_envio_pedido
 from purchasing.models import PurchaseOrder
 from purchasing.order_creation import create_orders_from_adoption
 
@@ -50,3 +52,36 @@ class PurchaseOrderViewSet(viewsets.ReadOnlyModelViewSet):
         except Adoption.DoesNotExist as exc:
             raise Http404("Adopción no encontrada.") from exc
         return Response(PurchaseOrderSerializer(orders, many=True).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="cambiar-cantidad")
+    def change_quantity(self, request, pk=None):
+        data = ChangeQuantitySerializer(data=request.data)
+        data.is_valid(raise_exception=True)
+        try:
+            pedido = actualizar_cantidad_borrador(
+                pedido_id=pk, detalle_id=data.validated_data["item_id"],
+                cantidad=data.validated_data["quantity"], actor=request.user,
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
+        return Response(PurchaseOrderSerializer(pedido).data)
+
+    @action(detail=True, methods=["post"], url_path="aprobar")
+    def approve(self, request, pk=None):
+        try:
+            pedido = aprobar_pedido(pedido_id=pk, actor=request.user)
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
+        return Response(PurchaseOrderSerializer(pedido).data)
+
+    @action(detail=True, methods=["post"], url_path="registrar-envio")
+    def record_dispatch(self, request, pk=None):
+        data = DispatchEvidenceSerializer(data=request.data)
+        data.is_valid(raise_exception=True)
+        try:
+            pedido = registrar_envio_pedido(
+                pedido_id=pk, actor=request.user, evidencia=data.validated_data["evidence"],
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
+        return Response(PurchaseOrderSerializer(pedido).data)
