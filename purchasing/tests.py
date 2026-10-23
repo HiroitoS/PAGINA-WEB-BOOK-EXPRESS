@@ -88,12 +88,14 @@ class PurchaseOrderEditorialGroupingTests(SimpleTestCase):
 from decimal import Decimal
 
 from purchasing.order_creation import snapshot_order_line
+from catalog.models import Product
+from crm.models import AdoptionItem
 
 
 class PurchaseOrderSnapshotTests(SimpleTestCase):
     def test_preserves_adopted_quantity_cost_and_product_code(self):
-        product = SimpleNamespace(pk=9, code="978000000001")
-        adopted = SimpleNamespace(
+        product = Product(pk=9, name="Matemática", code="978000000001")
+        adopted = AdoptionItem(
             pk=15, product=product, product_name_snapshot="Matemática",
             quantity=100, supplier_cost=Decimal("29.40"),
         )
@@ -106,8 +108,8 @@ class PurchaseOrderSnapshotTests(SimpleTestCase):
         self.assertEqual(line.adoption_item_id, 15)
 
     def test_missing_product_code_is_not_invented(self):
-        product = SimpleNamespace(pk=9, code="")
-        adopted = SimpleNamespace(
+        product = Product(pk=9, name="Libro", code="")
+        adopted = AdoptionItem(
             pk=15, product=product, product_name_snapshot="Libro",
             quantity=80, supplier_cost=Decimal("0.00"),
         )
