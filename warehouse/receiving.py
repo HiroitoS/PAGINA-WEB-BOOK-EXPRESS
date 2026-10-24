@@ -325,3 +325,95 @@ def saldos_pedido(*, actor, order_id):
             for item in lineas
         ],
     }
+
+
+def seguimiento_recepcion(*, actor, receipt):
+    """Estado ACTUAL de los pedidos de una guía e historial de entregas validadas.
+
+    La recepción seleccionada no cambia de contenido; el pendiente puede
+    cambiar cuando otra guía posterior completa el mismo pedido.
+    """
+    _autorizar(actor, "warehouse.view_receiving")
+    lineas_actuales = list(
+        receipt.lines.select_related("order_item__order").order_by("pk")
+    )
+    ids_pedidos = sorted({line.order_item.order_id for line in lineas_actuales})
+    if not ids_pedidos:
+        return {"pedidos": []}
+
+    items = list(
+        PurchaseOrderItem.objects.select_related("order")
+        .filter(order_id__in=ids_pedidos).order_by("order_id", "pk")
+    )
+    actual_por_item = {line.order_item_id: line for line in lineas_actuales}
+    validadas = list(
+        GoodsReceiptLine.objects.select_related("receipt")
+        .filter(
+            order_item__order_id__in=ids_pedidos,
+            receipt__status=GoodsReceipt.Status.VALIDATED,
+        )
+        .order_by("receipt__validated_at", "receipt_id", "pk")
+    )
+    aceptadas_por_item = {}
+    entregas_por_pedido = {}
+    for line in validadas:
+        item_id = line.order_item_id
+        aceptadas_por_item[item_id] = (
+            aceptadas_por_item.get(item_id, 0) + line.quantity_accepted
+        )
+        # Múltiples productos de un mismo pedido pueden llegar en una sola guía:
+        # agrupar por (pedido, recepción), sin duplicar esa entrega.
+        pedido_id = line.order_item.order_id
+        clave = (pedido_id, line.receipt_id)
+        if clave not in entregas_por_pedido:
+            entregas_por_pedido[clave] = {
+                "receipt_id": line.receipt_id,
+                "document_number": line.receipt.document_number,
+                "received_on": line.receipt.received_on,
+                "validated_at": line.receipt.validated_at,
+                "llegaron": 0,
+                "aceptadas": 0,
+                "observadas": 0,
+                "es_recepcion_actual": line.receipt_id == receipt.pk,
+            }
+        registro = entregas_por_pedido[clave]
+        registro["llegaron"] += line.quantity_arrived
+        registro["aceptadas"] += line.quantity_accepted
+        registro["observadas"] += line.quantity_observed
+
+    por_pedido = {}
+    for item in items:
+        order = item.order
+        if order.pk not in por_pedido:
+            por_pedido[order.pk] = {
+                "pedido_id": order.pk,
+                "referencia": f"BE-OC-{order.pk:06d}",
+                "colegio": order.school_name_snapshot or "Pedido independiente",
+                "solicitadas": 0,
+                "aceptadas": 0,
+                "pendientes": 0,
+                "productos": [],
+                "entregas": [],
+            }
+        resumen = por_pedido[order.pk]
+        aceptadas = aceptadas_por_item.get(item.pk, 0)
+        pendiente = max(0, item.quantity_ordered - aceptadas)
+        linea_actual = actual_por_item.get(item.pk)
+        resumen["solicitadas"] += item.quantity_ordered
+        resumen["aceptadas"] += aceptadas
+        resumen["pendientes"] += pendiente
+        resumen["productos"].append({
+            "item_id": item.pk,
+            "producto": item.product_name_snapshot,
+            "codigo": item.product_code_snapshot,
+            "solicitadas": item.quantity_ordered,
+            "aceptadas_acumuladas": aceptadas,
+            "pendientes": pendiente,
+            "llegaron_en_guia": linea_actual.quantity_arrived if linea_actual else 0,
+            "aceptadas_en_guia": linea_actual.quantity_accepted if linea_actual else 0,
+            "observadas_en_guia": linea_actual.quantity_observed if linea_actual else 0,
+        })
+
+    for (pedido_id, _), entrega in entregas_por_pedido.items():
+        por_pedido[pedido_id]["entregas"].append(entrega)
+    return {"pedidos": list(por_pedido.values())}
