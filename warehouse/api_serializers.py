@@ -8,12 +8,14 @@ class ReceiptLineInputSerializer(serializers.Serializer):
     quantity_arrived = serializers.IntegerField(min_value=1)
     quantity_accepted = serializers.IntegerField(min_value=0)
     quantity_observed = serializers.IntegerField(min_value=0)
+    quantity_documented = serializers.IntegerField(min_value=0, required=False, allow_null=True)
+    quantity_extra = serializers.IntegerField(min_value=0, required=False, default=0)
     notes = serializers.CharField(max_length=500, allow_blank=True, required=False)
 
     def validate(self, attrs):
-        if attrs["quantity_arrived"] != attrs["quantity_accepted"] + attrs["quantity_observed"]:
+        if attrs["quantity_arrived"] != attrs["quantity_accepted"] + attrs["quantity_observed"] + attrs["quantity_extra"]:
             raise serializers.ValidationError(
-                "La cantidad llegada debe ser igual a aceptada más observada."
+                "Lo recibido debe coincidir con aceptado, excedente conforme y observado."
             )
         return attrs
 
@@ -39,7 +41,7 @@ class GoodsReceiptLineSerializer(serializers.ModelSerializer):
         model = GoodsReceiptLine
         fields = (
             "id", "order_item", "order_id", "product_name",
-            "quantity_arrived", "quantity_accepted", "quantity_observed", "notes",
+            "quantity_arrived", "quantity_documented", "quantity_accepted", "quantity_extra", "quantity_observed", "notes",
         )
 
 
