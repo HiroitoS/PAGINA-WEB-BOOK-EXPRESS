@@ -15,7 +15,7 @@ from warehouse.api_serializers import CreateReceiptSerializer, GoodsReceiptSeria
 from warehouse.models import GoodsReceipt
 from warehouse.receiving import (
     actualizar_borrador_recepcion, crear_borrador_recepcion,
-    saldos_pedido, validar_recepcion,
+    saldos_pedido, seguimiento_recepcion, validar_recepcion,
 )
 
 
@@ -146,6 +146,11 @@ class GoodsReceiptViewSet(viewsets.ReadOnlyModelViewSet):
         except IntegrityError as exc:
             raise ValidationError({"detail": "El documento ya fue registrado para esta editorial o sus datos están duplicados."}) from exc
         return Response(GoodsReceiptSerializer(receipt).data)
+
+    @action(detail=True, methods=["get"], url_path="seguimiento")
+    def tracking(self, request, pk=None):
+        recepcion = self.get_object()
+        return Response(seguimiento_recepcion(actor=request.user, receipt=recepcion))
 
     @action(detail=False, methods=["get"], url_path="saldos")
     def order_balances(self, request):
