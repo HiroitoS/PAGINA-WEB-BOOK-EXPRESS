@@ -46,7 +46,7 @@ def _logo_oficial():
         if ruta and ruta.is_file():
             try:
                 ancho, alto = ImageReader(str(ruta)).getSize()
-                escala = min(43 * mm / ancho, 15 * mm / alto)
+                escala = min(35 * mm / ancho, 14 * mm / alto)
                 return Image(str(ruta), width=ancho * escala, height=alto * escala)
             except (OSError, ValueError):
                 continue
