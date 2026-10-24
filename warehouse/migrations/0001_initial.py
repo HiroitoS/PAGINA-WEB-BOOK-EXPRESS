@@ -91,4 +91,11 @@ class Migration(migrations.Migration):
         migrations.AddConstraint(
             model_name="goodsreceiptline", constraint=models.CheckConstraint(condition=models.Q(quantity_observed__lte=models.F("quantity_arrived")), name="wh_line_observed_lte_arrived"),
         ),
+        migrations.AddConstraint(
+            model_name="goodsreceiptline",
+            constraint=models.CheckConstraint(
+                condition=models.Q(quantity_arrived=models.F("quantity_accepted") + models.F("quantity_observed")),
+                name="wh_line_quantities_balance",
+            ),
+        ),
     ]
