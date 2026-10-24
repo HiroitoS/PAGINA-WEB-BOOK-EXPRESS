@@ -7,6 +7,7 @@ un flujo formal de excepción que se diseñará posteriormente.
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import Sum
+from django.db.models.functions import Trim, Upper
 from django.utils import timezone
 
 from accounts.permissions import usuario_tiene_permiso
@@ -27,6 +28,25 @@ def _normalizar_documento(document_type, document_number):
             "La guía de remisión debe tener una serie y número válidos."
         )
     return numero
+
+
+def _validar_guia_no_duplicada(*, provider_id, document_type, document_number, excluir_id=None):
+    if document_type != GoodsReceipt.DocumentType.GUIDE:
+        return
+    existentes = (
+        GoodsReceipt.objects.filter(
+            provider_id=provider_id,
+            document_type=GoodsReceipt.DocumentType.GUIDE,
+        ).annotate(numero_normalizado=Upper(Trim("document_number")))
+        .filter(numero_normalizado=document_number)
+    )
+    if excluir_id:
+        existentes = existentes.exclude(pk=excluir_id)
+    if existentes.exists():
+        raise ValidationError(
+            "Esta guía de remisión ya está registrada para esta editorial. "
+            "Abre la recepción existente en lugar de crear otra."
+        )
 
 
 @transaction.atomic
@@ -58,10 +78,15 @@ def crear_borrador_recepcion(
             raise ValidationError("Solo puedes recepcionar pedidos enviados y aún pendientes.")
         if row["quantity_arrived"] != row["quantity_accepted"] + row["quantity_observed"]:
             raise ValidationError("Cantidad llegada debe ser igual a aceptada más observada.")
+    documento = _normalizar_documento(document_type, document_number)
+    _validar_guia_no_duplicada(
+        provider_id=provider.pk, document_type=document_type,
+        document_number=documento,
+    )
     recepcion = GoodsReceipt(
         provider=provider,
         document_type=document_type,
-        document_number=_normalizar_documento(document_type, document_number),
+        document_number=documento,
         received_on=received_on,
         notes=notes.strip(),
         created_by=actor,
@@ -120,8 +145,23 @@ def actualizar_borrador_recepcion(
         if row["quantity_arrived"] != row["quantity_accepted"] + row["quantity_observed"]:
             raise ValidationError("La cantidad llegada no coincide con aceptada más observada.")
 
+    documento = _normalizar_documento(document_type, document_number)
+    _validar_guia_no_duplicada(
+        provider_id=recepcion.provider_id, document_type=document_type,
+        document_number=documento, excluir_id=recepcion.pk,
+    )
+    estado_previo = {
+        "document_type": recepcion.document_type,
+        "document_number": recepcion.document_number,
+        "received_on": str(recepcion.received_on),
+        "notes": recepcion.notes,
+        "lines": list(recepcion.lines.values(
+            "order_item_id", "quantity_arrived", "quantity_accepted",
+            "quantity_observed", "notes",
+        )),
+    }
     recepcion.document_type = document_type
-    recepcion.document_number = _normalizar_documento(document_type, document_number)
+    recepcion.document_number = documento
     recepcion.received_on = received_on
     recepcion.notes = notes.strip()
     recepcion.full_clean()
@@ -142,7 +182,23 @@ def actualizar_borrador_recepcion(
         detalle.save()
     GoodsReceiptEvent.objects.create(
         receipt=recepcion, actor=actor, action="updated",
-        details={"items": len(lines)},
+        details={
+            "before": estado_previo,
+            "after": {
+                "document_type": document_type,
+                "document_number": documento,
+                "received_on": str(received_on),
+                "items": len(lines),
+                "lines": [
+                    {
+                        "order_item_id": row["order_item_id"],
+                        "quantity_arrived": row["quantity_arrived"],
+                        "quantity_accepted": row["quantity_accepted"],
+                        "quantity_observed": row["quantity_observed"],
+                    } for row in lines
+                ],
+            },
+        },
     )
     return recepcion
 
