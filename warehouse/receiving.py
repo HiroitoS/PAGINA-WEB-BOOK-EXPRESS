@@ -20,6 +20,15 @@ def _autorizar(actor, permiso):
         raise PermissionDenied("No tienes permiso para realizar esta operación.")
 
 
+def _normalizar_documento(document_type, document_number):
+    numero = str(document_number or "").strip().upper()
+    if document_type == GoodsReceipt.DocumentType.GUIDE and not numero:
+        raise ValidationError(
+            "La guía de remisión debe tener una serie y número válidos."
+        )
+    return numero
+
+
 @transaction.atomic
 def crear_borrador_recepcion(
     *, actor, provider_id, document_type, document_number,
@@ -52,7 +61,7 @@ def crear_borrador_recepcion(
     recepcion = GoodsReceipt(
         provider=provider,
         document_type=document_type,
-        document_number=document_number.strip().upper(),
+        document_number=_normalizar_documento(document_type, document_number),
         received_on=received_on,
         notes=notes.strip(),
         created_by=actor,
@@ -112,7 +121,7 @@ def actualizar_borrador_recepcion(
             raise ValidationError("La cantidad llegada no coincide con aceptada más observada.")
 
     recepcion.document_type = document_type
-    recepcion.document_number = document_number.strip().upper()
+    recepcion.document_number = _normalizar_documento(document_type, document_number)
     recepcion.received_on = received_on
     recepcion.notes = notes.strip()
     recepcion.full_clean()
