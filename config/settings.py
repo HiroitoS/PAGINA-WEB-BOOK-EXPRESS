@@ -74,6 +74,7 @@ INSTALLED_APPS = [
     "notifications",
     "crm.apps.CrmConfig",
     "purchasing",
+    "warehouse.apps.WarehouseConfig",
 ]
 
 
