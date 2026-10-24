@@ -1,6 +1,6 @@
 # P-06 — Recepción de Mercadería (base de backend)
 
-Estado: **implementación inicial pendiente de ejecución local de pruebas**. No desplegar ni migrar en producción.
+Estado: **55 pruebas de warehouse y purchasing aprobadas en el entorno local del usuario el 24/10/2026, antes de las ampliaciones de API/edición y frontend de esta sesión**. Las nuevas pruebas y rutas añadidas después requieren volver a ejecutarse. No desplegar ni migrar en producción.
 
 ## Fuentes y alcance
 - Documento de proyecto: `01_Levantamiento_Funcional_ERP_Book_Express_v2_FINAL1.docx`, apartado 9.1 (Recepción e ingreso de mercadería), 9.2 (Almacenamiento) y 10.2 (Cuentas por pagar).
@@ -45,8 +45,22 @@ python manage.py showmigrations warehouse
 python manage.py migrate warehouse
 ```
 
+## Nuevas capacidades incorporadas después de las 55 pruebas iniciales
+- `GET /api/admin/erp/almacen/recepciones/pedidos-pendientes/`: listado paginado de órdenes enviadas con saldo por producto, sin costos de editorial.
+- `POST /api/admin/erp/almacen/recepciones/{id}/actualizar/`: edición completa transaccional de un borrador, con historial.
+- Interfaz React `/admin/erp/almacen/recepciones`: seleccionar editorial y pedidos, ingresar datos del documento y las cantidades llegadas, observadas y aceptadas, guardar/editar borradores y validarlos. Puede reunir varios colegios de la misma editorial bajo una recepción documental.
+- En el menú, `ERP · Pedidos` y `Almacén · Recepción` separados. Rutas técnicas de pedidos intactas.
+- En Pedidos, los estados de recepción parcial/completa siguen visibles tras validar entregas.
+- Los usuarios con permiso `warehouse.view_receiving` pueden acceder al panel por su ruta; no hace falta permiso de `purchasing.view_purchasing` para ver saldos.
+
+## Registro de facturas del proveedor — dominio futuro de Finanzas
+- No confundir documento físico de entrega con registro contable.
+- Futuro submódulo `Finanzas > Facturas de proveedores`: RUC del emisor, tipo, serie, correlativo, fechas emisión/vencimiento, moneda, importes e impuestos, referencias a proveedor, guías, órdenes y condiciones comerciales; vínculo con notas de crédito, devoluciones, conciliación y pagos.
+- Validar la correspondencia documental y comercial por editorial; una factura puede relacionarse con múltiples guías/órdenes, y una orden con múltiples entregas/facturas.
+- La opción `Factura (referencia física)` en P-06 NO registra cuentas por pagar, IGV, costos contables ni obligación tributaria.
+
 ## Pendientes antes de declarar P-06 terminado
-1. Interfaz React responsive de recepción y edición de borradores, búsqueda por pedido/editorial y resumen de saldos.
+1. Validar localmente las nuevas rutas y pantalla React mediante pruebas backend, `npm run lint`, `npm run build` y prueba manual de guía real o de prueba; completar prueba desde el navegador con recepción parcial y segunda entrega.
 2. Definir con evidencia real qué guías y documentos acompañan cada entrega y cómo registrar diferencias, paquetes incompletos, material de muestra, donaciones y devoluciones.
 3. Integrar Inventario con movimientos inmutables e idempotentes al validar recepción; no duplicar existencia por reintentos.
 4. Pruebas negativas y de concurrencia en PostgreSQL real, y tests de permisos por ALMACEN, administrador y otros roles.
