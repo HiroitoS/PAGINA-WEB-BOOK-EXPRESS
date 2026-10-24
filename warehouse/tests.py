@@ -147,3 +147,39 @@ class RecepcionMercaderiaTests(TestCase):
         response = client.get(url + "saldos/?pedido=" + str(self.pedido.pk))
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["productos"][0]["cantidad_pendiente"], 20)
+
+    def test_guia_repetida_no_genera_doble_recepcion(self):
+        primera = self.borrador(80)
+        validar_recepcion(actor=self.actor, receipt_id=primera.pk)
+        with self.assertRaises(ValidationError):
+            self.borrador(20, documento="g-001")
+        self.assertEqual(GoodsReceipt.objects.count(), 1)
+
+    def test_una_guia_puede_incluir_dos_pedidos_de_la_misma_editorial(self):
+        segundo = PurchaseOrder.objects.create(
+            origin=PurchaseOrder.Origin.MANUAL, provider=self.editorial,
+            campaign=self.campania, provider_name_snapshot=self.editorial.name,
+            campaign_name_snapshot=self.campania.name, created_by=self.actor,
+            status=PurchaseOrder.Status.SENT, sent_at=timezone.now(),
+        )
+        item_segundo = PurchaseOrderItem.objects.create(
+            order=segundo, product=self.producto,
+            product_name_snapshot=self.producto.name,
+            quantity_ordered=50, unit_supplier_cost="25.80",
+        )
+        recepcion = crear_borrador_recepcion(
+            actor=self.actor, provider_id=self.editorial.pk,
+            document_type=GoodsReceipt.DocumentType.GUIDE,
+            document_number="G-COMUN", received_on=timezone.localdate(),
+            lines=[
+                {"order_item_id": self.item.pk, "quantity_arrived": 80,
+                 "quantity_accepted": 80, "quantity_observed": 0},
+                {"order_item_id": item_segundo.pk, "quantity_arrived": 50,
+                 "quantity_accepted": 50, "quantity_observed": 0},
+            ],
+        )
+        validar_recepcion(actor=self.actor, receipt_id=recepcion.pk)
+        self.pedido.refresh_from_db()
+        segundo.refresh_from_db()
+        self.assertEqual(self.pedido.status, PurchaseOrder.Status.PARTIALLY_RECEIVED)
+        self.assertEqual(segundo.status, PurchaseOrder.Status.RECEIVED)
