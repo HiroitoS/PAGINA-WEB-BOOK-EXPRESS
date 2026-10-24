@@ -13,7 +13,7 @@ class ReceiptLineInputSerializer(serializers.Serializer):
     notes = serializers.CharField(max_length=500, allow_blank=True, required=False)
 
     def validate(self, attrs):
-        if attrs["quantity_documented"] is not None and attrs["quantity_documented"] < 0:
+        if attrs.get("quantity_documented") is not None and attrs["quantity_documented"] < 0:
             raise serializers.ValidationError("La cantidad de guía no puede ser negativa.")
         if attrs["quantity_arrived"] != attrs["quantity_accepted"] + attrs["quantity_observed"] + attrs["quantity_extra"]:
             raise serializers.ValidationError(
