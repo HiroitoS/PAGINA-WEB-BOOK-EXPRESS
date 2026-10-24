@@ -78,6 +78,67 @@ def crear_borrador_recepcion(
 
 
 @transaction.atomic
+def actualizar_borrador_recepcion(
+    *, actor, receipt_id, provider_id, document_type,
+    document_number, received_on, lines, notes="",
+):
+    _autorizar(actor, "warehouse.manage_receiving")
+    recepcion = GoodsReceipt.objects.select_for_update().get(pk=receipt_id)
+    if recepcion.status != GoodsReceipt.Status.DRAFT:
+        raise ValidationError("Solo se puede modificar una recepción en borrador.")
+    if recepcion.provider_id != provider_id:
+        raise ValidationError("No puedes cambiar la editorial de una recepción existente.")
+    if not lines:
+        raise ValidationError("La recepción necesita al menos una línea.")
+    ids = [row["order_item_id"] for row in lines]
+    if len(ids) != len(set(ids)):
+        raise ValidationError("No puedes repetir un producto del mismo pedido.")
+    detalles = {
+        item.pk: item for item in PurchaseOrderItem.objects.select_related("order")
+        .filter(pk__in=ids)
+    }
+    if len(detalles) != len(ids):
+        raise ValidationError("Algunos productos no existen.")
+    for row in lines:
+        item = detalles[row["order_item_id"]]
+        if item.order.provider_id != recepcion.provider_id:
+            raise ValidationError("Los productos deben pertenecer a la editorial.")
+        if item.order.status not in (
+            PurchaseOrder.Status.SENT,
+            PurchaseOrder.Status.PARTIALLY_RECEIVED,
+        ):
+            raise ValidationError("Solo puedes recepcionar pedidos enviados y pendientes.")
+        if row["quantity_arrived"] != row["quantity_accepted"] + row["quantity_observed"]:
+            raise ValidationError("La cantidad llegada no coincide con aceptada más observada.")
+
+    recepcion.document_type = document_type
+    recepcion.document_number = document_number.strip().upper()
+    recepcion.received_on = received_on
+    recepcion.notes = notes.strip()
+    recepcion.full_clean()
+    recepcion.save(update_fields=[
+        "document_type", "document_number", "received_on", "notes", "updated_at",
+    ])
+    recepcion.lines.all().delete()
+    for row in lines:
+        detalle = GoodsReceiptLine(
+            receipt=recepcion,
+            order_item=detalles[row["order_item_id"]],
+            quantity_arrived=row["quantity_arrived"],
+            quantity_accepted=row["quantity_accepted"],
+            quantity_observed=row["quantity_observed"],
+            notes=row.get("notes", "").strip(),
+        )
+        detalle.full_clean()
+        detalle.save()
+    GoodsReceiptEvent.objects.create(
+        receipt=recepcion, actor=actor, action="updated",
+        details={"items": len(lines)},
+    )
+    return recepcion
+
+
+@transaction.atomic
 def validar_recepcion(*, actor, receipt_id):
     _autorizar(actor, "warehouse.validate_receiving")
     receipt = GoodsReceipt.objects.select_for_update().get(pk=receipt_id)
