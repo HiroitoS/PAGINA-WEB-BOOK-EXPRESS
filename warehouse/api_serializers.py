@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from warehouse.models import GoodsReceipt, GoodsReceiptLine
+from warehouse.models import GoodsReceipt, GoodsReceiptEvent, GoodsReceiptLine
 
 
 class ReceiptLineInputSerializer(serializers.Serializer):
@@ -43,10 +43,33 @@ class GoodsReceiptLineSerializer(serializers.ModelSerializer):
         )
 
 
+class GoodsReceiptEventSerializer(serializers.ModelSerializer):
+    actor_name = serializers.SerializerMethodField()
+
+    def get_actor_name(self, obj):
+        return obj.actor.get_full_name().strip() or obj.actor.get_username()
+
+    class Meta:
+        model = GoodsReceiptEvent
+        fields = ("id", "action", "actor_name", "created_at", "notes")
+        read_only_fields = fields
+
+
 class GoodsReceiptSerializer(serializers.ModelSerializer):
     lines = GoodsReceiptLineSerializer(many=True, read_only=True)
     provider_name = serializers.CharField(source="provider.name", read_only=True)
     fulfillment_status = serializers.SerializerMethodField()
+    created_by_name = serializers.SerializerMethodField()
+    validated_by_name = serializers.SerializerMethodField()
+    events = GoodsReceiptEventSerializer(many=True, read_only=True)
+
+    def get_created_by_name(self, obj):
+        return obj.created_by.get_full_name().strip() or obj.created_by.get_username()
+
+    def get_validated_by_name(self, obj):
+        if not obj.validated_by_id:
+            return None
+        return obj.validated_by.get_full_name().strip() or obj.validated_by.get_username()
 
     def get_fulfillment_status(self, obj):
         # Estado de cumplimiento de los pedidos asociados, distinto de
@@ -63,6 +86,7 @@ class GoodsReceiptSerializer(serializers.ModelSerializer):
         fields = (
             "id", "reference", "provider", "provider_name", "document_type",
             "document_number", "received_on", "status", "fulfillment_status", "notes",
-            "created_by", "validated_by", "validated_at", "created_at", "lines",
+            "created_by", "created_by_name", "validated_by", "validated_by_name",
+            "validated_at", "created_at", "lines", "events",
         )
         read_only_fields = fields
