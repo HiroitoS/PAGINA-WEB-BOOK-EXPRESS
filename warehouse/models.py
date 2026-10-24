@@ -11,6 +11,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models
 from django.db.models import F, Q
+from django.db.models.functions import Trim, Upper
 from django.utils import timezone
 
 from core.models import TimeStampedModel
@@ -64,6 +65,13 @@ class GoodsReceipt(TimeStampedModel):
                 fields=["provider", "document_type", "document_number"],
                 condition=Q(document_type="guide") & ~Q(document_number=""),
                 name="wh_unique_supplier_guide",
+            ),
+            # Refuerza el índice anterior: la serie/número no distingue mayúsculas
+            # y minúsculas ni espacios sobrantes al principio o al final.
+            models.UniqueConstraint(
+                Upper(Trim("document_number")), "provider", "document_type",
+                condition=Q(document_type="guide") & ~Q(document_number=""),
+                name="wh_unique_supplier_guide_ci",
             ),
         ]
 
