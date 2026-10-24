@@ -36,5 +36,15 @@ class ChangeQuantitySerializer(serializers.Serializer):
     quantity = serializers.IntegerField(min_value=1)
 
 
+class BulkChangeQuantitiesSerializer(serializers.Serializer):
+    items = ChangeQuantitySerializer(many=True, allow_empty=False)
+
+    def validate_items(self, items):
+        identifiers = [item["item_id"] for item in items]
+        if len(identifiers) != len(set(identifiers)):
+            raise serializers.ValidationError("No repitas productos en la actualización.")
+        return items
+
+
 class DispatchEvidenceSerializer(serializers.Serializer):
     evidence = serializers.CharField(max_length=2000, allow_blank=False, trim_whitespace=True)
