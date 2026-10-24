@@ -133,3 +133,78 @@ class APIComprasTests(GeneracionPedidosAdopcionTests):
         )
         self.assertEqual(respuesta.status_code, 400, respuesta.data)
         self.assertEqual(PurchaseOrder.objects.count(), 0)
+
+    def test_guardado_conjunto_cantidades(self):
+        pedido = create_orders_from_adoption(
+            adoption_id=self.adopcion.pk, actor=self.user,
+        )[0]
+        detalle = pedido.items.first()
+        self.client.force_authenticate(self.user)
+        respuesta = self.client.post(
+            reverse("pedido-editorial-change-quantities", args=[pedido.pk]),
+            {"items": [{"item_id": detalle.pk, "quantity": 55}]},
+            format="json",
+        )
+        self.assertEqual(respuesta.status_code, 200, respuesta.data)
+        detalle.refresh_from_db()
+        self.assertEqual(detalle.quantity_ordered, 55)
+        self.assertEqual(
+            PurchaseOrderEvent.objects.filter(order=pedido, event_type="quantity_changed").count(),
+            1,
+        )
+
+    def test_guardado_conjunto_invalido_no_modifica_ninguna_linea(self):
+        pedidos = create_orders_from_adoption(adoption_id=self.adopcion.pk, actor=self.user)
+        pedido, otro = pedidos
+        detalle = pedido.items.first()
+        detalle_ajeno = otro.items.first()
+        anterior = detalle.quantity_ordered
+        self.client.force_authenticate(self.user)
+        respuesta = self.client.post(
+            reverse("pedido-editorial-change-quantities", args=[pedido.pk]),
+            {"items": [
+                {"item_id": detalle.pk, "quantity": 72},
+                {"item_id": detalle_ajeno.pk, "quantity": 55},
+            ]},
+            format="json",
+        )
+        self.assertEqual(respuesta.status_code, 400, respuesta.data)
+        detalle.refresh_from_db()
+        self.assertEqual(detalle.quantity_ordered, anterior)
+        self.assertFalse(
+            PurchaseOrderEvent.objects.filter(order=pedido, event_type="quantity_changed").exists()
+        )
+
+    def test_no_modifica_cantidades_con_pedido_aprobado(self):
+        pedido = create_orders_from_adoption(
+            adoption_id=self.adopcion.pk, actor=self.user,
+        )[0]
+        detalle = pedido.items.first()
+        aprobar_pedido(pedido_id=pedido.pk, actor=self.user)
+        self.client.force_authenticate(self.user)
+        respuesta = self.client.post(
+            reverse("pedido-editorial-change-quantities", args=[pedido.pk]),
+            {"items": [{"item_id": detalle.pk, "quantity": 99}]},
+            format="json",
+        )
+        self.assertEqual(respuesta.status_code, 400, respuesta.data)
+
+    def test_pdf_solicitud_sin_precios_pedido_aprobado(self):
+        pedido = create_orders_from_adoption(
+            adoption_id=self.adopcion.pk, actor=self.user,
+        )[0]
+        aprobar_pedido(pedido_id=pedido.pk, actor=self.user)
+        self.client.force_authenticate(self.user)
+        respuesta = self.client.get(
+            reverse("pedido-editorial-export-purchase-order", args=[pedido.pk]),
+            {"formato": "solicitud"},
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertIn("BE-SL-", respuesta["Content-Disposition"])
+        self.assertTrue(respuesta.content.startswith(b"%PDF"))
+        self.assertTrue(
+            PurchaseOrderEvent.objects.filter(
+                order=pedido, event_type="document_exported",
+                notes__icontains="sin precios",
+            ).exists()
+        )
