@@ -10,7 +10,8 @@ from crm.models import Campaign
 from purchasing.models import PurchaseOrder, PurchaseOrderItem
 from warehouse.models import GoodsReceipt, GoodsReceiptEvent
 from warehouse.receiving import (
-    crear_borrador_recepcion, saldos_pedido, validar_recepcion,
+    actualizar_borrador_recepcion, crear_borrador_recepcion,
+    saldos_pedido, validar_recepcion,
 )
 
 
@@ -183,3 +184,40 @@ class RecepcionMercaderiaTests(TestCase):
         segundo.refresh_from_db()
         self.assertEqual(self.pedido.status, PurchaseOrder.Status.PARTIALLY_RECEIVED)
         self.assertEqual(segundo.status, PurchaseOrder.Status.RECEIVED)
+
+    def test_editar_borrador_conserva_documento_y_eventos(self):
+        recepcion = self.borrador(30)
+        actualizada = actualizar_borrador_recepcion(
+            actor=self.actor, receipt_id=recepcion.pk,
+            provider_id=self.editorial.pk, document_type="guide",
+            document_number="G-001", received_on=timezone.localdate(),
+            lines=[{
+                "order_item_id": self.item.pk, "quantity_arrived": 85,
+                "quantity_accepted": 80, "quantity_observed": 5,
+            }],
+        )
+        self.assertEqual(actualizada.lines.count(), 1)
+        self.assertEqual(actualizada.lines.first().quantity_accepted, 80)
+        self.assertEqual(actualizada.events.filter(action="updated").count(), 1)
+        validar_recepcion(actor=self.actor, receipt_id=recepcion.pk)
+        self.assertEqual(saldos_pedido(actor=self.actor, order_id=self.pedido.pk)["productos"][0]["cantidad_pendiente"], 20)
+        with self.assertRaises(ValidationError):
+            actualizar_borrador_recepcion(
+                actor=self.actor, receipt_id=recepcion.pk, provider_id=self.editorial.pk,
+                document_type="guide", document_number="G-001",
+                received_on=timezone.localdate(),
+                lines=[{"order_item_id": self.item.pk, "quantity_arrived": 20,
+                        "quantity_accepted": 20, "quantity_observed": 0}],
+            )
+
+    def test_pedidos_pendientes_no_exponen_costos(self):
+        client = APIClient()
+        client.force_authenticate(self.actor)
+        url = "/api/admin/erp/almacen/recepciones/pedidos-pendientes/"
+        response = client.get(url)
+        self.assertEqual(response.status_code, 200)
+        data = response.data["results"] if "results" in response.data else response.data
+        self.assertTrue(any(pedido["id"] == self.pedido.pk for pedido in data))
+        detalle = next(pedido for pedido in data if pedido["id"] == self.pedido.pk)
+        self.assertEqual(detalle["productos"][0]["pendientes"], 100)
+        self.assertNotIn("unit_supplier_cost", str(detalle))
