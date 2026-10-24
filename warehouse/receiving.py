@@ -258,20 +258,9 @@ def validar_recepcion(*, actor, receipt_id):
             raise ValidationError(
                 f"Se excede la cantidad solicitada para {fila.order_item.product_name_snapshot}."
             )
-        if fila.quantity_documented is not None and fila.quantity_documented != fila.quantity_arrived and not (fila.notes.strip() or receipt.notes.strip()):
-            raise ValidationError("Explica la diferencia entre la guía y el conteo físico.")
-        if fila.quantity_extra and not (fila.notes.strip() or receipt.notes.strip()):
-            raise ValidationError("Indica el motivo del excedente conforme conservado.")
-        # Un excedente físico se registra como observado, nunca como compra
-        # adicional ni stock disponible. Exigir una explicación verificable.
-        if fila.quantity_arrived > pendiente and not (
-            fila.notes.strip() or receipt.notes.strip()
-        ):
-            raise ValidationError(
-                f"Registra en observaciones el motivo del excedente recibido de "
-                f"{fila.order_item.product_name_snapshot}. "
-                "Las unidades adicionales deben quedar identificadas como excedentes conformes u observadas."
-            )
+        # El excedente conforme se conserva como diferencia física auditada.
+        # No exige observación manual ni modifica la orden o el stock.
+        # La discrepancia guía/conteo queda registrada en las cantidades.
 
     receipt.status = GoodsReceipt.Status.VALIDATED
     receipt.validated_by = actor
@@ -283,6 +272,18 @@ def validar_recepcion(*, actor, receipt_id):
             "accepted": sum(row.quantity_accepted for row in filas),
             "observed": sum(row.quantity_observed for row in filas),
             "extra": sum(row.quantity_extra for row in filas),
+            "differences": [
+                {
+                    "order_item_id": row.order_item_id,
+                    "documented": row.quantity_documented,
+                    "physical": row.quantity_arrived,
+                    "extra": row.quantity_extra,
+                    "observed": row.quantity_observed,
+                    "reason": "Diferencia detectada en conteo físico",
+                }
+                for row in filas
+                if row.quantity_extra or (row.quantity_documented is not None and row.quantity_documented != row.quantity_arrived)
+            ],
         },
     )
 
