@@ -62,8 +62,15 @@ class GoodsReceiptViewSet(viewsets.ReadOnlyModelViewSet):
             ),
         ).order_by("pk")
         items_by_order = {}
+        summary_by_order = {}
         for line in lines:
             pending = max(0, line.quantity_ordered - line.accepted)
+            summary = summary_by_order.setdefault(
+                line.order_id, {"solicitadas": 0, "aceptadas": 0, "pendientes": 0},
+            )
+            summary["solicitadas"] += line.quantity_ordered
+            summary["aceptadas"] += line.accepted
+            summary["pendientes"] += pending
             if pending:
                 items_by_order.setdefault(line.order_id, []).append({
                     "item_id": line.pk,
@@ -82,6 +89,7 @@ class GoodsReceiptViewSet(viewsets.ReadOnlyModelViewSet):
                 "campania": order.campaign_name_snapshot,
                 "referencia": f"BE-OC-{order.pk:06d}",
                 "productos": items_by_order.get(order.pk, []),
+                "resumen": summary_by_order.get(order.pk, {}),
             }
             for order in orders if items_by_order.get(order.pk)
         ]
