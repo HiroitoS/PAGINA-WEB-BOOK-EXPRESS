@@ -96,6 +96,9 @@ def generar_orden_compra_pdf(pedido):
     derecha = ParagraphStyle(
         "NumeroDerechaCompra", parent=principal, alignment=TA_RIGHT,
     )
+    encabezado_derecha = ParagraphStyle(
+        "EncabezadoDerechaCompra", parent=encabezado, alignment=TA_RIGHT,
+    )
 
     logo = _logo_oficial()
     marca = logo or Paragraph("BOOK EXPRESS", titulo)
@@ -142,9 +145,9 @@ def generar_orden_compra_pdf(pedido):
         _parrafo("N.º", encabezado),
         _parrafo("Código", encabezado),
         _parrafo("Producto / material educativo", encabezado),
-        _parrafo("Cantidad", encabezado),
-        _parrafo(f"Costo unit. ({moneda})", encabezado),
-        _parrafo(f"Importe ({moneda})", encabezado),
+        _parrafo("Cantidad", encabezado_derecha),
+        _parrafo(f"Costo unit. ({moneda})", encabezado_derecha),
+        _parrafo(f"Importe ({moneda})", encabezado_derecha),
     ]]
     total = Decimal("0.00")
     unidades = 0
@@ -175,7 +178,7 @@ def generar_orden_compra_pdf(pedido):
     totales = Table([[
         _parrafo(f"Productos: {len(detalles)}   ·   Unidades: {unidades}", encabezado),
         _parrafo(f"TOTAL ORDEN ({moneda})", encabezado),
-        _parrafo(_importe(total), encabezado),
+        _parrafo(_importe(total), encabezado_derecha),
     ]], colWidths=[ancho - 330, 190, 140])
     totales.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), NEGRO),
