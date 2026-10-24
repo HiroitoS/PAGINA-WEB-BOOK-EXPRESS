@@ -159,18 +159,29 @@ class PurchaseOrderViewSet(viewsets.ReadOnlyModelViewSet):
                 {"detail": "Solo los pedidos aprobados pueden exportarse como orden de compra."},
                 status=status.HTTP_409_CONFLICT,
             )
+        formato = request.query_params.get("formato", "valorizada")
+        if formato not in {"solicitud", "valorizada"}:
+            raise ValidationError({"formato": "Formato de documento no válido."})
+        if formato == "valorizada" and not usuario_tiene_permiso(
+            request.user, "purchasing.approve_purchasing"
+        ):
+            raise PermissionDenied("No tienes permiso para descargar costos de compra.")
         try:
-            contenido = generar_orden_compra_pdf(pedido)
+            contenido = generar_orden_compra_pdf(
+                pedido, incluir_costos=formato == "valorizada",
+            )
         except ValueError as exc:
             raise ValidationError({"detail": str(exc)}) from exc
         PurchaseOrderEvent.objects.create(
             order=pedido, actor=request.user, event_type="document_exported",
             from_status=pedido.status, to_status=pedido.status,
-            notes="Descarga del PDF de orden de compra.",
+            notes="Descarga de orden valorizada." if formato == "valorizada"
+            else "Descarga de solicitud de libros sin precios.",
         )
         respuesta = HttpResponse(contenido, content_type="application/pdf")
+        prefijo = "BE-OC" if formato == "valorizada" else "BE-SL"
         respuesta["Content-Disposition"] = (
-            f'attachment; filename="BE-OC-{pedido.pk:06d}.pdf"'
+            f'attachment; filename="{prefijo}-{pedido.pk:06d}.pdf"'
         )
         respuesta["Cache-Control"] = "no-store"
         return respuesta
