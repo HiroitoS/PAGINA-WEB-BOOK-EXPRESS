@@ -248,6 +248,12 @@ def validar_recepcion(*, actor, receipt_id):
             raise ValidationError("Hay cantidades de recepción que no cuadran.")
         anterior_aceptado = anteriores.get(fila.order_item_id, 0)
         pendiente = max(0, fila.order_item.quantity_ordered - anterior_aceptado)
+        excedente_esperado = max(0, fila.quantity_arrived - fila.quantity_observed - pendiente)
+        if fila.quantity_extra != excedente_esperado:
+            raise ValidationError(
+                f"El excedente conforme de {fila.order_item.product_name_snapshot} debe ser "
+                f"{excedente_esperado} unidades según lo recibido y el saldo."
+            )
         if fila.quantity_accepted > pendiente:
             raise ValidationError(
                 f"Se excede la cantidad solicitada para {fila.order_item.product_name_snapshot}."
