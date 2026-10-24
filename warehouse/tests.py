@@ -312,6 +312,28 @@ class RecepcionMercaderiaTests(TestCase):
         self.assertEqual(GoodsReceiptSerializer(primera).data["fulfillment_status"], "complete")
         self.assertEqual(GoodsReceiptSerializer(segunda).data["fulfillment_status"], "complete")
 
+    def test_api_exige_cantidad_segun_guia_en_nuevas_recepciones(self):
+        client = APIClient()
+        client.force_authenticate(self.actor)
+        response = client.post(
+            "/api/admin/erp/almacen/recepciones/crear/",
+            {
+                "provider_id": self.editorial.pk,
+                "document_type": "guide",
+                "document_number": "G-SIN-CANTIDAD",
+                "received_on": str(timezone.localdate()),
+                "lines": [{
+                    "order_item_id": self.item.pk,
+                    "quantity_arrived": 5,
+                    "quantity_accepted": 5,
+                    "quantity_observed": 0,
+                }],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(GoodsReceipt.objects.count(), 0)
+
     def test_api_rechaza_guia_repetida_con_error_de_negocio(self):
         self.borrador(10, documento="T001-25200")
         client = APIClient()
