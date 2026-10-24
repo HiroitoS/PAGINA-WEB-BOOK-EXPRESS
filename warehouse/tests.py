@@ -59,6 +59,30 @@ class RecepcionMercaderiaTests(TestCase):
             }],
         )
 
+    def test_conteo_fisico_102_documento_100_con_excedente_conservado(self):
+        recepcion = crear_borrador_recepcion(
+            actor=self.actor,
+            provider_id=self.editorial.pk,
+            document_type=GoodsReceipt.DocumentType.GUIDE,
+            document_number="G-102",
+            received_on=timezone.localdate(),
+            notes="Diferencia de dos unidades conservadas en almacén.",
+            lines=[{
+                "order_item_id": self.item.pk,
+                "quantity_documented": 100,
+                "quantity_arrived": 102,
+                "quantity_accepted": 100,
+                "quantity_extra": 2,
+                "quantity_observed": 0,
+            }],
+        )
+        validar_recepcion(actor=self.actor, receipt_id=recepcion.pk)
+        linea = recepcion.lines.get()
+        self.assertEqual(linea.quantity_arrived, 102)
+        self.assertEqual(linea.quantity_documented, 100)
+        self.assertEqual(linea.quantity_extra, 2)
+        self.assertEqual(saldos_pedido(actor=self.actor, order_id=self.pedido.pk)["productos"][0]["cantidad_pendiente"], 0)
+
     def test_80_recibidas_20_pendientes_y_segunda_entrega(self):
         primera = self.borrador(80)
         self.assertEqual(self.pedido.status, PurchaseOrder.Status.SENT)
