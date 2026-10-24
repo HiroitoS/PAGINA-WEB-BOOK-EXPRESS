@@ -1,5 +1,5 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.http import Http404
+from django.http import Http404, HttpResponse
 from django.db.models import Count, Q
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -11,7 +11,8 @@ from crm.models import Adoption
 from purchasing.api_serializers import (GenerateFromAdoptionSerializer, PurchaseOrderSerializer,
     ChangeQuantitySerializer, DispatchEvidenceSerializer)
 from purchasing.order_management import actualizar_cantidad_borrador, aprobar_pedido, registrar_envio_pedido
-from purchasing.models import PurchaseOrder
+from purchasing.models import PurchaseOrder, PurchaseOrderEvent
+from purchasing.order_pdf import generar_orden_compra_pdf
 from purchasing.order_creation import create_orders_from_adoption
 
 
@@ -141,6 +142,36 @@ class PurchaseOrderViewSet(viewsets.ReadOnlyModelViewSet):
         except Adoption.DoesNotExist as exc:
             raise Http404("Adopción no encontrada.") from exc
         return Response(PurchaseOrderSerializer(orders, many=True).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"], url_path="orden-pdf")
+    def export_purchase_order(self, request, pk=None):
+        pedido = self.get_object()
+        if pedido.status not in {
+            PurchaseOrder.Status.APPROVED,
+            PurchaseOrder.Status.SENT,
+            PurchaseOrder.Status.PARTIALLY_RECEIVED,
+            PurchaseOrder.Status.RECEIVED,
+            PurchaseOrder.Status.CLOSED_PARTIAL,
+        }:
+            return Response(
+                {"detail": "Solo los pedidos aprobados pueden exportarse como orden de compra."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        try:
+            contenido = generar_orden_compra_pdf(pedido)
+        except ValueError as exc:
+            raise ValidationError({"detail": str(exc)}) from exc
+        PurchaseOrderEvent.objects.create(
+            order=pedido, actor=request.user, event_type="document_exported",
+            from_status=pedido.status, to_status=pedido.status,
+            notes="Descarga del PDF de orden de compra.",
+        )
+        respuesta = HttpResponse(contenido, content_type="application/pdf")
+        respuesta["Content-Disposition"] = (
+            f'attachment; filename="BE-OC-{pedido.pk:06d}.pdf"'
+        )
+        respuesta["Cache-Control"] = "no-store"
+        return respuesta
 
     @action(detail=True, methods=["post"], url_path="cambiar-cantidad")
     def change_quantity(self, request, pk=None):
