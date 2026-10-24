@@ -28,6 +28,7 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
 
 class GenerateFromAdoptionSerializer(serializers.Serializer):
     adoption_id = serializers.IntegerField(min_value=1)
+    provider_id = serializers.IntegerField(min_value=1, required=False)
 
 
 class ChangeQuantitySerializer(serializers.Serializer):
