@@ -355,3 +355,71 @@ class RecepcionMercaderiaTests(TestCase):
         })
         self.assertEqual(pedido["productos"][0]["aceptadas"], 80)
         self.assertEqual(pedido["productos"][0]["pendientes"], 20)
+
+    def test_seguimiento_muestra_primera_y_segunda_guia_y_saldo_actual(self):
+        primera = self.borrador(80, documento="G-PRIMERA")
+        validar_recepcion(actor=self.actor, receipt_id=primera.pk)
+        segunda = self.borrador(20, documento="G-SEGUNDA")
+        validar_recepcion(actor=self.actor, receipt_id=segunda.pk)
+        client = APIClient()
+        client.force_authenticate(self.actor)
+        response = client.get(
+            f"/api/admin/erp/almacen/recepciones/{primera.pk}/seguimiento/"
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(len(response.data["pedidos"]), 1)
+        pedido = response.data["pedidos"][0]
+        self.assertEqual(
+            (pedido["solicitadas"], pedido["aceptadas"], pedido["pendientes"]),
+            (100, 100, 0),
+        )
+        self.assertEqual(pedido["productos"][0]["aceptadas_en_guia"], 80)
+        self.assertEqual(
+            [entrega["aceptadas"] for entrega in pedido["entregas"]], [80, 20]
+        )
+        self.assertEqual(
+            [entrega["document_number"] for entrega in pedido["entregas"]],
+            ["G-PRIMERA", "G-SEGUNDA"],
+        )
+        self.assertTrue(pedido["entregas"][0]["es_recepcion_actual"])
+        self.assertFalse(pedido["entregas"][1]["es_recepcion_actual"])
+
+    def test_excedente_se_observa_con_motivo_y_no_aumenta_pedido(self):
+        recepcion = crear_borrador_recepcion(
+            actor=self.actor, provider_id=self.editorial.pk,
+            document_type="guide", document_number="G-EXCESO",
+            received_on=timezone.localdate(),
+            notes="Se recibieron 10 unidades de más; permanecen observadas.",
+            lines=[{
+                "order_item_id": self.item.pk,
+                "quantity_arrived": 110, "quantity_accepted": 100,
+                "quantity_observed": 10,
+            }],
+        )
+        validar_recepcion(actor=self.actor, receipt_id=recepcion.pk)
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.status, PurchaseOrder.Status.RECEIVED)
+        datos = saldos_pedido(actor=self.actor, order_id=self.pedido.pk)
+        self.assertEqual(datos["productos"][0]["cantidad_aceptada"], 100)
+        self.assertEqual(datos["productos"][0]["cantidad_pendiente"], 0)
+        self.assertEqual(
+            recepcion.lines.get().quantity_observed, 10,
+        )
+
+    def test_excedente_sin_motivo_no_puede_validarse(self):
+        recepcion = crear_borrador_recepcion(
+            actor=self.actor, provider_id=self.editorial.pk,
+            document_type="guide", document_number="G-EXCESO",
+            received_on=timezone.localdate(),
+            lines=[{
+                "order_item_id": self.item.pk,
+                "quantity_arrived": 110, "quantity_accepted": 100,
+                "quantity_observed": 10,
+            }],
+        )
+        with self.assertRaises(ValidationError):
+            validar_recepcion(actor=self.actor, receipt_id=recepcion.pk)
+        recepcion.refresh_from_db()
+        self.pedido.refresh_from_db()
+        self.assertEqual(recepcion.status, GoodsReceipt.Status.DRAFT)
+        self.assertEqual(self.pedido.status, PurchaseOrder.Status.SENT)
