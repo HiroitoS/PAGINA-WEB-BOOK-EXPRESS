@@ -35,6 +35,29 @@ def actualizar_cantidad_borrador(*, pedido_id, detalle_id, cantidad, actor):
 
 
 @transaction.atomic
+def actualizar_cantidades_borrador(*, pedido_id, items, actor):
+    """Actualiza todas las líneas como una sola operación o no modifica ninguna."""
+    _autorizar(actor, "purchasing.manage_purchasing")
+    pedido = PurchaseOrder.objects.select_for_update().get(pk=pedido_id)
+    if pedido.status != PurchaseOrder.Status.DRAFT:
+        raise ValidationError("Solo puedes cambiar un pedido en borrador.")
+    ids = [item["item_id"] for item in items]
+    if len(set(ids)) != len(ids):
+        raise ValidationError("Hay productos repetidos en la solicitud.")
+    encontrados = PurchaseOrderItem.objects.filter(order=pedido, pk__in=ids).count()
+    if encontrados != len(ids):
+        raise ValidationError("Algunos productos no pertenecen a este pedido.")
+    for item in items:
+        actualizar_cantidad_borrador(
+            pedido_id=pedido.pk,
+            detalle_id=item["item_id"],
+            cantidad=item["quantity"],
+            actor=actor,
+        )
+    return pedido
+
+
+@transaction.atomic
 def aprobar_pedido(*, pedido_id, actor):
     _autorizar(actor, "purchasing.approve_purchasing")
     pedido = PurchaseOrder.objects.select_for_update().get(pk=pedido_id)
