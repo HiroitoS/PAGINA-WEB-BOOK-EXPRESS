@@ -1,6 +1,7 @@
 """Pruebas del flujo de recepción parcial sin registrar stock ni pagos."""
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -8,6 +9,7 @@ from rest_framework.test import APIClient
 from catalog.models import Product, Provider
 from crm.models import Campaign
 from purchasing.models import PurchaseOrder, PurchaseOrderItem
+from warehouse.api_serializers import GoodsReceiptSerializer
 from warehouse.models import GoodsReceipt, GoodsReceiptEvent
 from warehouse.receiving import (
     actualizar_borrador_recepcion, crear_borrador_recepcion,
@@ -221,3 +223,90 @@ class RecepcionMercaderiaTests(TestCase):
         detalle = next(pedido for pedido in data if pedido["id"] == self.pedido.pk)
         self.assertEqual(detalle["productos"][0]["pendientes"], 100)
         self.assertNotIn("unit_supplier_cost", str(detalle))
+
+    def test_la_misma_guia_de_editoriales_diferentes_es_valida(self):
+        primera = self.borrador(20, documento="T001-25200")
+        otra_editorial = Provider.objects.create(name="Otra editorial")
+        segunda = GoodsReceipt.objects.create(
+            provider=otra_editorial,
+            document_type=GoodsReceipt.DocumentType.GUIDE,
+            document_number="t001-25200",
+            received_on=timezone.localdate(),
+            created_by=self.actor,
+        )
+        self.assertNotEqual(primera.provider_id, segunda.provider_id)
+        self.assertEqual(GoodsReceipt.objects.count(), 2)
+
+    def test_guia_misma_editorial_se_rechaza_aun_con_otras_mayusculas(self):
+        self.borrador(20, documento="T001-25200")
+        with self.assertRaises(ValidationError):
+            self.borrador(15, documento=" t001-25200 ")
+        self.assertEqual(GoodsReceipt.objects.count(), 1)
+
+    def test_indice_de_base_de_datos_bloquea_guia_minuscula_por_orm(self):
+        self.borrador(20, documento="T001-25200")
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                GoodsReceipt.objects.create(
+                    provider=self.editorial,
+                    document_type=GoodsReceipt.DocumentType.GUIDE,
+                    document_number="t001-25200",
+                    received_on=timezone.localdate(),
+                    created_by=self.actor,
+                )
+        self.assertEqual(GoodsReceipt.objects.count(), 1)
+
+    def test_correccion_de_borrador_no_puede_duplicar_guia(self):
+        primera = self.borrador(30, documento="T001-25200")
+        segunda = self.borrador(5, documento="G-099")
+        with self.assertRaises(ValidationError):
+            actualizar_borrador_recepcion(
+                actor=self.actor, receipt_id=segunda.pk,
+                provider_id=self.editorial.pk, document_type="guide",
+                document_number=" t001-25200 ", received_on=timezone.localdate(),
+                lines=[{"order_item_id": self.item.pk, "quantity_arrived": 5,
+                        "quantity_accepted": 5, "quantity_observed": 0}],
+            )
+        segunda.refresh_from_db()
+        self.assertEqual(segunda.document_number, "G-099")
+        self.assertNotEqual(primera.pk, segunda.pk)
+
+    def test_guia_vacia_no_se_puede_registrar(self):
+        with self.assertRaises(ValidationError):
+            self.borrador(10, documento="  ")
+
+    def test_semaforo_diferencia_validacion_y_pedido_completo(self):
+        primera = self.borrador(80, documento="G-080")
+        self.assertEqual(GoodsReceiptSerializer(primera).data["fulfillment_status"], "draft")
+        validar_recepcion(actor=self.actor, receipt_id=primera.pk)
+        primera.refresh_from_db()
+        self.assertEqual(GoodsReceiptSerializer(primera).data["fulfillment_status"], "pending")
+        segunda = self.borrador(20, documento="G-020")
+        validar_recepcion(actor=self.actor, receipt_id=segunda.pk)
+        primera.refresh_from_db()
+        segunda.refresh_from_db()
+        self.assertEqual(GoodsReceiptSerializer(primera).data["fulfillment_status"], "complete")
+        self.assertEqual(GoodsReceiptSerializer(segunda).data["fulfillment_status"], "complete")
+
+    def test_api_rechaza_guia_repetida_con_error_de_negocio(self):
+        self.borrador(10, documento="T001-25200")
+        client = APIClient()
+        client.force_authenticate(self.actor)
+        response = client.post(
+            "/api/admin/erp/almacen/recepciones/crear/",
+            {
+                "provider_id": self.editorial.pk,
+                "document_type": "guide",
+                "document_number": "t001-25200",
+                "received_on": str(timezone.localdate()),
+                "lines": [{
+                    "order_item_id": self.item.pk,
+                    "quantity_arrived": 5,
+                    "quantity_accepted": 5,
+                    "quantity_observed": 0,
+                }],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(GoodsReceipt.objects.count(), 1)
