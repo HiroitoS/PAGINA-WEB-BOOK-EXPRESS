@@ -72,6 +72,14 @@ class Migration(migrations.Migration):
             model_name="goodsreceipt", index=models.Index(fields=["provider", "received_on"], name="wh_recept_provider_idx"),
         ),
         migrations.AddConstraint(
+            model_name="goodsreceipt",
+            constraint=models.UniqueConstraint(
+                condition=models.Q(document_type="guide") & ~models.Q(document_number=""),
+                fields=("provider", "document_type", "document_number"),
+                name="wh_unique_supplier_guide",
+            ),
+        ),
+        migrations.AddConstraint(
             model_name="goodsreceiptline", constraint=models.UniqueConstraint(fields=("receipt", "order_item"), name="wh_line_unique_order_item"),
         ),
         migrations.AddConstraint(
