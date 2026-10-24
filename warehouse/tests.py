@@ -338,3 +338,20 @@ class RecepcionMercaderiaTests(TestCase):
             evento["actor_name"] == self.actor.get_username() and evento["created_at"]
             for evento in eventos
         ))
+
+    def test_api_resumen_acumulado_tras_recepcion_parcial(self):
+        primera = self.borrador(80, documento="G-RESUMEN")
+        validar_recepcion(actor=self.actor, receipt_id=primera.pk)
+        client = APIClient()
+        client.force_authenticate(self.actor)
+        response = client.get("/api/admin/erp/almacen/recepciones/pedidos-pendientes/")
+        self.assertEqual(response.status_code, 200, response.data)
+        resultados = response.data["results"] if "results" in response.data else response.data
+        pedido = next(item for item in resultados if item["id"] == self.pedido.pk)
+        self.assertEqual(pedido["resumen"], {
+            "solicitadas": 100,
+            "aceptadas": 80,
+            "pendientes": 20,
+        })
+        self.assertEqual(pedido["productos"][0]["aceptadas"], 80)
+        self.assertEqual(pedido["productos"][0]["pendientes"], 20)
