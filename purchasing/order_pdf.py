@@ -53,7 +53,7 @@ def _logo_oficial():
     return None
 
 
-def generar_orden_compra_pdf(pedido):
+def generar_orden_compra_pdf(pedido, *, incluir_costos=True):
     """Genera PDF A4 horizontal por colegio/editorial; no registra mercadería recibida."""
     detalles = list(pedido.items.all().order_by("pk"))
     if not detalles:
@@ -63,7 +63,7 @@ def generar_orden_compra_pdf(pedido):
     if len(monedas) != 1:
         raise ValueError("La orden contiene monedas diferentes.")
     moneda = monedas.pop()
-    numero = f"BE-OC-{pedido.pk:06d}"
+    numero = f"BE-OC-{pedido.pk:06d}" if incluir_costos else f"BE-SL-{pedido.pk:06d}"
     fecha = timezone.localtime(pedido.approved_at or pedido.created_at)
 
     ancho_pagina, alto_pagina = landscape(A4)
@@ -108,7 +108,7 @@ def generar_orden_compra_pdf(pedido):
         principal,
     )
     identificacion = Paragraph(
-        f"<b>ORDEN DE COMPRA</b><br/>N.º {numero}"
+        f"<b>{'ORDEN DE COMPRA' if incluir_costos else 'SOLICITUD DE LIBROS'}</b><br/>N.º {numero}"
         f"<br/><font size='8'>Aprobada: {fecha:%d/%m/%Y}</font>",
         principal,
     )
@@ -145,24 +145,34 @@ def generar_orden_compra_pdf(pedido):
         _parrafo("Código", encabezado),
         _parrafo("Producto / material educativo", encabezado),
         _parrafo("Cantidad", encabezado_derecha),
-        _parrafo(f"Costo unit. ({moneda})", encabezado_derecha),
-        _parrafo(f"Importe ({moneda})", encabezado_derecha),
     ]]
+    if incluir_costos:
+        filas[0].extend([
+            _parrafo(f"Costo unit. ({moneda})", encabezado_derecha),
+            _parrafo(f"Importe ({moneda})", encabezado_derecha),
+        ])
     total = Decimal("0.00")
     unidades = 0
     for indice, item in enumerate(detalles, start=1):
         importe = item.unit_supplier_cost * item.quantity_ordered
         total += importe
         unidades += item.quantity_ordered
-        filas.append([
+        fila = [
             _parrafo(indice, pequeno),
             _parrafo(item.product_code_snapshot or "—", pequeno),
             _parrafo(item.product_name_snapshot, principal),
             _parrafo(item.quantity_ordered, derecha),
-            _parrafo(_importe(item.unit_supplier_cost), derecha),
-            _parrafo(_importe(importe), derecha),
-        ])
-    anchos = [25, 98, ancho - 25 - 98 - 70 - 100 - 112, 70, 100, 112]
+        ]
+        if incluir_costos:
+            fila.extend([
+                _parrafo(_importe(item.unit_supplier_cost), derecha),
+                _parrafo(_importe(importe), derecha),
+            ])
+        filas.append(fila)
+    if incluir_costos:
+        anchos = [25, 98, ancho - 25 - 98 - 70 - 100 - 112, 70, 100, 112]
+    else:
+        anchos = [25, 125, ancho - 25 - 125 - 95, 95]
     tabla = LongTable(filas, colWidths=anchos, repeatRows=1, hAlign="LEFT")
     tabla.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), ROJO),
@@ -174,26 +184,37 @@ def generar_orden_compra_pdf(pedido):
         ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
         ("LINEBELOW", (0, 0), (-1, 0), 0.4, ROJO),
     ]))
-    totales = Table([[
-        _parrafo(f"Productos: {len(detalles)}   ·   Unidades: {unidades}", encabezado),
-        _parrafo(f"TOTAL ORDEN ({moneda})", encabezado),
-        _parrafo(_importe(total), encabezado_derecha),
-    ]], colWidths=[ancho - 330, 190, 140])
+    if incluir_costos:
+        fila_totales = [
+            _parrafo(f"Productos: {len(detalles)}   ·   Unidades: {unidades}", encabezado),
+            _parrafo(f"TOTAL ORDEN ({moneda})", encabezado),
+            _parrafo(_importe(total), encabezado_derecha),
+        ]
+        anchos_totales = [ancho - 330, 190, 140]
+        observacion = (
+            "Documento de compra valorizado de Book Express. Los importes reflejan costos "
+            "acordados; esta orden no sustituye un comprobante tributario."
+        )
+    else:
+        fila_totales = [
+            _parrafo(f"Productos: {len(detalles)}", encabezado),
+            _parrafo(f"TOTAL DE UNIDADES SOLICITADAS: {unidades}", encabezado_derecha),
+        ]
+        anchos_totales = [ancho - 265, 265]
+        observacion = (
+            "Solicitud de libros para la editorial. Las condiciones comerciales se "
+            "gestionan por separado. La recepción física se registrará en Almacén."
+        )
+    totales = Table([fila_totales], colWidths=anchos_totales)
     totales.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), NEGRO),
-        ("ALIGN", (2, 0), (2, 0), "RIGHT"),
         ("TOPPADDING", (0, 0), (-1, -1), 7),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
     ]))
     contenido = [
         cabecera, Spacer(1, 8), informacion, Spacer(1, 9),
         tabla, Spacer(1, 8), totales, Spacer(1, 7),
-        _parrafo(
-            "Documento para remisión manual a la editorial. La entrega y recepción de "
-            "mercadería se registran por separado. Los importes reflejan los costos "
-            "acordados en el pedido; esta orden no sustituye un comprobante tributario.",
-            pequeno,
-        ),
+        _parrafo(observacion, pequeno),
     ]
 
     def dibujar_pie(canvas, doc):
