@@ -4,8 +4,6 @@ Los saldos se calculan a partir de recepciones VALIDADAS; no de movimientos
 de stock, ventas ni facturas. No se permite sobre-recepción aceptada sin
 un flujo formal de excepción que se diseñará posteriormente.
 """
-from collections import defaultdict
-
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import Sum
@@ -54,7 +52,7 @@ def crear_borrador_recepcion(
     recepcion = GoodsReceipt(
         provider=provider,
         document_type=document_type,
-        document_number=document_number.strip(),
+        document_number=document_number.strip().upper(),
         received_on=received_on,
         notes=notes.strip(),
         created_by=actor,
@@ -113,7 +111,6 @@ def validar_recepcion(*, actor, receipt_id):
             receipt__status=GoodsReceipt.Status.VALIDATED,
         ).values("order_item_id").annotate(total=Sum("quantity_accepted"))
     }
-    nuevas = defaultdict(int)
     for fila in filas:
         if fila.quantity_arrived != fila.quantity_accepted + fila.quantity_observed:
             raise ValidationError("Hay cantidades de recepción que no cuadran.")
@@ -121,7 +118,6 @@ def validar_recepcion(*, actor, receipt_id):
             raise ValidationError(
                 f"Se excede la cantidad solicitada para {fila.order_item.product_name_snapshot}."
             )
-        nuevas[fila.order_item_id] += fila.quantity_accepted
 
     receipt.status = GoodsReceipt.Status.VALIDATED
     receipt.validated_by = actor
