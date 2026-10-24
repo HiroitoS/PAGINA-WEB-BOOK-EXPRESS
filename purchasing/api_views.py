@@ -136,6 +136,7 @@ class PurchaseOrderViewSet(viewsets.ReadOnlyModelViewSet):
         try:
             orders = create_orders_from_adoption(
                 adoption_id=serializer.validated_data["adoption_id"], actor=request.user,
+                provider_id=serializer.validated_data.get("provider_id"),
             )
         except DjangoValidationError as exc:
             raise ValidationError({"detail": exc.messages}) from exc
