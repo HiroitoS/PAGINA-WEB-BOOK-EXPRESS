@@ -59,6 +59,13 @@ class GoodsReceipt(TimeStampedModel):
         indexes = [
             models.Index(fields=["provider", "received_on"], name="wh_recept_provider_idx"),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider", "document_type", "document_number"],
+                condition=Q(document_type="guide") & ~Q(document_number=""),
+                name="wh_unique_supplier_guide",
+            ),
+        ]
 
     def __str__(self):
         return f"Recepción {self.pk or 'nueva'} - {self.provider_id}"
