@@ -9,8 +9,8 @@ from rest_framework.response import Response
 from accounts.permissions import usuario_tiene_permiso
 from crm.models import Adoption
 from purchasing.api_serializers import (GenerateFromAdoptionSerializer, PurchaseOrderSerializer,
-    ChangeQuantitySerializer, DispatchEvidenceSerializer)
-from purchasing.order_management import actualizar_cantidad_borrador, aprobar_pedido, registrar_envio_pedido
+    ChangeQuantitySerializer, BulkChangeQuantitiesSerializer, DispatchEvidenceSerializer)
+from purchasing.order_management import actualizar_cantidad_borrador, actualizar_cantidades_borrador, aprobar_pedido, registrar_envio_pedido
 from purchasing.models import PurchaseOrder, PurchaseOrderEvent
 from purchasing.order_pdf import generar_orden_compra_pdf
 from purchasing.order_creation import create_orders_from_adoption
@@ -117,6 +117,7 @@ class PurchaseOrderViewSet(viewsets.ReadOnlyModelViewSet):
                 order = existing.get(provider_id)
                 group["adopciones"].append({
                     "id": adoption.pk,
+                    "version": adoption.version,
                     "colegio": adoption.school_name_snapshot,
                     "campania": adoption.campaign_name_snapshot,
                     "confirmada": adoption.confirmed_at,
@@ -182,6 +183,18 @@ class PurchaseOrderViewSet(viewsets.ReadOnlyModelViewSet):
             pedido = actualizar_cantidad_borrador(
                 pedido_id=pk, detalle_id=data.validated_data["item_id"],
                 cantidad=data.validated_data["quantity"], actor=request.user,
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
+        return Response(PurchaseOrderSerializer(pedido).data)
+
+    @action(detail=True, methods=["post"], url_path="cambiar-cantidades")
+    def change_quantities(self, request, pk=None):
+        serializer = BulkChangeQuantitiesSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            pedido = actualizar_cantidades_borrador(
+                pedido_id=pk, items=serializer.validated_data["items"], actor=request.user,
             )
         except DjangoValidationError as exc:
             raise ValidationError({"detail": exc.messages}) from exc
