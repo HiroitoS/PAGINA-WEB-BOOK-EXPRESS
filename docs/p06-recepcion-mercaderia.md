@@ -28,6 +28,7 @@ Permisos funcionales: `warehouse.view_receiving`, `warehouse.manage_receiving`, 
 ## Controles técnicos
 - Validación bajo `transaction.atomic`; `select_for_update` para bloquear recepción y pedidos antes de conciliar acumulados.
 - Impide segunda validación de una recepción; impide duplicar la misma guía de remisión por editorial.
+- Restricción de base de datos: cantidad llegada = cantidad aceptada + cantidad observada; protege incluso escrituras que evadan la interfaz.
 - No acepta líneas que no pertenezcan a la editorial ni pedidos sin constancia de envío.
 - Admite entregas múltiples sin alterar el pedido original.
 - El estado del pedido cambia a recepción parcial o completa según aceptación acumulada; no se actualiza stock.
