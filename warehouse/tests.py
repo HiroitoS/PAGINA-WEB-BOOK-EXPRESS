@@ -423,3 +423,54 @@ class RecepcionMercaderiaTests(TestCase):
         self.pedido.refresh_from_db()
         self.assertEqual(recepcion.status, GoodsReceipt.Status.DRAFT)
         self.assertEqual(self.pedido.status, PurchaseOrder.Status.SENT)
+
+    def test_seguimiento_una_guia_con_dos_pedidos_mantiene_colegios_separados(self):
+        segundo = PurchaseOrder.objects.create(
+            origin=PurchaseOrder.Origin.MANUAL,
+            provider=self.editorial,
+            campaign=self.campania,
+            provider_name_snapshot=self.editorial.name,
+            campaign_name_snapshot=self.campania.name,
+            school_name_snapshot="Colegio segundo",
+            created_by=self.actor,
+            status=PurchaseOrder.Status.SENT,
+            sent_at=timezone.now(),
+        )
+        item_segundo = PurchaseOrderItem.objects.create(
+            order=segundo, product=self.producto,
+            product_name_snapshot=self.producto.name,
+            quantity_ordered=50, unit_supplier_cost="25.80",
+        )
+        recibo = crear_borrador_recepcion(
+            actor=self.actor, provider_id=self.editorial.pk,
+            document_type="guide", document_number="G-DOS-COLEGIOS",
+            received_on=timezone.localdate(),
+            lines=[
+                {"order_item_id": self.item.pk, "quantity_arrived": 80,
+                 "quantity_accepted": 80, "quantity_observed": 0},
+                {"order_item_id": item_segundo.pk, "quantity_arrived": 50,
+                 "quantity_accepted": 50, "quantity_observed": 0},
+            ],
+        )
+        validar_recepcion(actor=self.actor, receipt_id=recibo.pk)
+        client = APIClient()
+        client.force_authenticate(self.actor)
+        response = client.get(
+            f"/api/admin/erp/almacen/recepciones/{recibo.pk}/seguimiento/"
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        por_id = {pedido["pedido_id"]: pedido for pedido in response.data["pedidos"]}
+        self.assertEqual(por_id[self.pedido.pk]["pendientes"], 20)
+        self.assertEqual(por_id[segundo.pk]["pendientes"], 0)
+        self.assertEqual(por_id[self.pedido.pk]["entregas"][0]["aceptadas"], 80)
+        self.assertEqual(por_id[segundo.pk]["entregas"][0]["aceptadas"], 50)
+
+    def test_seguimiento_restringido_a_usuarios_autorizados(self):
+        recibo = self.borrador(10)
+        usuario = get_user_model().objects.create_user(username="sin-seguimiento")
+        client = APIClient()
+        client.force_authenticate(usuario)
+        response = client.get(
+            f"/api/admin/erp/almacen/recepciones/{recibo.pk}/seguimiento/"
+        )
+        self.assertEqual(response.status_code, 403)
