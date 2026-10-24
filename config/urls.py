@@ -87,6 +87,7 @@ urlpatterns = [
     path("api/admin/", include(admin_router.urls)),
     path("api/admin/", include("notifications.urls")),
     path("api/admin/erp/compras/", include("purchasing.urls")),
+    path("api/admin/erp/almacen/", include("warehouse.urls")),
 
     path("api-auth/", include("rest_framework.urls")),
 
