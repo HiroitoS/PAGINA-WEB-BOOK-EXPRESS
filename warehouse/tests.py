@@ -310,3 +310,31 @@ class RecepcionMercaderiaTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertEqual(GoodsReceipt.objects.count(), 1)
+
+    def test_api_historial_con_responsables_y_orden_cronologico(self):
+        recepcion = self.borrador(30, documento="G-AUDITORIA")
+        actualizar_borrador_recepcion(
+            actor=self.actor, receipt_id=recepcion.pk,
+            provider_id=self.editorial.pk, document_type="guide",
+            document_number="G-AUDITORIA", received_on=timezone.localdate(),
+            lines=[{
+                "order_item_id": self.item.pk, "quantity_arrived": 35,
+                "quantity_accepted": 30, "quantity_observed": 5,
+            }],
+        )
+        validar_recepcion(actor=self.actor, receipt_id=recepcion.pk)
+        client = APIClient()
+        client.force_authenticate(self.actor)
+        response = client.get(f"/api/admin/erp/almacen/recepciones/{recepcion.pk}/")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["created_by_name"], self.actor.get_username())
+        self.assertEqual(response.data["validated_by_name"], self.actor.get_username())
+        self.assertIsNotNone(response.data["validated_at"])
+        eventos = response.data["events"]
+        self.assertEqual([evento["action"] for evento in eventos], [
+            "created", "updated", "validated",
+        ])
+        self.assertTrue(all(
+            evento["actor_name"] == self.actor.get_username() and evento["created_at"]
+            for evento in eventos
+        ))
