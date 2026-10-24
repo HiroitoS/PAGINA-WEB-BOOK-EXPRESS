@@ -104,6 +104,10 @@ class GoodsReceiptLine(TimeStampedModel):
                 condition=Q(quantity_observed__lte=F("quantity_arrived")),
                 name="wh_line_observed_lte_arrived",
             ),
+            models.CheckConstraint(
+                condition=Q(quantity_arrived=F("quantity_accepted") + F("quantity_observed")),
+                name="wh_line_quantities_balance",
+            ),
         ]
 
     def clean(self):
