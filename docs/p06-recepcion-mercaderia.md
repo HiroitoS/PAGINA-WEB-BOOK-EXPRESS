@@ -67,3 +67,13 @@ python manage.py migrate warehouse
 4. Pruebas negativas y de concurrencia en PostgreSQL real, y tests de permisos por ALMACEN, administrador y otros roles.
 5. Pruebas integrales CRM → Pedidos → Recepción → Inventario → Ventas → Devoluciones → Liquidación, antes del paso a main y producción.
 6. Revisión de paginación y límite silencioso de 200 adopciones en listado de Pedidos antes de campaña.
+
+## P-06 · Correcciones de validación y UX del 24/10/2026
+- **Guía única por editorial, no global**: `T001-25200` de Bruño y `T001-25200` de Santillana pueden coexistir. Lo que se prohíbe es registrar dos veces la guía del mismo tipo, editorial y número, sin distinguir mayúsculas/minúsculas o espacios exteriores.
+- El servicio normaliza el número antes de guardar y ofrece un mensaje comprensible si la guía ya existe. La base de datos tendrá un índice funcional de unicidad con `Upper(Trim(document_number))` en `0002_guia_unique_ci`, además del índice original; protege escrituras concurrentes.
+- **Migración sin pérdida histórica**: antes de añadir el índice, la migración inspecciona guías potencialmente repetidas *dentro de la misma editorial*. Si existen, detiene la operación informando qué editorial/número revisar; NO fusiona, borra, modifica ni descuenta recepciones. La regularización debe revisarse con responsable de almacén y auditoría antes de reintentar.
+- `GoodsReceiptSerializer.fulfillment_status`: `draft` (no validada), `pending` (validada pero algún pedido relacionado aún incompleto), `complete` (todos los pedidos relacionados recibidos). Es diferente de `GoodsReceipt.status`.
+- Frontend: semáforo amarillo para validada con saldo pendiente, verde claro para pedido completo y neutro para borrador. Un borde de selección no redefine el semáforo. Confirmación mediante diálogo propio con resumen de cantidades; los cambios del borrador deben guardarse antes de validarlo.
+- Se conserva la evidencia de cantidades anteriores y posteriores al editar un borrador en `GoodsReceiptEvent`. La recepción validada no modifica automáticamente inventario ni genera cuenta por pagar.
+- Navegación: `ERP > Almacén > Recepción de mercadería`, preparada para futuros submódulos.
+- Pruebas añadidas: guía igual en editoriales distintas (válido), guía igual con mayúsculas distintas en la misma editorial (bloqueado), bloqueo en base de datos, corrección de borrador, guía vacía, semáforos y API. **Aún no se han ejecutado en el entorno del usuario.**
