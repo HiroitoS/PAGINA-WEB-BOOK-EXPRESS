@@ -46,12 +46,23 @@ class GoodsReceiptLineSerializer(serializers.ModelSerializer):
 class GoodsReceiptSerializer(serializers.ModelSerializer):
     lines = GoodsReceiptLineSerializer(many=True, read_only=True)
     provider_name = serializers.CharField(source="provider.name", read_only=True)
+    fulfillment_status = serializers.SerializerMethodField()
+
+    def get_fulfillment_status(self, obj):
+        # Estado de cumplimiento de los pedidos asociados, distinto de
+        # la validación administrativa del documento de entrega.
+        if obj.status != GoodsReceipt.Status.VALIDATED:
+            return "draft"
+        estados = {line.order_item.order.status for line in obj.lines.all()}
+        if estados and estados == {"received"}:
+            return "complete"
+        return "pending"
 
     class Meta:
         model = GoodsReceipt
         fields = (
             "id", "reference", "provider", "provider_name", "document_type",
-            "document_number", "received_on", "status", "notes",
+            "document_number", "received_on", "status", "fulfillment_status", "notes",
             "created_by", "validated_by", "validated_at", "created_at", "lines",
         )
         read_only_fields = fields
