@@ -76,7 +76,7 @@ def crear_borrador_recepcion(
             PurchaseOrder.Status.PARTIALLY_RECEIVED,
         ):
             raise ValidationError("Solo puedes recepcionar pedidos enviados y aún pendientes.")
-        if row["quantity_arrived"] != row["quantity_accepted"] + row["quantity_observed"] + row["quantity_extra"]:
+        if row["quantity_arrived"] != row["quantity_accepted"] + row["quantity_observed"] + row.get("quantity_extra", 0):
             raise ValidationError("Cantidad llegada debe ser igual a aceptada más observada.")
     documento = _normalizar_documento(document_type, document_number)
     _validar_guia_no_duplicada(
@@ -101,7 +101,7 @@ def crear_borrador_recepcion(
             quantity_accepted=row["quantity_accepted"],
             quantity_observed=row["quantity_observed"],
             quantity_documented=row.get("quantity_documented"),
-            quantity_extra=row["quantity_extra"],
+            quantity_extra=row.get("quantity_extra", 0),
             notes=row.get("notes", "").strip(),
         )
         linea.full_clean()
@@ -144,7 +144,7 @@ def actualizar_borrador_recepcion(
             PurchaseOrder.Status.PARTIALLY_RECEIVED,
         ):
             raise ValidationError("Solo puedes recepcionar pedidos enviados y pendientes.")
-        if row["quantity_arrived"] != row["quantity_accepted"] + row["quantity_observed"] + row["quantity_extra"]:
+        if row["quantity_arrived"] != row["quantity_accepted"] + row["quantity_observed"] + row.get("quantity_extra", 0):
             raise ValidationError("La cantidad llegada no coincide con aceptada más observada.")
 
     documento = _normalizar_documento(document_type, document_number)
@@ -179,7 +179,7 @@ def actualizar_borrador_recepcion(
             quantity_accepted=row["quantity_accepted"],
             quantity_observed=row["quantity_observed"],
             quantity_documented=row.get("quantity_documented"),
-            quantity_extra=row["quantity_extra"],
+            quantity_extra=row.get("quantity_extra", 0),
             notes=row.get("notes", "").strip(),
         )
         detalle.full_clean()
@@ -200,7 +200,7 @@ def actualizar_borrador_recepcion(
                         "quantity_accepted": row["quantity_accepted"],
                         "quantity_observed": row["quantity_observed"],
                         "quantity_documented": row.get("quantity_documented"),
-                        "quantity_extra": row["quantity_extra"],
+                        "quantity_extra": row.get("quantity_extra", 0),
                     } for row in lines
                 ],
             },
