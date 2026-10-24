@@ -133,7 +133,6 @@ def generar_orden_compra_pdf(pedido):
             dato("Colegio", pedido.school_name_snapshot or "Pedido independiente"),
             dato("Campaña", pedido.campaign_name_snapshot),
         ],
-        [dato("Referencia", str(pedido.reference)), "", ""],
     ], colWidths=[ancho * 0.34, ancho * 0.38, ancho * 0.28])
     informacion.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
