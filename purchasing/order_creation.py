@@ -41,7 +41,7 @@ def group_adoption_items_by_provider(lines):
 
 
 @transaction.atomic
-def create_orders_from_adoption(*, adoption_id, actor):
+def create_orders_from_adoption(*, adoption_id, actor, provider_id=None):
     """Return existing or newly generated draft orders, one per editorial.
 
     Does not approve or send them. Does not calculate inventory requirements.
@@ -69,6 +69,10 @@ def create_orders_from_adoption(*, adoption_id, actor):
         raise ValidationError("La adopción confirmada no contiene productos.")
 
     grouped = group_adoption_items_by_provider(lines)
+    if provider_id is not None:
+        if provider_id not in grouped:
+            raise ValidationError("La adopción no incluye productos de la editorial seleccionada.")
+        grouped = {provider_id: grouped[provider_id]}
 
     result = []
     for provider_id, items in sorted(grouped.items()):
