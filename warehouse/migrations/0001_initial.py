@@ -1,4 +1,5 @@
 # Migración inicial del módulo de recepción de mercadería.
+import django.core.validators
 import django.db.models.deletion
 import django.utils.timezone
 import uuid
@@ -44,7 +45,7 @@ class Migration(migrations.Migration):
                 ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
                 ("created_at", models.DateTimeField(auto_now_add=True, verbose_name="Fecha de creación")),
                 ("updated_at", models.DateTimeField(auto_now=True, verbose_name="Fecha de actualización")),
-                ("quantity_arrived", models.PositiveIntegerField(validators=[__import__("django").core.validators.MinValueValidator(1)])),
+                ("quantity_arrived", models.PositiveIntegerField(validators=[django.core.validators.MinValueValidator(1)])),
                 ("quantity_accepted", models.PositiveIntegerField(default=0)),
                 ("quantity_observed", models.PositiveIntegerField(default=0)),
                 ("notes", models.CharField(blank=True, max_length=500)),
