@@ -1,5 +1,7 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.http import Http404
+from django.db.models import Q, Sum
+from django.db.models.functions import Coalesce
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -7,7 +9,7 @@ from rest_framework.response import Response
 
 from accounts.permissions import usuario_tiene_permiso
 from catalog.models import Provider
-from purchasing.models import PurchaseOrder
+from purchasing.models import PurchaseOrder, PurchaseOrderItem
 from warehouse.api_serializers import CreateReceiptSerializer, GoodsReceiptSerializer
 from warehouse.models import GoodsReceipt
 from warehouse.receiving import crear_borrador_recepcion, saldos_pedido, validar_recepcion
@@ -28,6 +30,60 @@ class GoodsReceiptViewSet(viewsets.ReadOnlyModelViewSet):
                 raise ValidationError({"provider": "Identificador no válido."})
             queryset = queryset.filter(provider_id=int(raw))
         return queryset
+
+    @action(detail=False, methods=["get"], url_path="pedidos-pendientes")
+    def pending_orders(self, request):
+        if not usuario_tiene_permiso(request.user, "warehouse.view_receiving"):
+            raise PermissionDenied("No tienes permiso para consultar recepciones.")
+        queryset = PurchaseOrder.objects.filter(
+            status__in=[
+                PurchaseOrder.Status.SENT,
+                PurchaseOrder.Status.PARTIALLY_RECEIVED,
+            ],
+        ).order_by("provider_name_snapshot", "school_name_snapshot", "pk")
+        provider = request.query_params.get("provider", "").strip()
+        if provider:
+            if not provider.isdecimal():
+                raise ValidationError({"provider": "Editorial no válida."})
+            queryset = queryset.filter(provider_id=int(provider))
+        page = self.paginate_queryset(queryset)
+        orders = list(page if page is not None else queryset[:20])
+        ids = [order.pk for order in orders]
+        lines = PurchaseOrderItem.objects.filter(order_id__in=ids).annotate(
+            accepted=Coalesce(
+                Sum(
+                    "receipt_lines__quantity_accepted",
+                    filter=Q(receipt_lines__receipt__status=GoodsReceipt.Status.VALIDATED),
+                ), 0,
+            ),
+        ).order_by("pk")
+        items_by_order = {}
+        for line in lines:
+            pending = max(0, line.quantity_ordered - line.accepted)
+            if pending:
+                items_by_order.setdefault(line.order_id, []).append({
+                    "item_id": line.pk,
+                    "producto": line.product_name_snapshot,
+                    "codigo": line.product_code_snapshot,
+                    "solicitadas": line.quantity_ordered,
+                    "aceptadas": line.accepted,
+                    "pendientes": pending,
+                })
+        result = [
+            {
+                "id": order.pk,
+                "editorial_id": order.provider_id,
+                "editorial": order.provider_name_snapshot,
+                "colegio": order.school_name_snapshot or "Pedido independiente",
+                "campania": order.campaign_name_snapshot,
+                "referencia": f"BE-OC-{order.pk:06d}",
+                "productos": items_by_order.get(order.pk, []),
+            }
+            for order in orders if items_by_order.get(order.pk)
+        ]
+        if page is not None:
+            return self.get_paginated_response(result)
+        return Response(result)
 
     @action(detail=False, methods=["post"], url_path="crear")
     def create_draft(self, request):
