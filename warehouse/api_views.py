@@ -27,7 +27,7 @@ class GoodsReceiptViewSet(viewsets.ReadOnlyModelViewSet):
             raise PermissionDenied("No tienes permiso para consultar recepciones.")
         queryset = GoodsReceipt.objects.select_related(
             "provider", "created_by", "validated_by",
-        ).prefetch_related("lines__order_item").order_by("-received_on", "-pk")
+        ).prefetch_related("lines__order_item__order").order_by("-received_on", "-pk")
         raw = self.request.query_params.get("provider")
         if raw:
             if not raw.isdecimal():
