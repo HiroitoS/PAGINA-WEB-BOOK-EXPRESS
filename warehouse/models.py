@@ -92,6 +92,8 @@ class GoodsReceiptLine(TimeStampedModel):
     )
     quantity_accepted = models.PositiveIntegerField(default=0)
     quantity_observed = models.PositiveIntegerField(default=0)
+    quantity_documented = models.PositiveIntegerField(null=True, blank=True)
+    quantity_extra = models.PositiveIntegerField(default=0)
     notes = models.CharField(max_length=500, blank=True)
 
     class Meta:
@@ -113,16 +115,16 @@ class GoodsReceiptLine(TimeStampedModel):
                 name="wh_line_observed_lte_arrived",
             ),
             models.CheckConstraint(
-                condition=Q(quantity_arrived=F("quantity_accepted") + F("quantity_observed")),
+                condition=Q(quantity_arrived=F("quantity_accepted") + F("quantity_observed") + F("quantity_extra")),
                 name="wh_line_quantities_balance",
             ),
         ]
 
     def clean(self):
         super().clean()
-        if self.quantity_arrived != self.quantity_accepted + self.quantity_observed:
+        if self.quantity_arrived != self.quantity_accepted + self.quantity_observed + self.quantity_extra:
             raise ValidationError(
-                "La cantidad llegada debe ser igual a aceptada más observada."
+                "Lo recibido debe ser igual a aceptado para el pedido, excedente conforme y observado."
             )
         if (self.receipt_id and self.order_item_id
                 and self.receipt.provider_id != self.order_item.order.provider_id):
