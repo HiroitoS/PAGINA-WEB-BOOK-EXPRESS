@@ -70,7 +70,7 @@ class APIComprasTests(GeneracionPedidosAdopcionTests):
         self.assertIn("attachment;", respuesta["Content-Disposition"])
         self.assertTrue(respuesta.content.startswith(b"%PDF"))
         pagina = re.search(
-            rb"/MediaBox\\s*\\[\\s*0\\s+0\\s+([0-9.]+)\\s+([0-9.]+)\\s*\\]",
+            rb"/MediaBox\s*\[\s*0\s+0\s+([0-9.]+)\s+([0-9.]+)\s*\]",
             respuesta.content,
         )
         self.assertIsNotNone(pagina, "La orden debe declarar el tamaño de página.")
