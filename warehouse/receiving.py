@@ -76,7 +76,7 @@ def crear_borrador_recepcion(
             PurchaseOrder.Status.PARTIALLY_RECEIVED,
         ):
             raise ValidationError("Solo puedes recepcionar pedidos enviados y aún pendientes.")
-        if row["quantity_arrived"] != row["quantity_accepted"] + row["quantity_observed"]:
+        if row["quantity_arrived"] != row["quantity_accepted"] + row["quantity_observed"] + row["quantity_extra"]:
             raise ValidationError("Cantidad llegada debe ser igual a aceptada más observada.")
     documento = _normalizar_documento(document_type, document_number)
     _validar_guia_no_duplicada(
@@ -100,6 +100,8 @@ def crear_borrador_recepcion(
             quantity_arrived=row["quantity_arrived"],
             quantity_accepted=row["quantity_accepted"],
             quantity_observed=row["quantity_observed"],
+            quantity_documented=row.get("quantity_documented"),
+            quantity_extra=row["quantity_extra"],
             notes=row.get("notes", "").strip(),
         )
         linea.full_clean()
@@ -142,7 +144,7 @@ def actualizar_borrador_recepcion(
             PurchaseOrder.Status.PARTIALLY_RECEIVED,
         ):
             raise ValidationError("Solo puedes recepcionar pedidos enviados y pendientes.")
-        if row["quantity_arrived"] != row["quantity_accepted"] + row["quantity_observed"]:
+        if row["quantity_arrived"] != row["quantity_accepted"] + row["quantity_observed"] + row["quantity_extra"]:
             raise ValidationError("La cantidad llegada no coincide con aceptada más observada.")
 
     documento = _normalizar_documento(document_type, document_number)
@@ -157,7 +159,7 @@ def actualizar_borrador_recepcion(
         "notes": recepcion.notes,
         "lines": list(recepcion.lines.values(
             "order_item_id", "quantity_arrived", "quantity_accepted",
-            "quantity_observed", "notes",
+            "quantity_observed", "quantity_documented", "quantity_extra", "notes",
         )),
     }
     recepcion.document_type = document_type
@@ -176,6 +178,8 @@ def actualizar_borrador_recepcion(
             quantity_arrived=row["quantity_arrived"],
             quantity_accepted=row["quantity_accepted"],
             quantity_observed=row["quantity_observed"],
+            quantity_documented=row.get("quantity_documented"),
+            quantity_extra=row["quantity_extra"],
             notes=row.get("notes", "").strip(),
         )
         detalle.full_clean()
@@ -195,6 +199,8 @@ def actualizar_borrador_recepcion(
                         "quantity_arrived": row["quantity_arrived"],
                         "quantity_accepted": row["quantity_accepted"],
                         "quantity_observed": row["quantity_observed"],
+                        "quantity_documented": row.get("quantity_documented"),
+                        "quantity_extra": row["quantity_extra"],
                     } for row in lines
                 ],
             },
@@ -238,7 +244,7 @@ def validar_recepcion(*, actor, receipt_id):
         ).values("order_item_id").annotate(total=Sum("quantity_accepted"))
     }
     for fila in filas:
-        if fila.quantity_arrived != fila.quantity_accepted + fila.quantity_observed:
+        if fila.quantity_arrived != fila.quantity_accepted + fila.quantity_observed + fila.quantity_extra:
             raise ValidationError("Hay cantidades de recepción que no cuadran.")
         anterior_aceptado = anteriores.get(fila.order_item_id, 0)
         pendiente = max(0, fila.order_item.quantity_ordered - anterior_aceptado)
@@ -246,6 +252,10 @@ def validar_recepcion(*, actor, receipt_id):
             raise ValidationError(
                 f"Se excede la cantidad solicitada para {fila.order_item.product_name_snapshot}."
             )
+        if fila.quantity_documented is not None and fila.quantity_documented != fila.quantity_arrived and not (fila.notes.strip() or receipt.notes.strip()):
+            raise ValidationError("Explica la diferencia entre la guía y el conteo físico.")
+        if fila.quantity_extra and not (fila.notes.strip() or receipt.notes.strip()):
+            raise ValidationError("Indica el motivo del excedente conforme conservado.")
         # Un excedente físico se registra como observado, nunca como compra
         # adicional ni stock disponible. Exigir una explicación verificable.
         if fila.quantity_arrived > pendiente and not (
@@ -254,7 +264,7 @@ def validar_recepcion(*, actor, receipt_id):
             raise ValidationError(
                 f"Registra en observaciones el motivo del excedente recibido de "
                 f"{fila.order_item.product_name_snapshot}. "
-                "Las unidades adicionales deben permanecer observadas."
+                "Las unidades adicionales deben quedar identificadas como excedentes conformes u observadas."
             )
 
     receipt.status = GoodsReceipt.Status.VALIDATED
@@ -266,6 +276,7 @@ def validar_recepcion(*, actor, receipt_id):
         details={
             "accepted": sum(row.quantity_accepted for row in filas),
             "observed": sum(row.quantity_observed for row in filas),
+            "extra": sum(row.quantity_extra for row in filas),
         },
     )
 
@@ -374,12 +385,14 @@ def seguimiento_recepcion(*, actor, receipt):
                 "llegaron": 0,
                 "aceptadas": 0,
                 "observadas": 0,
+                "excedentes": 0,
                 "es_recepcion_actual": line.receipt_id == receipt.pk,
             }
         registro = entregas_por_pedido[clave]
         registro["llegaron"] += line.quantity_arrived
         registro["aceptadas"] += line.quantity_accepted
         registro["observadas"] += line.quantity_observed
+        registro["excedentes"] += line.quantity_extra
 
     por_pedido = {}
     for item in items:
@@ -412,6 +425,8 @@ def seguimiento_recepcion(*, actor, receipt):
             "llegaron_en_guia": linea_actual.quantity_arrived if linea_actual else 0,
             "aceptadas_en_guia": linea_actual.quantity_accepted if linea_actual else 0,
             "observadas_en_guia": linea_actual.quantity_observed if linea_actual else 0,
+            "documentadas_en_guia": linea_actual.quantity_documented if linea_actual else None,
+            "excedentes_en_guia": linea_actual.quantity_extra if linea_actual else 0,
         })
 
     for (pedido_id, _), entrega in entregas_por_pedido.items():
