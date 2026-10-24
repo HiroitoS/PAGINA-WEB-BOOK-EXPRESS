@@ -164,6 +164,7 @@ class RecepcionMercaderiaTests(TestCase):
             "received_on": str(timezone.localdate()),
             "lines": [{
                 "order_item_id": self.item.pk, "quantity_arrived": 80,
+                "quantity_documented": 80,
                 "quantity_accepted": 80, "quantity_observed": 0,
             }],
         }, format="json")
