@@ -12,7 +12,10 @@ from catalog.models import Provider
 from purchasing.models import PurchaseOrder, PurchaseOrderItem
 from warehouse.api_serializers import CreateReceiptSerializer, GoodsReceiptSerializer
 from warehouse.models import GoodsReceipt
-from warehouse.receiving import crear_borrador_recepcion, saldos_pedido, validar_recepcion
+from warehouse.receiving import (
+    actualizar_borrador_recepcion, crear_borrador_recepcion,
+    saldos_pedido, validar_recepcion,
+)
 
 
 class GoodsReceiptViewSet(viewsets.ReadOnlyModelViewSet):
@@ -102,6 +105,21 @@ class GoodsReceiptViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(
             GoodsReceiptSerializer(receipt).data, status=status.HTTP_201_CREATED,
         )
+
+    @action(detail=True, methods=["post"], url_path="actualizar")
+    def update_draft(self, request, pk=None):
+        if not usuario_tiene_permiso(request.user, "warehouse.manage_receiving"):
+            raise PermissionDenied("No tienes permiso para modificar recepciones.")
+        self.get_object()
+        serializer = CreateReceiptSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            receipt = actualizar_borrador_recepcion(
+                actor=request.user, receipt_id=pk, **serializer.validated_data,
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
+        return Response(GoodsReceiptSerializer(receipt).data)
 
     @action(detail=True, methods=["post"], url_path="validar")
     def validate_draft(self, request, pk=None):
