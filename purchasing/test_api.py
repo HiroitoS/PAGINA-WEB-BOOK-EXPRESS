@@ -1,4 +1,5 @@
 """Pruebas de permisos y rutas privadas del módulo de compras."""
+import re
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
@@ -68,6 +69,12 @@ class APIComprasTests(GeneracionPedidosAdopcionTests):
         self.assertEqual(respuesta["Content-Type"], "application/pdf")
         self.assertIn("attachment;", respuesta["Content-Disposition"])
         self.assertTrue(respuesta.content.startswith(b"%PDF"))
+        pagina = re.search(
+            rb"/MediaBox\\s*\\[\\s*0\\s+0\\s+([0-9.]+)\\s+([0-9.]+)\\s*\\]",
+            respuesta.content,
+        )
+        self.assertIsNotNone(pagina, "La orden debe declarar el tamaño de página.")
+        self.assertGreater(float(pagina.group(1)), float(pagina.group(2)), "Debe ser A4 horizontal.")
         self.assertGreater(len(respuesta.content), 1000)
         self.assertEqual(
             PurchaseOrderEvent.objects.filter(
