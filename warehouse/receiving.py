@@ -240,9 +240,21 @@ def validar_recepcion(*, actor, receipt_id):
     for fila in filas:
         if fila.quantity_arrived != fila.quantity_accepted + fila.quantity_observed:
             raise ValidationError("Hay cantidades de recepción que no cuadran.")
-        if anteriores.get(fila.order_item_id, 0) + fila.quantity_accepted > fila.order_item.quantity_ordered:
+        anterior_aceptado = anteriores.get(fila.order_item_id, 0)
+        pendiente = max(0, fila.order_item.quantity_ordered - anterior_aceptado)
+        if fila.quantity_accepted > pendiente:
             raise ValidationError(
                 f"Se excede la cantidad solicitada para {fila.order_item.product_name_snapshot}."
+            )
+        # Un excedente físico se registra como observado, nunca como compra
+        # adicional ni stock disponible. Exigir una explicación verificable.
+        if fila.quantity_arrived > pendiente and not (
+            fila.notes.strip() or receipt.notes.strip()
+        ):
+            raise ValidationError(
+                f"Registra en observaciones el motivo del excedente recibido de "
+                f"{fila.order_item.product_name_snapshot}. "
+                "Las unidades adicionales deben permanecer observadas."
             )
 
     receipt.status = GoodsReceipt.Status.VALIDATED
