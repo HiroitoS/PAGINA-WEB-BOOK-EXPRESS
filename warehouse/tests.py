@@ -453,23 +453,27 @@ class RecepcionMercaderiaTests(TestCase):
             recepcion.lines.get().quantity_observed, 10,
         )
 
-    def test_excedente_sin_motivo_no_puede_validarse(self):
+    def test_excedente_conforme_sin_motivo_se_audita_automaticamente(self):
         recepcion = crear_borrador_recepcion(
             actor=self.actor, provider_id=self.editorial.pk,
             document_type="guide", document_number="G-EXCESO",
             received_on=timezone.localdate(),
             lines=[{
                 "order_item_id": self.item.pk,
+                "quantity_documented": 100,
                 "quantity_arrived": 110, "quantity_accepted": 100,
-                "quantity_observed": 10,
+                "quantity_extra": 10, "quantity_observed": 0,
             }],
         )
-        with self.assertRaises(ValidationError):
-            validar_recepcion(actor=self.actor, receipt_id=recepcion.pk)
+        validar_recepcion(actor=self.actor, receipt_id=recepcion.pk)
         recepcion.refresh_from_db()
         self.pedido.refresh_from_db()
-        self.assertEqual(recepcion.status, GoodsReceipt.Status.DRAFT)
-        self.assertEqual(self.pedido.status, PurchaseOrder.Status.SENT)
+        self.assertEqual(recepcion.status, GoodsReceipt.Status.VALIDATED)
+        self.assertEqual(self.pedido.status, PurchaseOrder.Status.RECEIVED)
+        evento = GoodsReceiptEvent.objects.get(receipt=recepcion, action="validated")
+        self.assertEqual(evento.details["extra"], 10)
+        self.assertEqual(evento.details["differences"][0]["physical"], 110)
+        self.assertEqual(evento.details["differences"][0]["documented"], 100)
 
     def test_seguimiento_una_guia_con_dos_pedidos_mantiene_colegios_separados(self):
         segundo = PurchaseOrder.objects.create(
