@@ -1,5 +1,6 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.http import Http404
+from django.db import IntegrityError
 from django.db.models import Q, Sum
 from django.db.models.functions import Coalesce
 from rest_framework import status, viewsets
@@ -102,6 +103,8 @@ class GoodsReceiptViewSet(viewsets.ReadOnlyModelViewSet):
             raise Http404("Editorial no encontrada.") from exc
         except DjangoValidationError as exc:
             raise ValidationError({"detail": exc.messages}) from exc
+        except IntegrityError as exc:
+            raise ValidationError({"detail": "El documento ya fue registrado para esta editorial o sus datos están duplicados."}) from exc
         return Response(
             GoodsReceiptSerializer(receipt).data, status=status.HTTP_201_CREATED,
         )
@@ -119,6 +122,8 @@ class GoodsReceiptViewSet(viewsets.ReadOnlyModelViewSet):
             )
         except DjangoValidationError as exc:
             raise ValidationError({"detail": exc.messages}) from exc
+        except IntegrityError as exc:
+            raise ValidationError({"detail": "El documento ya fue registrado para esta editorial o sus datos están duplicados."}) from exc
         return Response(GoodsReceiptSerializer(receipt).data)
 
     @action(detail=True, methods=["post"], url_path="validar")
@@ -130,6 +135,8 @@ class GoodsReceiptViewSet(viewsets.ReadOnlyModelViewSet):
             receipt = validar_recepcion(actor=request.user, receipt_id=pk)
         except DjangoValidationError as exc:
             raise ValidationError({"detail": exc.messages}) from exc
+        except IntegrityError as exc:
+            raise ValidationError({"detail": "El documento ya fue registrado para esta editorial o sus datos están duplicados."}) from exc
         return Response(GoodsReceiptSerializer(receipt).data)
 
     @action(detail=False, methods=["get"], url_path="saldos")
