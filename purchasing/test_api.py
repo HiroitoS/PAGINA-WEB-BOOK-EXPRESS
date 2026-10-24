@@ -4,7 +4,9 @@ from django.test import TestCase
 from django.urls import reverse
 from rest_framework.test import APIClient
 
-from purchasing.models import PurchaseOrder
+from purchasing.models import PurchaseOrder, PurchaseOrderEvent
+from purchasing.order_creation import create_orders_from_adoption
+from purchasing.order_management import aprobar_pedido
 from purchasing.test_integration import GeneracionPedidosAdopcionTests
 
 
@@ -52,3 +54,51 @@ class APIComprasTests(GeneracionPedidosAdopcionTests):
             self.client.post(self.generar_url, {"adoption_id": self.adopcion.pk}, format="json").status_code,
             403,
         )
+
+    def test_pdf_pedido_aprobado_se_descarga_y_audita(self):
+        pedido = create_orders_from_adoption(
+            adoption_id=self.adopcion.pk, actor=self.user,
+        )[0]
+        aprobar_pedido(pedido_id=pedido.pk, actor=self.user)
+        self.client.force_authenticate(self.user)
+        respuesta = self.client.get(
+            reverse("pedido-editorial-export-purchase-order", args=[pedido.pk])
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta["Content-Type"], "application/pdf")
+        self.assertIn("attachment;", respuesta["Content-Disposition"])
+        self.assertTrue(respuesta.content.startswith(b"%PDF"))
+        self.assertGreater(len(respuesta.content), 1000)
+        self.assertEqual(
+            PurchaseOrderEvent.objects.filter(
+                order=pedido, event_type="document_exported"
+            ).count(), 1,
+        )
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.status, PurchaseOrder.Status.APPROVED)
+
+    def test_pdf_no_disponible_en_borrador(self):
+        pedido = create_orders_from_adoption(
+            adoption_id=self.adopcion.pk, actor=self.user,
+        )[0]
+        self.client.force_authenticate(self.user)
+        respuesta = self.client.get(
+            reverse("pedido-editorial-export-purchase-order", args=[pedido.pk])
+        )
+        self.assertEqual(respuesta.status_code, 409)
+        self.assertFalse(
+            PurchaseOrderEvent.objects.filter(
+                order=pedido, event_type="document_exported"
+            ).exists()
+        )
+
+    def test_pdf_requiere_autenticacion(self):
+        pedido = create_orders_from_adoption(
+            adoption_id=self.adopcion.pk, actor=self.user,
+        )[0]
+        aprobar_pedido(pedido_id=pedido.pk, actor=self.user)
+        self.client.force_authenticate(user=None)
+        respuesta = self.client.get(
+            reverse("pedido-editorial-export-purchase-order", args=[pedido.pk])
+        )
+        self.assertIn(respuesta.status_code, (401, 403))
