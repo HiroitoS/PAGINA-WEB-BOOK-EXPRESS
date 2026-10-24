@@ -347,7 +347,7 @@ def seguimiento_recepcion(*, actor, receipt):
     )
     actual_por_item = {line.order_item_id: line for line in lineas_actuales}
     validadas = list(
-        GoodsReceiptLine.objects.select_related("receipt")
+        GoodsReceiptLine.objects.select_related("receipt", "order_item")
         .filter(
             order_item__order_id__in=ids_pedidos,
             receipt__status=GoodsReceipt.Status.VALIDATED,
