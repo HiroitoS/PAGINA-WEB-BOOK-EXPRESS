@@ -102,3 +102,27 @@ class APIComprasTests(GeneracionPedidosAdopcionTests):
             reverse("pedido-editorial-export-purchase-order", args=[pedido.pk])
         )
         self.assertIn(respuesta.status_code, (401, 403))
+
+    def test_generacion_individual_solo_editorial_solicitada(self):
+        self.client.force_authenticate(self.user)
+        editorial_id = self.adopcion.items.first().product.provider_id
+        respuesta = self.client.post(
+            self.generar_url,
+            {"adoption_id": self.adopcion.pk, "provider_id": editorial_id},
+            format="json",
+        )
+        self.assertEqual(respuesta.status_code, 200, respuesta.data)
+        self.assertEqual(len(respuesta.data), 1)
+        self.assertEqual(respuesta.data[0]["provider"], editorial_id)
+        self.assertEqual(PurchaseOrder.objects.count(), 1)
+        self.assertEqual(PurchaseOrder.objects.get().provider_id, editorial_id)
+
+    def test_generacion_individual_rechaza_editorial_ajena(self):
+        self.client.force_authenticate(self.user)
+        respuesta = self.client.post(
+            self.generar_url,
+            {"adoption_id": self.adopcion.pk, "provider_id": 99999999},
+            format="json",
+        )
+        self.assertEqual(respuesta.status_code, 400, respuesta.data)
+        self.assertEqual(PurchaseOrder.objects.count(), 0)
