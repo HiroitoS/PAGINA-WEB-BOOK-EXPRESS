@@ -187,6 +187,33 @@ class ReceivingIncidentViewSet(viewsets.ReadOnlyModelViewSet):
     def retrieve(self, request, *args, **kwargs):
         return Response(self._as_dict(self.get_object()))
 
+    @action(detail=False, methods=["get"], url_path="alertas-liquidacion")
+    def settlement_alerts(self, request):
+        """Control interno previo a liquidar; no crea ni aprueba pagos."""
+        queryset = self.get_queryset().filter(status=ReceivingIncident.Status.OPEN)
+        provider = request.query_params.get("provider")
+        if provider:
+            if not provider.isdecimal():
+                raise ValidationError({"provider": "Editorial no válida."})
+            queryset = queryset.filter(receipt_line__receipt__provider_id=int(provider))
+        records = list(queryset)
+        totals = {
+            "shortage": sum(x.quantity for x in records if x.kind == ReceivingIncident.Kind.SHORTAGE),
+            "nonconforming": sum(x.quantity for x in records if x.kind == ReceivingIncident.Kind.NONCONFORMING),
+        }
+        return Response({
+            "requires_review": bool(records),
+            "message": (
+                "Hay faltantes o productos no conformes sin resolver. "
+                "Revisa las incidencias antes de liquidar a la editorial."
+                if records else "No hay incidencias abiertas registradas en este control."
+            ),
+            "open_incidents": len(records),
+            "quantities": totals,
+            "items": [self._as_dict(x) for x in records],
+            "scope": "Incidencias registradas; no sustituye conciliación de facturas, pagos ni saldos de pedidos.",
+        })
+
     @staticmethod
     def _as_dict(item):
         line = item.receipt_line
