@@ -12,7 +12,7 @@ from accounts.permissions import usuario_tiene_permiso
 from catalog.models import Provider
 from purchasing.models import PurchaseOrder, PurchaseOrderItem
 from warehouse.api_serializers import CreateReceiptSerializer, GoodsReceiptSerializer
-from warehouse.models import GoodsReceipt
+from warehouse.models import GoodsReceipt, ReceivingIncident
 from warehouse.receiving import (
     actualizar_borrador_recepcion, crear_borrador_recepcion,
     saldos_pedido, seguimiento_recepcion, validar_recepcion,
@@ -161,3 +161,49 @@ class GoodsReceiptViewSet(viewsets.ReadOnlyModelViewSet):
             return Response(saldos_pedido(actor=request.user, order_id=int(raw)))
         except PurchaseOrder.DoesNotExist as exc:
             raise Http404("Pedido no encontrado.") from exc
+
+
+class ReceivingIncidentViewSet(viewsets.ReadOnlyModelViewSet):
+    """Consulta interna de incidencias; su resolución tendrá un flujo propio."""
+
+    def get_queryset(self):
+        if not usuario_tiene_permiso(self.request.user, "warehouse.view_receiving"):
+            raise PermissionDenied("No tienes permiso para consultar incidencias.")
+        return ReceivingIncident.objects.select_related(
+            "receipt_line__receipt__provider",
+            "receipt_line__order_item__order",
+            "detected_by",
+        ).order_by("-created_at", "-pk")
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        records = page if page is not None else queryset
+        data = [self._as_dict(item) for item in records]
+        if page is not None:
+            return self.get_paginated_response(data)
+        return Response(data)
+
+    def retrieve(self, request, *args, **kwargs):
+        return Response(self._as_dict(self.get_object()))
+
+    @staticmethod
+    def _as_dict(item):
+        line = item.receipt_line
+        order_item = line.order_item
+        receipt = line.receipt
+        return {
+            "id": item.pk,
+            "type": item.kind,
+            "type_label": item.get_kind_display(),
+            "status": item.status,
+            "quantity": item.quantity,
+            "receipt_id": receipt.pk,
+            "document_number": receipt.document_number,
+            "editorial": receipt.provider.name,
+            "order_id": order_item.order_id,
+            "school": order_item.order.school_name_snapshot or "Pedido independiente",
+            "product": order_item.product_name_snapshot,
+            "detected_by": item.detected_by.get_username(),
+            "created_at": item.created_at,
+        }
