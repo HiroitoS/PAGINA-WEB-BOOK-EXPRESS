@@ -114,6 +114,28 @@ class RecepcionMercaderiaTests(TestCase):
         registros = response.data.get("results", response.data)
         self.assertEqual(len(registros), 2)
 
+    def test_alerta_liquidacion_identifica_faltantes_y_danados(self):
+        recepcion = crear_borrador_recepcion(
+            actor=self.actor, provider_id=self.editorial.pk,
+            document_type="guide", document_number="G-ALERTA",
+            received_on=timezone.localdate(),
+            lines=[{
+                "order_item_id": self.item.pk, "quantity_documented": 100,
+                "quantity_arrived": 98, "quantity_accepted": 95,
+                "quantity_observed": 3,
+            }],
+        )
+        validar_recepcion(actor=self.actor, receipt_id=recepcion.pk)
+        client = APIClient()
+        client.force_authenticate(self.actor)
+        response = client.get(
+            f"/api/admin/erp/almacen/incidencias/alertas-liquidacion/?provider={self.editorial.pk}"
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertTrue(response.data["requires_review"])
+        self.assertEqual(response.data["quantities"], {"shortage": 2, "nonconforming": 3})
+        self.assertEqual(response.data["open_incidents"], 2)
+
     def test_incidencias_no_expuestas_a_usuario_sin_permiso(self):
         usuario = get_user_model().objects.create_user(username="sin-incidencias")
         client = APIClient()
