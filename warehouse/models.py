@@ -177,3 +177,33 @@ class ReceivingIncident(TimeStampedModel):
             models.UniqueConstraint(fields=["receipt_line", "kind"], name="wh_incident_line_kind_unique"),
             models.CheckConstraint(condition=Q(quantity__gte=1), name="wh_incident_positive"),
         ]
+
+
+class StockEntry(TimeStampedModel):
+    """Ingreso físico inmutable originado en una línea de recepción validada.
+
+    El registro por línea es único. El destino de las unidades se distingue
+    por condición; no se duplica el producto ni la guía.
+    """
+    receipt_line = models.OneToOneField(
+        GoodsReceiptLine, on_delete=models.PROTECT, related_name="stock_entry",
+    )
+    product = models.ForeignKey(
+        "catalog.Product", on_delete=models.PROTECT, related_name="warehouse_entries",
+    )
+    quantity_available = models.PositiveIntegerField()
+    quantity_quarantined = models.PositiveIntegerField(default=0)
+    quantity_extra = models.PositiveIntegerField(default=0)
+    posted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="warehouse_entries_posted",
+    )
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(quantity_extra__lte=F("quantity_available")),
+                name="wh_stock_extra_within_available",
+            ),
+        ]
