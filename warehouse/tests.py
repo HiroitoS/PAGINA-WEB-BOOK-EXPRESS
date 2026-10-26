@@ -10,7 +10,7 @@ from catalog.models import Product, Provider
 from crm.models import Campaign
 from purchasing.models import PurchaseOrder, PurchaseOrderItem
 from warehouse.api_serializers import GoodsReceiptSerializer
-from warehouse.models import GoodsReceipt, GoodsReceiptEvent
+from warehouse.models import GoodsReceipt, GoodsReceiptEvent, ReceivingIncident
 from warehouse.receiving import (
     actualizar_borrador_recepcion, crear_borrador_recepcion,
     saldos_pedido, validar_recepcion,
@@ -82,6 +82,43 @@ class RecepcionMercaderiaTests(TestCase):
         self.assertEqual(linea.quantity_documented, 100)
         self.assertEqual(linea.quantity_extra, 2)
         self.assertEqual(saldos_pedido(actor=self.actor, order_id=self.pedido.pk)["productos"][0]["cantidad_pendiente"], 0)
+
+    def test_incidencias_se_crean_por_faltante_de_guia_y_no_conformes(self):
+        recepcion = crear_borrador_recepcion(
+            actor=self.actor, provider_id=self.editorial.pk,
+            document_type="guide", document_number="G-INC-01",
+            received_on=timezone.localdate(),
+            lines=[{
+                "order_item_id": self.item.pk,
+                "quantity_documented": 100,
+                "quantity_arrived": 98,
+                "quantity_accepted": 95,
+                "quantity_observed": 3,
+                "quantity_extra": 0,
+            }],
+        )
+        validar_recepcion(actor=self.actor, receipt_id=recepcion.pk)
+        incidencias = {
+            x.kind: x.quantity
+            for x in ReceivingIncident.objects.filter(receipt_line__receipt=recepcion)
+        }
+        self.assertEqual(incidencias, {"shortage": 2, "nonconforming": 3})
+        with self.assertRaises(ValidationError):
+            validar_recepcion(actor=self.actor, receipt_id=recepcion.pk)
+        self.assertEqual(ReceivingIncident.objects.filter(receipt_line__receipt=recepcion).count(), 2)
+        client = APIClient()
+        client.force_authenticate(self.actor)
+        response = client.get("/api/admin/erp/almacen/incidencias/")
+        self.assertEqual(response.status_code, 200)
+        registros = response.data.get("results", response.data)
+        self.assertEqual(len(registros), 2)
+
+    def test_incidencias_no_expuestas_a_usuario_sin_permiso(self):
+        usuario = get_user_model().objects.create_user(username="sin-incidencias")
+        client = APIClient()
+        client.force_authenticate(usuario)
+        response = client.get("/api/admin/erp/almacen/incidencias/")
+        self.assertEqual(response.status_code, 403)
 
     def test_80_recibidas_20_pendientes_y_segunda_entrega(self):
         primera = self.borrador(80)
