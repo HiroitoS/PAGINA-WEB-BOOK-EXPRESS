@@ -13,7 +13,7 @@ from django.utils import timezone
 from accounts.permissions import usuario_tiene_permiso
 from catalog.models import Provider
 from purchasing.models import PurchaseOrder, PurchaseOrderEvent, PurchaseOrderItem
-from warehouse.models import GoodsReceipt, GoodsReceiptEvent, GoodsReceiptLine
+from warehouse.models import GoodsReceipt, GoodsReceiptEvent, GoodsReceiptLine, ReceivingIncident
 
 
 def _autorizar(actor, permiso):
@@ -286,6 +286,22 @@ def validar_recepcion(*, actor, receipt_id):
             ],
         },
     )
+
+    # Las incidencias nacen únicamente al validar, dentro de esta transacción.
+    # Cantidad observada = no conforme; faltante se mide frente al documento,
+    # nunca frente al pedido (una entrega parcial no es necesariamente incidencia).
+    for fila in filas:
+        faltante_guia = max(0, (fila.quantity_documented or 0) - fila.quantity_arrived)
+        if faltante_guia:
+            ReceivingIncident.objects.create(
+                receipt_line=fila, kind=ReceivingIncident.Kind.SHORTAGE,
+                quantity=faltante_guia, detected_by=actor,
+            )
+        if fila.quantity_observed:
+            ReceivingIncident.objects.create(
+                receipt_line=fila, kind=ReceivingIncident.Kind.NONCONFORMING,
+                quantity=fila.quantity_observed, detected_by=actor,
+            )
 
     for pedido in pedidos.values():
         lineas_pedido = list(
