@@ -147,3 +147,33 @@ class GoodsReceiptEvent(TimeStampedModel):
 
     class Meta:
         ordering = ["created_at", "pk"]
+
+
+class ReceivingIncident(TimeStampedModel):
+    """Incidencia física trazable; no mueve existencias ni modifica pedidos."""
+
+    class Kind(models.TextChoices):
+        SHORTAGE = "shortage", "Faltante frente a guía"
+        NONCONFORMING = "nonconforming", "No conforme"
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Pendiente"
+        RESOLVED = "resolved", "Resuelta"
+
+    receipt_line = models.ForeignKey(
+        GoodsReceiptLine, on_delete=models.PROTECT, related_name="incidents",
+    )
+    kind = models.CharField(max_length=20, choices=Kind.choices)
+    quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.OPEN)
+    detected_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="receiving_incidents_detected",
+    )
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+        constraints = [
+            models.UniqueConstraint(fields=["receipt_line", "kind"], name="wh_incident_line_kind_unique"),
+            models.CheckConstraint(condition=Q(quantity__gte=1), name="wh_incident_positive"),
+        ]
