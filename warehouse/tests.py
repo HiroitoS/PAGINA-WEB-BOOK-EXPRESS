@@ -10,7 +10,8 @@ from catalog.models import Product, Provider
 from crm.models import Campaign
 from purchasing.models import PurchaseOrder, PurchaseOrderItem
 from warehouse.api_serializers import GoodsReceiptSerializer
-from warehouse.models import GoodsReceipt, GoodsReceiptEvent, ReceivingIncident
+from warehouse.models import GoodsReceipt, GoodsReceiptEvent, ReceivingIncident, StockEntry
+from warehouse.inventory import registrar_entrada_recepcion
 from warehouse.receiving import (
     actualizar_borrador_recepcion, crear_borrador_recepcion,
     saldos_pedido, validar_recepcion,
@@ -119,6 +120,26 @@ class RecepcionMercaderiaTests(TestCase):
         client.force_authenticate(usuario)
         response = client.get("/api/admin/erp/almacen/incidencias/")
         self.assertEqual(response.status_code, 403)
+
+    def test_inventario_ingreso_con_adicionales_no_se_duplica(self):
+        recepcion = crear_borrador_recepcion(
+            actor=self.actor, provider_id=self.editorial.pk,
+            document_type="guide", document_number="G-STOCK",
+            received_on=timezone.localdate(),
+            lines=[{
+                "order_item_id": self.item.pk, "quantity_documented": 100,
+                "quantity_arrived": 102, "quantity_accepted": 100,
+                "quantity_extra": 2, "quantity_observed": 0,
+            }],
+        )
+        with self.assertRaises(ValidationError):
+            registrar_entrada_recepcion(actor=self.actor, receipt_id=recepcion.pk)
+        validar_recepcion(actor=self.actor, receipt_id=recepcion.pk)
+        self.assertEqual(registrar_entrada_recepcion(actor=self.actor, receipt_id=recepcion.pk)["new_entries"], 1)
+        self.assertEqual(registrar_entrada_recepcion(actor=self.actor, receipt_id=recepcion.pk)["new_entries"], 0)
+        entrada = StockEntry.objects.get(receipt_line__receipt=recepcion)
+        self.assertEqual((entrada.quantity_available, entrada.quantity_extra, entrada.quantity_quarantined), (102, 2, 0))
+        self.assertEqual(StockEntry.objects.count(), 1)
 
     def test_80_recibidas_20_pendientes_y_segunda_entrega(self):
         primera = self.borrador(80)
