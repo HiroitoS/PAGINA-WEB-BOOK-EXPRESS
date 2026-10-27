@@ -1,7 +1,7 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.http import Http404
 from django.db import IntegrityError
-from django.db.models import Q, Sum, F, DecimalField, ExpressionWrapper
+from django.db.models import Q, Sum, F, DecimalField, ExpressionWrapper, Case, When, Value, IntegerField
 from django.db.models.functions import Coalesce
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -289,9 +289,12 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
             "available": entry.quantity_available,
             "nonconforming": entry.quantity_quarantined,
             "extra_included": entry.quantity_extra,
+            "on_order": entry.quantity_available - entry.quantity_extra,
             "physical": entry.quantity_available + entry.quantity_quarantined,
             "unit_cost": str(entry.unit_cost_snapshot) if entry.unit_cost_snapshot is not None else None,
             "entry_value": str(entry.quantity_available * entry.unit_cost_snapshot) if entry.unit_cost_snapshot is not None else None,
+            "order_value_reference": str((entry.quantity_available - entry.quantity_extra) * entry.unit_cost_snapshot) if entry.unit_cost_snapshot is not None else None,
+            "extra_value_reference": str(entry.quantity_extra * entry.unit_cost_snapshot) if entry.unit_cost_snapshot is not None else None,
             "created_at": entry.created_at,
         }
 
@@ -311,6 +314,14 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
             available=Sum("quantity_available"),
             nonconforming=Sum("quantity_quarantined"),
             extra_included=Sum("quantity_extra"),
+            value_reference=Sum(ExpressionWrapper(
+                F("quantity_available") * F("unit_cost_snapshot"),
+                output_field=DecimalField(max_digits=20, decimal_places=2),
+            )),
+            unvalued_units=Sum(Case(
+                When(unit_cost_snapshot__isnull=True, then=F("quantity_available")),
+                default=Value(0), output_field=IntegerField(),
+            )),
         ).order_by("product__name", "product_id")
         return Response([
             {
@@ -321,6 +332,8 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
                 "nonconforming": row["nonconforming"],
                 "extra_included": row["extra_included"],
                 "physical": row["available"] + row["nonconforming"],
+                "value_reference": str(row["value_reference"]) if row["value_reference"] is not None else None,
+                "unvalued_units": row["unvalued_units"],
             }
             for row in grouped
         ])
