@@ -1,7 +1,7 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.http import Http404
 from django.db import IntegrityError
-from django.db.models import Q, Sum
+from django.db.models import Q, Sum, F, DecimalField, ExpressionWrapper
 from django.db.models.functions import Coalesce
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -12,7 +12,7 @@ from accounts.permissions import usuario_tiene_permiso
 from catalog.models import Provider
 from purchasing.models import PurchaseOrder, PurchaseOrderItem
 from warehouse.api_serializers import CreateReceiptSerializer, GoodsReceiptSerializer
-from warehouse.models import GoodsReceipt, ReceivingIncident
+from warehouse.models import GoodsReceipt, ReceivingIncident, StockEntry
 from warehouse.receiving import (
     actualizar_borrador_recepcion, crear_borrador_recepcion,
     saldos_pedido, seguimiento_recepcion, validar_recepcion,
@@ -234,3 +234,73 @@ class ReceivingIncidentViewSet(viewsets.ReadOnlyModelViewSet):
             "detected_by": item.detected_by.get_username(),
             "created_at": item.created_at,
         }
+
+
+class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
+    """Ingresos confirmados: una línea de recepción tiene una sola entrada."""
+
+    def get_queryset(self):
+        if not usuario_tiene_permiso(self.request.user, "warehouse.view_receiving"):
+            raise PermissionDenied("No tienes permiso para consultar inventario.")
+        qs = StockEntry.objects.select_related(
+            "product__provider", "receipt_line__receipt",
+            "receipt_line__order_item__order", "posted_by",
+        ).order_by("-created_at", "-pk")
+        provider = self.request.query_params.get("provider")
+        if provider:
+            if not provider.isdecimal():
+                raise ValidationError({"provider": "Editorial no válida."})
+            qs = qs.filter(product__provider_id=int(provider))
+        return qs
+
+    @staticmethod
+    def _item(entry):
+        receipt_line = entry.receipt_line
+        order_item = receipt_line.order_item
+        return {
+            "id": entry.pk,
+            "product_id": entry.product_id,
+            "product": entry.product.name,
+            "editorial": entry.product.provider.name,
+            "receipt_id": receipt_line.receipt_id,
+            "guide": receipt_line.receipt.document_number,
+            "order_id": order_item.order_id,
+            "school": order_item.order.school_name_snapshot or "Pedido independiente",
+            "available": entry.quantity_available,
+            "nonconforming": entry.quantity_quarantined,
+            "extra_included": entry.quantity_extra,
+            "physical": entry.quantity_available + entry.quantity_quarantined,
+            "unit_cost": str(entry.unit_cost_snapshot) if entry.unit_cost_snapshot is not None else None,
+            "entry_value": str(entry.quantity_available * entry.unit_cost_snapshot) if entry.unit_cost_snapshot is not None else None,
+            "created_at": entry.created_at,
+        }
+
+    def list(self, request, *args, **kwargs):
+        qs = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(qs)
+        data = [self._item(item) for item in (page if page is not None else qs)]
+        return self.get_paginated_response(data) if page is not None else Response(data)
+
+    def retrieve(self, request, *args, **kwargs):
+        return Response(self._item(self.get_object()))
+
+    @action(detail=False, methods=["get"], url_path="existencias")
+    def totals(self, request):
+        qs = self.get_queryset()
+        grouped = qs.values("product_id", "product__name", "product__provider__name").annotate(
+            available=Sum("quantity_available"),
+            nonconforming=Sum("quantity_quarantined"),
+            extra_included=Sum("quantity_extra"),
+        ).order_by("product__name", "product_id")
+        return Response([
+            {
+                "product_id": row["product_id"],
+                "product": row["product__name"],
+                "editorial": row["product__provider__name"],
+                "available": row["available"],
+                "nonconforming": row["nonconforming"],
+                "extra_included": row["extra_included"],
+                "physical": row["available"] + row["nonconforming"],
+            }
+            for row in grouped
+        ])
