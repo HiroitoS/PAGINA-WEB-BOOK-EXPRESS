@@ -374,8 +374,9 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=["get"], url_path="resumen")
     def inventory_summary(self, request):
-        """Indicadores consolidados en backend; las cifras no son cuentas por pagar."""
-        totals = self.get_queryset().aggregate(
+        """Saldo neto actual, separado del histórico de entradas y cuentas por pagar."""
+        qs = self.get_queryset()
+        totals = qs.aggregate(
             conforming=Sum("quantity_available"),
             nonconforming=Sum("quantity_quarantined"),
             extra=Sum("quantity_extra"),
@@ -388,21 +389,36 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
                 default=Value(0), output_field=IntegerField(),
             )),
         )
-        conforming = totals["conforming"] or 0
+        movements = StockMovement.objects.filter(source_entry__in=qs).aggregate(
+            delta=Sum("quantity_delta"),
+            value_delta=Sum(ExpressionWrapper(
+                F("quantity_delta") * F("unit_cost_snapshot"),
+                output_field=DecimalField(max_digits=20, decimal_places=2),
+            )),
+            unvalued_delta=Sum(Case(
+                When(unit_cost_snapshot__isnull=True, then=F("quantity_delta")),
+                default=Value(0), output_field=IntegerField(),
+            )),
+        )
+        from decimal import Decimal
+        conforming = (totals["conforming"] or 0) + (movements["delta"] or 0)
         nonconforming = totals["nonconforming"] or 0
-        unvalued_units = totals["unvalued_units"] or 0
+        unvalued_units = (totals["unvalued_units"] or 0) + (movements["unvalued_delta"] or 0)
+        value = (
+            (totals["value_reference"] or Decimal("0")) +
+            (movements["value_delta"] or Decimal("0"))
+        )
         return Response({
             "physical": conforming + nonconforming,
             "conforming": conforming,
             "nonconforming": nonconforming,
             "extra_included": totals["extra"] or 0,
-            "value_reference": (
-                str(totals["value_reference"])
-                if totals["value_reference"] is not None else None
-            ),
+            "gross_conforming_received": totals["conforming"] or 0,
+            "outflows": -(movements["delta"] or 0),
+            "value_reference": str(value) if totals["value_reference"] is not None else None,
             "unvalued_units": unvalued_units,
             "valuation_complete": unvalued_units == 0,
-            "note": "Valor referencial de ingresos conformes, no deuda con la editorial ni saldo contable después de salidas.",
+            "note": "Saldo neto actual tras cortesías. Adicionales históricos incluidos; no representa deuda a editorial.",
         })
 
     @action(detail=False, methods=["get"], url_path="existencias")
@@ -421,17 +437,40 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
                 default=Value(0), output_field=IntegerField(),
             )),
         ).order_by("product__name", "product_id")
-        return Response([
-            {
+        outflows = {
+            move["source_entry__product_id"]: move
+            for move in StockMovement.objects.filter(source_entry__in=qs).values(
+                "source_entry__product_id"
+            ).annotate(
+                delta=Sum("quantity_delta"),
+                value_delta=Sum(ExpressionWrapper(
+                    F("quantity_delta") * F("unit_cost_snapshot"),
+                    output_field=DecimalField(max_digits=20, decimal_places=2),
+                )),
+                unvalued_delta=Sum(Case(
+                    When(unit_cost_snapshot__isnull=True, then=F("quantity_delta")),
+                    default=Value(0), output_field=IntegerField(),
+                )),
+            )
+        }
+        from decimal import Decimal
+        result = []
+        for row in grouped:
+            out = outflows.get(row["product_id"], {})
+            available = row["available"] + (out.get("delta") or 0)
+            value = (row["value_reference"] or Decimal("0")) + (
+                out.get("value_delta") or Decimal("0")
+            )
+            result.append({
                 "product_id": row["product_id"],
                 "product": row["product__name"],
                 "editorial": row["product__provider__name"],
-                "available": row["available"],
+                "available": available,
+                "gross_conforming_received": row["available"],
                 "nonconforming": row["nonconforming"],
                 "extra_included": row["extra_included"],
-                "physical": row["available"] + row["nonconforming"],
-                "value_reference": str(row["value_reference"]) if row["value_reference"] is not None else None,
-                "unvalued_units": row["unvalued_units"],
-            }
-            for row in grouped
-        ])
+                "physical": available + row["nonconforming"],
+                "value_reference": str(value) if row["value_reference"] is not None else None,
+                "unvalued_units": row["unvalued_units"] + (out.get("unvalued_delta") or 0),
+            })
+        return Response(result)
