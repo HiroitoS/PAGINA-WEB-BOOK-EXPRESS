@@ -73,6 +73,7 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
             "receipt_id": receipt_line.receipt_id,
             "guide": receipt_line.receipt.document_number,
             "order_id": order_item.order_id,
+            "school_id": order_item.order.school_id,
             "school": order_item.order.school_name_snapshot or (
                 order_item.order.school.name if order_item.order.school_id else "Pedido independiente"
             ),
