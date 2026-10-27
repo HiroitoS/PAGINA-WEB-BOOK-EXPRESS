@@ -2,7 +2,8 @@
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db.models import Sum, F, DecimalField, ExpressionWrapper, Case, When, Value, IntegerField
+from django.db.models import Sum, F, Q, OuterRef, Subquery, DecimalField, ExpressionWrapper, Case, When, Value, IntegerField
+from django.db.models.functions import Coalesce
 from rest_framework import status, viewsets, serializers
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -105,6 +106,36 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
     def retrieve(self, request, *args, **kwargs):
         entry = self.get_object()
         return Response(self._item(entry, saldo_entrada(entry)))
+
+    @action(detail=False, methods=["get"], url_path="entradas-disponibles")
+    def eligible_courtesy_entries(self, request):
+        """Busqueda paginada por lote y colegio; no limita cortesías a 20 ingresos recientes."""
+        query = request.query_params.get("q", "").strip()
+        if len(query) > 100:
+            raise ValidationError({"q": "La búsqueda es demasiado larga."})
+        balance_changes = (
+            StockMovement.objects.filter(source_entry_id=OuterRef("pk"))
+            .values("source_entry_id")
+            .annotate(delta=Sum("quantity_delta"))
+            .values("delta")[:1]
+        )
+        qs = self.get_queryset().filter(
+            receipt_line__order_item__order__school__isnull=False,
+        ).annotate(
+            net_available=F("quantity_available") + Coalesce(Subquery(balance_changes), Value(0)),
+        ).filter(net_available__gt=0)
+        if query:
+            qs = qs.filter(
+                Q(product__name__icontains=query)
+                | Q(receipt_line__order_item__order__school__name__icontains=query)
+                | Q(receipt_line__receipt__document_number__icontains=query)
+            )
+        qs = qs.order_by("product__name", "pk")
+        page = self.paginate_queryset(qs)
+        rows = [self._item(entry, entry.net_available) for entry in (
+            page if page is not None else qs[:20]
+        )]
+        return self.get_paginated_response(rows) if page is not None else Response(rows)
 
     @action(detail=False, methods=["post"], url_path="cortesias")
     def create_courtesy(self, request):
