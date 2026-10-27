@@ -188,6 +188,12 @@ class RecepcionMercaderiaTests(TestCase):
         self.assertEqual(totals.data[0]["physical"], 102)
         self.assertEqual(totals.data[0]["unvalued_units"], 0)
         self.assertEqual(round(float(totals.data[0]["value_reference"]), 2), 2631.60)
+        resumen = client.get("/api/admin/erp/almacen/inventario/resumen/")
+        self.assertEqual(resumen.status_code, 200)
+        self.assertEqual(resumen.data["physical"], 102)
+        self.assertEqual(resumen.data["extra_included"], 2)
+        self.assertEqual(round(float(resumen.data["value_reference"]), 2), 2631.60)
+        self.assertTrue(resumen.data["valuation_complete"])
 
 
     def test_flujo_dos_guias_observados_adicionales_y_stock_idempotente(self):
