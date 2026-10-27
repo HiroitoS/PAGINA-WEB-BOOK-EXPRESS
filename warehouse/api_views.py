@@ -13,6 +13,7 @@ from catalog.models import Provider
 from purchasing.models import PurchaseOrder, PurchaseOrderItem
 from warehouse.api_serializers import CreateReceiptSerializer, GoodsReceiptSerializer
 from warehouse.models import GoodsReceipt, ReceivingIncident, StockEntry
+from warehouse.inventory import registrar_entrada_recepcion
 from warehouse.receiving import (
     actualizar_borrador_recepcion, crear_borrador_recepcion,
     saldos_pedido, seguimiento_recepcion, validar_recepcion,
@@ -252,6 +253,25 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
                 raise ValidationError({"provider": "Editorial no válida."})
             qs = qs.filter(product__provider_id=int(provider))
         return qs
+
+    @action(detail=False, methods=["post"], url_path="registrar-entrada")
+    def post_receipt(self, request):
+        raw = request.data.get("receipt_id")
+        if isinstance(raw, bool) or not str(raw or "").isdecimal():
+            raise ValidationError({"receipt_id": "Selecciona una recepción válida."})
+        try:
+            result = registrar_entrada_recepcion(
+                actor=request.user, receipt_id=int(raw),
+            )
+        except GoodsReceipt.DoesNotExist:
+            raise ValidationError({"receipt_id": "La recepción no existe."})
+        except DjangoValidationError as exc:
+            raise ValidationError(exc.messages)
+        return Response({
+            **result,
+            "message": ("Ingreso registrado en inventario." if result["new_entries"]
+                        else "Esta recepción ya estaba ingresada; no se duplicaron unidades."),
+        })
 
     @staticmethod
     def _item(entry):
