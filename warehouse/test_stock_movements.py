@@ -160,6 +160,74 @@ class StockCourtesyTests(TestCase):
         self.assertEqual(empty.status_code, 200)
         self.assertEqual(empty.data["count"], 0)
 
+
+    def test_valorizacion_por_editorial_incluye_adicionales_y_descuenta_cortesias(self):
+        client = APIClient()
+        client.force_authenticate(self.actor)
+        endpoint = "/api/admin/erp/almacen/inventario/resumen-por-editorial/"
+        initial = client.get(endpoint)
+        self.assertEqual(initial.status_code, 200, initial.data)
+        self.assertEqual(len(initial.data), 1)
+        row = initial.data[0]
+        self.assertEqual(row["editorial_id"], self.provider.pk)
+        self.assertEqual(row["physical"], 12)
+        self.assertEqual(row["available"], 12)
+        self.assertEqual(row["observed"], 0)
+        self.assertEqual(row["extra_received"], 2)
+        self.assertEqual(Decimal(row["available_value_reference"]), Decimal("360.00"))
+        self.assertEqual(Decimal(row["physical_value_reference"]), Decimal("360.00"))
+        self.assertTrue(row["valuation_complete"])
+
+        registrar_cortesia(**self.data(quantity=3))
+        after = client.get(endpoint)
+        self.assertEqual(after.status_code, 200, after.data)
+        row = after.data[0]
+        self.assertEqual(row["available"], 9)
+        self.assertEqual(row["physical"], 9)
+        self.assertEqual(row["extra_received"], 2)  # Histórico, no se duplica.
+        self.assertEqual(Decimal(row["available_value_reference"]), Decimal("270.00"))
+        self.assertEqual(Decimal(row["physical_value_reference"]), Decimal("270.00"))
+        summary = client.get("/api/admin/erp/almacen/inventario/resumen/")
+        self.assertEqual(summary.status_code, 200, summary.data)
+        self.assertEqual(Decimal(summary.data["physical_value_reference"]), Decimal("270.00"))
+        self.assertEqual(Decimal(summary.data["value_reference"]), Decimal("270.00"))
+
+    def test_valor_fisico_separa_observados_del_stock_disponible(self):
+        # Simula una entrada de 12 libros, 10 conformes y 2 observados.
+        StockEntry.objects.filter(pk=self.entry.pk).update(
+            quantity_available=10, quantity_quarantined=2,
+        )
+        client = APIClient()
+        client.force_authenticate(self.actor)
+        registrar_cortesia(**self.data(quantity=2))
+        editorial = client.get("/api/admin/erp/almacen/inventario/resumen-por-editorial/")
+        self.assertEqual(editorial.status_code, 200, editorial.data)
+        row = editorial.data[0]
+        self.assertEqual(row["available"], 8)
+        self.assertEqual(row["observed"], 2)
+        self.assertEqual(row["physical"], 10)
+        self.assertEqual(Decimal(row["available_value_reference"]), Decimal("240.00"))
+        self.assertEqual(Decimal(row["observed_value_reference"]), Decimal("60.00"))
+        self.assertEqual(Decimal(row["physical_value_reference"]), Decimal("300.00"))
+        summary = client.get("/api/admin/erp/almacen/inventario/resumen/")
+        self.assertEqual(summary.status_code, 200, summary.data)
+        self.assertEqual(Decimal(summary.data["observed_value_reference"]), Decimal("60.00"))
+        self.assertEqual(Decimal(summary.data["physical_value_reference"]), Decimal("300.00"))
+        self.assertTrue(summary.data["physical_valuation_complete"])
+
+    def test_editorial_identifica_unidades_sin_costo_y_no_finge_valor_total(self):
+        StockEntry.objects.filter(pk=self.entry.pk).update(unit_cost_snapshot=None)
+        client = APIClient()
+        client.force_authenticate(self.actor)
+        editorial = client.get("/api/admin/erp/almacen/inventario/resumen-por-editorial/")
+        self.assertEqual(editorial.status_code, 200, editorial.data)
+        row = editorial.data[0]
+        self.assertEqual(row["unvalued_available_units"], 12)
+        self.assertFalse(row["valuation_complete"])
+        summary = client.get("/api/admin/erp/almacen/inventario/resumen/")
+        self.assertEqual(summary.status_code, 200, summary.data)
+        self.assertFalse(summary.data["physical_valuation_complete"])
+
     def test_usuario_sin_permiso_no_puede_registrar_cortesia(self):
         employee = get_user_model().objects.create_user(
             username="sin-permiso-cortesia", password="dummy",
