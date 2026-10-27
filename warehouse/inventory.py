@@ -25,6 +25,7 @@ def registrar_entrada_recepcion(*, actor, receipt_id):
                 "quantity_available": line.quantity_accepted + line.quantity_extra,
                 "quantity_quarantined": line.quantity_observed,
                 "quantity_extra": line.quantity_extra,
+                "unit_cost_snapshot": line.order_item.unit_supplier_cost,
                 "posted_by": actor,
             },
         )
@@ -32,6 +33,7 @@ def registrar_entrada_recepcion(*, actor, receipt_id):
             entry.quantity_available != line.quantity_accepted + line.quantity_extra
             or entry.quantity_quarantined != line.quantity_observed
             or entry.quantity_extra != line.quantity_extra
+            or entry.unit_cost_snapshot != line.order_item.unit_supplier_cost
         ):
             raise ValidationError("La entrada ya existe con otras cantidades. Requiere auditoría.")
         created += int(is_new)
