@@ -192,6 +192,47 @@ class StockCourtesyTests(TestCase):
         self.assertEqual(Decimal(summary.data["physical_value_reference"]), Decimal("270.00"))
         self.assertEqual(Decimal(summary.data["value_reference"]), Decimal("270.00"))
 
+
+    def test_valorizacion_no_mezcla_editoriales(self):
+        segunda = Provider.objects.create(name="Otra editorial para valuación")
+        libro = Product.objects.create(
+            name="Segundo libro", code="CORT-002", provider=segunda,
+        )
+        pedido = PurchaseOrder.objects.create(
+            origin=PurchaseOrder.Origin.MANUAL,
+            provider=segunda, school=self.school, campaign=self.campaign,
+            provider_name_snapshot=segunda.name,
+            school_name_snapshot=self.school.name,
+            campaign_name_snapshot=self.campaign.name,
+            created_by=self.actor, status=PurchaseOrder.Status.SENT,
+            sent_at=timezone.now(),
+        )
+        item = PurchaseOrderItem.objects.create(
+            order=pedido, product=libro, product_name_snapshot=libro.name,
+            quantity_ordered=5, unit_supplier_cost=Decimal("15.00"),
+        )
+        recepcion = crear_borrador_recepcion(
+            actor=self.actor, provider_id=segunda.pk,
+            document_type=GoodsReceipt.DocumentType.GUIDE,
+            document_number="COR-002", received_on=timezone.localdate(),
+            lines=[{
+                "order_item_id": item.pk, "quantity_documented": 5,
+                "quantity_arrived": 5, "quantity_accepted": 5,
+                "quantity_observed": 0, "quantity_extra": 0,
+            }],
+        )
+        validar_recepcion(actor=self.actor, receipt_id=recepcion.pk)
+        client = APIClient()
+        client.force_authenticate(self.actor)
+        editorial = client.get("/api/admin/erp/almacen/inventario/resumen-por-editorial/")
+        self.assertEqual(editorial.status_code, 200, editorial.data)
+        self.assertEqual(len(editorial.data), 2)
+        por_id = {row["editorial_id"]: row for row in editorial.data}
+        self.assertEqual(Decimal(por_id[self.provider.pk]["physical_value_reference"]), Decimal("360.00"))
+        self.assertEqual(Decimal(por_id[segunda.pk]["physical_value_reference"]), Decimal("75.00"))
+        summary = client.get("/api/admin/erp/almacen/inventario/resumen/")
+        self.assertEqual(Decimal(summary.data["physical_value_reference"]), Decimal("435.00"))
+
     def test_valor_fisico_separa_observados_del_stock_disponible(self):
         # Simula una entrada de 12 libros, 10 conformes y 2 observados.
         StockEntry.objects.filter(pk=self.entry.pk).update(
