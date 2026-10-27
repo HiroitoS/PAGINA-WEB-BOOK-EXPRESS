@@ -185,6 +185,67 @@ class RecepcionMercaderiaTests(TestCase):
         self.assertEqual(totals.data[0]["physical"], 102)
 
 
+    def test_flujo_dos_guias_observados_adicionales_y_stock_idempotente(self):
+        primera = crear_borrador_recepcion(
+            actor=self.actor, provider_id=self.editorial.pk,
+            document_type="guide", document_number="TEST-ALM-P07-01",
+            received_on=timezone.localdate(),
+            lines=[{
+                "order_item_id": self.item.pk,
+                "quantity_documented": 60,
+                "quantity_arrived": 63,
+                "quantity_accepted": 60,
+                "quantity_observed": 1,
+                "quantity_extra": 2,
+            }],
+        )
+        validar_recepcion(actor=self.actor, receipt_id=primera.pk)
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.status, PurchaseOrder.Status.PARTIALLY_RECEIVED)
+        self.assertEqual(
+            StockEntry.objects.filter(receipt_line__receipt=primera).count(), 1,
+        )
+
+        segunda = crear_borrador_recepcion(
+            actor=self.actor, provider_id=self.editorial.pk,
+            document_type="guide", document_number="TEST-ALM-P07-02",
+            received_on=timezone.localdate(),
+            lines=[{
+                "order_item_id": self.item.pk,
+                "quantity_documented": 40,
+                "quantity_arrived": 40,
+                "quantity_accepted": 40,
+                "quantity_observed": 0,
+                "quantity_extra": 0,
+            }],
+        )
+        validar_recepcion(actor=self.actor, receipt_id=segunda.pk)
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.status, PurchaseOrder.Status.RECEIVED)
+
+        self.assertEqual(
+            registrar_entrada_recepcion(actor=self.actor, receipt_id=primera.pk)["new_entries"],
+            0,
+        )
+        self.assertEqual(StockEntry.objects.count(), 2)
+        self.assertEqual(
+            ReceivingIncident.objects.filter(
+                receipt_line__receipt=primera,
+                kind=ReceivingIncident.Kind.NONCONFORMING,
+            ).count(), 1,
+        )
+        client = APIClient()
+        client.force_authenticate(self.actor)
+        response = client.get("/api/admin/erp/almacen/inventario/existencias/")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["available"], 102)
+        self.assertEqual(response.data[0]["nonconforming"], 1)
+        self.assertEqual(response.data[0]["extra_included"], 2)
+        self.assertEqual(response.data[0]["physical"], 103)
+        saldo = saldos_pedido(actor=self.actor, order_id=self.pedido.pk)
+        self.assertEqual(saldo["productos"][0]["cantidad_pendiente"], 0)
+
     def test_80_recibidas_20_pendientes_y_segunda_entrega(self):
         primera = self.borrador(80)
         self.assertEqual(self.pedido.status, PurchaseOrder.Status.SENT)
