@@ -197,6 +197,8 @@ class RecepcionMercaderiaTests(TestCase):
 
 
     def test_flujo_dos_guias_observados_adicionales_y_stock_idempotente(self):
+        # Primera guía: 60 documentadas, 59 físicas (1 observada).
+        # No hay adicionales mientras sigue pendiente parte del pedido.
         primera = crear_borrador_recepcion(
             actor=self.actor, provider_id=self.editorial.pk,
             document_type="guide", document_number="TEST-ALM-P07-01",
@@ -204,10 +206,10 @@ class RecepcionMercaderiaTests(TestCase):
             lines=[{
                 "order_item_id": self.item.pk,
                 "quantity_documented": 60,
-                "quantity_arrived": 63,
-                "quantity_accepted": 60,
+                "quantity_arrived": 59,
+                "quantity_accepted": 58,
                 "quantity_observed": 1,
-                "quantity_extra": 2,
+                "quantity_extra": 0,
             }],
         )
         validar_recepcion(actor=self.actor, receipt_id=primera.pk)
@@ -217,17 +219,19 @@ class RecepcionMercaderiaTests(TestCase):
             StockEntry.objects.filter(receipt_line__receipt=primera).count(), 1,
         )
 
+        # Segunda guía: quedan 42 unidades del pedido; llegan 44 conformes.
+        # Las 2 unidades sobre el saldo sí son adicionales para Book Express.
         segunda = crear_borrador_recepcion(
             actor=self.actor, provider_id=self.editorial.pk,
             document_type="guide", document_number="TEST-ALM-P07-02",
             received_on=timezone.localdate(),
             lines=[{
                 "order_item_id": self.item.pk,
-                "quantity_documented": 40,
-                "quantity_arrived": 40,
-                "quantity_accepted": 40,
+                "quantity_documented": 42,
+                "quantity_arrived": 44,
+                "quantity_accepted": 42,
                 "quantity_observed": 0,
-                "quantity_extra": 0,
+                "quantity_extra": 2,
             }],
         )
         validar_recepcion(actor=self.actor, receipt_id=segunda.pk)
@@ -238,13 +242,19 @@ class RecepcionMercaderiaTests(TestCase):
             registrar_entrada_recepcion(actor=self.actor, receipt_id=primera.pk)["new_entries"],
             0,
         )
-        self.assertEqual(StockEntry.objects.count(), 2)
         self.assertEqual(
-            ReceivingIncident.objects.filter(
-                receipt_line__receipt=primera,
-                kind=ReceivingIncident.Kind.NONCONFORMING,
-            ).count(), 1,
+            registrar_entrada_recepcion(actor=self.actor, receipt_id=segunda.pk)["new_entries"],
+            0,
         )
+        self.assertEqual(StockEntry.objects.count(), 2)
+        incidencias = {
+            item.kind: item.quantity
+            for item in ReceivingIncident.objects.filter(receipt_line__receipt=primera)
+        }
+        self.assertEqual(incidencias, {
+            ReceivingIncident.Kind.SHORTAGE: 1,
+            ReceivingIncident.Kind.NONCONFORMING: 1,
+        })
         client = APIClient()
         client.force_authenticate(self.actor)
         response = client.get("/api/admin/erp/almacen/inventario/existencias/")
