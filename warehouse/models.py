@@ -194,6 +194,7 @@ class StockEntry(TimeStampedModel):
     quantity_available = models.PositiveIntegerField()
     quantity_quarantined = models.PositiveIntegerField(default=0)
     quantity_extra = models.PositiveIntegerField(default=0)
+    unit_cost_snapshot = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     posted_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
         related_name="warehouse_entries_posted",
