@@ -178,11 +178,16 @@ class RecepcionMercaderiaTests(TestCase):
         self.assertEqual(detail.status_code, 200)
         self.assertEqual(detail.data["results"][0]["unit_cost"], "25.80")
         self.assertEqual(detail.data["results"][0]["entry_value"], "2631.60")
+        self.assertEqual(detail.data["results"][0]["on_order"], 100)
+        self.assertEqual(detail.data["results"][0]["order_value_reference"], "2580.00")
+        self.assertEqual(detail.data["results"][0]["extra_value_reference"], "51.60")
         totals = client.get("/api/admin/erp/almacen/inventario/existencias/")
         self.assertEqual(totals.status_code, 200)
         self.assertEqual(totals.data[0]["available"], 102)
         self.assertEqual(totals.data[0]["extra_included"], 2)
         self.assertEqual(totals.data[0]["physical"], 102)
+        self.assertEqual(totals.data[0]["unvalued_units"], 0)
+        self.assertEqual(round(float(totals.data[0]["value_reference"]), 2), 2631.60)
 
 
     def test_flujo_dos_guias_observados_adicionales_y_stock_idempotente(self):
