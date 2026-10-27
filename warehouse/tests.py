@@ -157,7 +157,7 @@ class RecepcionMercaderiaTests(TestCase):
         with self.assertRaises(ValidationError):
             registrar_entrada_recepcion(actor=self.actor, receipt_id=recepcion.pk)
         validar_recepcion(actor=self.actor, receipt_id=recepcion.pk)
-        self.assertEqual(registrar_entrada_recepcion(actor=self.actor, receipt_id=recepcion.pk)["new_entries"], 1)
+        self.assertEqual(StockEntry.objects.filter(receipt_line__receipt=recepcion).count(), 1)
         self.assertEqual(registrar_entrada_recepcion(actor=self.actor, receipt_id=recepcion.pk)["new_entries"], 0)
         entrada = StockEntry.objects.get(receipt_line__receipt=recepcion)
         self.assertEqual((entrada.quantity_available, entrada.quantity_extra, entrada.quantity_quarantined), (102, 2, 0))
