@@ -329,6 +329,9 @@ def validar_recepcion(*, actor, receipt_id):
                 from_status=anterior, to_status=estado_nuevo,
                 details={"receipt_id": receipt.pk},
             )
+    # Misma transacción de validación: ninguna guía validada queda sin stock.
+    from warehouse.inventory import registrar_entrada_recepcion
+    registrar_entrada_recepcion(actor=actor, receipt_id=receipt.pk)
     return receipt
 
 
