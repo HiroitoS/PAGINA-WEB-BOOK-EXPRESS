@@ -162,6 +162,18 @@ class RecepcionMercaderiaTests(TestCase):
         entrada = StockEntry.objects.get(receipt_line__receipt=recepcion)
         self.assertEqual((entrada.quantity_available, entrada.quantity_extra, entrada.quantity_quarantined), (102, 2, 0))
         self.assertEqual(StockEntry.objects.count(), 1)
+        client = APIClient()
+        client.force_authenticate(self.actor)
+        detail = client.get("/api/admin/erp/almacen/inventario/")
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.data["results"][0]["unit_cost"], "25.80")
+        self.assertEqual(detail.data["results"][0]["entry_value"], "2631.60")
+        totals = client.get("/api/admin/erp/almacen/inventario/existencias/")
+        self.assertEqual(totals.status_code, 200)
+        self.assertEqual(totals.data[0]["available"], 102)
+        self.assertEqual(totals.data[0]["extra_included"], 2)
+        self.assertEqual(totals.data[0]["physical"], 102)
+
 
     def test_80_recibidas_20_pendientes_y_segunda_entrega(self):
         primera = self.borrador(80)
