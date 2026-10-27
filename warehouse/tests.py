@@ -104,6 +104,11 @@ class RecepcionMercaderiaTests(TestCase):
             for x in ReceivingIncident.objects.filter(receipt_line__receipt=recepcion)
         }
         self.assertEqual(incidencias, {"shortage": 2, "nonconforming": 3})
+        entrada = StockEntry.objects.get(receipt_line__receipt=recepcion)
+        self.assertEqual(entrada.quantity_available, 95)
+        self.assertEqual(entrada.quantity_quarantined, 3)
+        self.assertEqual(entrada.quantity_extra, 0)
+
         with self.assertRaises(ValidationError):
             validar_recepcion(actor=self.actor, receipt_id=recepcion.pk)
         self.assertEqual(ReceivingIncident.objects.filter(receipt_line__receipt=recepcion).count(), 2)
@@ -163,6 +168,11 @@ class RecepcionMercaderiaTests(TestCase):
         self.assertEqual((entrada.quantity_available, entrada.quantity_extra, entrada.quantity_quarantined), (102, 2, 0))
         self.assertEqual(StockEntry.objects.count(), 1)
         client = APIClient()
+        client.force_authenticate(self.actor)
+        response = client.get(f"/api/admin/erp/almacen/recepciones/{recepcion.pk}/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["lines"][0]["pending_before"], 100)
+
         client.force_authenticate(self.actor)
         detail = client.get("/api/admin/erp/almacen/inventario/")
         self.assertEqual(detail.status_code, 200)
