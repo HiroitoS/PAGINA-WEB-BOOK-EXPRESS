@@ -13,6 +13,7 @@ from accounts.permissions import usuario_tiene_permiso
 from warehouse.models import GoodsReceipt, StockEntry, StockMovement
 from warehouse.inventory import registrar_entrada_recepcion
 from warehouse.stock_movements import registrar_cortesia, saldo_entrada
+from warehouse.valuation import valorizar_por_editorial
 
 
 class CourtesyInputSerializer(serializers.Serializer):
@@ -193,6 +194,14 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
                 F("quantity_available") * F("unit_cost_snapshot"),
                 output_field=DecimalField(max_digits=20, decimal_places=2),
             )),
+            observed_value_reference=Sum(ExpressionWrapper(
+                F("quantity_quarantined") * F("unit_cost_snapshot"),
+                output_field=DecimalField(max_digits=20, decimal_places=2),
+            )),
+            unvalued_observed_units=Sum(Case(
+                When(unit_cost_snapshot__isnull=True, then=F("quantity_quarantined")),
+                default=Value(0), output_field=IntegerField(),
+            )),
             unvalued_units=Sum(Case(
                 When(unit_cost_snapshot__isnull=True, then=F("quantity_available")),
                 default=Value(0), output_field=IntegerField(),
@@ -217,6 +226,8 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
             (totals["value_reference"] or Decimal("0")) +
             (movements["value_delta"] or Decimal("0"))
         )
+        observed_value = totals["observed_value_reference"] or Decimal("0")
+        unvalued_observed_units = totals["unvalued_observed_units"] or 0
         return Response({
             "physical": conforming + nonconforming,
             "conforming": conforming,
@@ -225,10 +236,21 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
             "gross_conforming_received": totals["conforming"] or 0,
             "outflows": -(movements["delta"] or 0),
             "value_reference": str(value) if totals["value_reference"] is not None else None,
+            "observed_value_reference": str(observed_value),
+            "physical_value_reference": str(value + observed_value),
+            "unvalued_observed_units": unvalued_observed_units,
+            "physical_valuation_complete": (
+                unvalued_units + unvalued_observed_units == 0
+            ),
             "unvalued_units": unvalued_units,
             "valuation_complete": unvalued_units == 0,
             "note": "Saldo neto actual tras cortesías. Adicionales históricos incluidos; no representa deuda a editorial.",
         })
+
+    @action(detail=False, methods=["get"], url_path="resumen-por-editorial")
+    def summary_by_editorial(self, request):
+        """Valorización por editorial, basada en costos históricos y movimientos."""
+        return Response(valorizar_por_editorial(self.get_queryset()))
 
     @action(detail=False, methods=["get"], url_path="existencias")
     def totals(self, request):
