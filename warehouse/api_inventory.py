@@ -33,7 +33,7 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
             raise PermissionDenied("No tienes permiso para consultar inventario.")
         qs = StockEntry.objects.select_related(
             "product__provider", "receipt_line__receipt",
-            "receipt_line__order_item__order", "posted_by",
+            "receipt_line__order_item__order__school", "posted_by",
         ).order_by("-created_at", "-pk")
         provider = self.request.query_params.get("provider")
         if provider:
@@ -73,7 +73,9 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
             "receipt_id": receipt_line.receipt_id,
             "guide": receipt_line.receipt.document_number,
             "order_id": order_item.order_id,
-            "school": order_item.order.school_name_snapshot or "Pedido independiente",
+            "school": order_item.order.school_name_snapshot or (
+                order_item.order.school.name if order_item.order.school_id else "Pedido independiente"
+            ),
             "available": entry.quantity_available,
             "net_available": net_available if net_available is not None else entry.quantity_available,
             "nonconforming": entry.quantity_quarantined,
