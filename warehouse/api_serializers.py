@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.db.models import Sum
 
 from warehouse.models import GoodsReceipt, GoodsReceiptEvent, GoodsReceiptLine
 
@@ -42,6 +43,17 @@ class GoodsReceiptLineSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(
         source="order_item.product_name_snapshot", read_only=True,
     )
+    pending_before = serializers.SerializerMethodField()
+
+    def get_pending_before(self, obj):
+        accepted = (
+            GoodsReceiptLine.objects.filter(
+                order_item_id=obj.order_item_id,
+                receipt__status=GoodsReceipt.Status.VALIDATED,
+            ).exclude(receipt_id=obj.receipt_id)
+            .aggregate(total=Sum("quantity_accepted"))["total"] or 0
+        )
+        return max(0, obj.order_item.quantity_ordered - accepted)
     order_id = serializers.IntegerField(
         source="order_item.order_id", read_only=True,
     )
@@ -50,7 +62,7 @@ class GoodsReceiptLineSerializer(serializers.ModelSerializer):
         model = GoodsReceiptLine
         fields = (
             "id", "order_item", "order_id", "product_name",
-            "quantity_arrived", "quantity_documented", "quantity_accepted", "quantity_extra", "quantity_observed", "notes",
+            "quantity_arrived", "quantity_documented", "quantity_accepted", "quantity_extra", "quantity_observed", "pending_before", "notes",
         )
 
 
