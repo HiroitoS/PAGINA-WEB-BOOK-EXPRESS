@@ -307,6 +307,39 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
     def retrieve(self, request, *args, **kwargs):
         return Response(self._item(self.get_object()))
 
+    @action(detail=False, methods=["get"], url_path="resumen")
+    def inventory_summary(self, request):
+        """Indicadores consolidados en backend; las cifras no son cuentas por pagar."""
+        totals = self.get_queryset().aggregate(
+            conforming=Sum("quantity_available"),
+            nonconforming=Sum("quantity_quarantined"),
+            extra=Sum("quantity_extra"),
+            value_reference=Sum(ExpressionWrapper(
+                F("quantity_available") * F("unit_cost_snapshot"),
+                output_field=DecimalField(max_digits=20, decimal_places=2),
+            )),
+            unvalued_units=Sum(Case(
+                When(unit_cost_snapshot__isnull=True, then=F("quantity_available")),
+                default=Value(0), output_field=IntegerField(),
+            )),
+        )
+        conforming = totals["conforming"] or 0
+        nonconforming = totals["nonconforming"] or 0
+        unvalued_units = totals["unvalued_units"] or 0
+        return Response({
+            "physical": conforming + nonconforming,
+            "conforming": conforming,
+            "nonconforming": nonconforming,
+            "extra_included": totals["extra"] or 0,
+            "value_reference": (
+                str(totals["value_reference"])
+                if totals["value_reference"] is not None else None
+            ),
+            "unvalued_units": unvalued_units,
+            "valuation_complete": unvalued_units == 0,
+            "note": "Valor referencial de ingresos conformes, no deuda con la editorial ni saldo contable después de salidas.",
+        })
+
     @action(detail=False, methods=["get"], url_path="existencias")
     def totals(self, request):
         qs = self.get_queryset()
