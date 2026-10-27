@@ -3,7 +3,7 @@ from django.http import Http404
 from django.db import IntegrityError
 from django.db.models import Q, Sum, F, DecimalField, ExpressionWrapper, Case, When, Value, IntegerField
 from django.db.models.functions import Coalesce
-from rest_framework import status, viewsets
+from rest_framework import status, viewsets, serializers
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
@@ -12,8 +12,9 @@ from accounts.permissions import usuario_tiene_permiso
 from catalog.models import Provider
 from purchasing.models import PurchaseOrder, PurchaseOrderItem
 from warehouse.api_serializers import CreateReceiptSerializer, GoodsReceiptSerializer
-from warehouse.models import GoodsReceipt, ReceivingIncident, StockEntry
+from warehouse.models import GoodsReceipt, ReceivingIncident, StockEntry, StockMovement
 from warehouse.inventory import registrar_entrada_recepcion
+from warehouse.stock_movements import registrar_cortesia, saldo_entrada
 from warehouse.receiving import (
     actualizar_borrador_recepcion, crear_borrador_recepcion,
     saldos_pedido, seguimiento_recepcion, validar_recepcion,
@@ -230,11 +231,22 @@ class ReceivingIncidentViewSet(viewsets.ReadOnlyModelViewSet):
             "document_number": receipt.document_number,
             "editorial": receipt.provider.name,
             "order_id": order_item.order_id,
+            "school_id": order_item.order.school_id,
             "school": order_item.order.school_name_snapshot or "Pedido independiente",
             "product": order_item.product_name_snapshot,
             "detected_by": item.detected_by.get_username(),
             "created_at": item.created_at,
         }
+
+
+class CourtesyInputSerializer(serializers.Serializer):
+    stock_entry_id = serializers.IntegerField(min_value=1)
+    school_id = serializers.IntegerField(min_value=1)
+    quantity = serializers.IntegerField(min_value=1)
+    recipient_name = serializers.CharField(max_length=200)
+    recipient_role = serializers.CharField(max_length=80)
+    notes = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    idempotency_key = serializers.UUIDField()
 
 
 class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
@@ -274,7 +286,7 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
         })
 
     @staticmethod
-    def _item(entry):
+    def _item(entry, net_available=None):
         receipt_line = entry.receipt_line
         order_item = receipt_line.order_item
         return {
@@ -287,6 +299,7 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
             "order_id": order_item.order_id,
             "school": order_item.order.school_name_snapshot or "Pedido independiente",
             "available": entry.quantity_available,
+            "net_available": net_available if net_available is not None else entry.quantity_available,
             "nonconforming": entry.quantity_quarantined,
             "extra_included": entry.quantity_extra,
             "on_order": entry.quantity_available - entry.quantity_extra,
@@ -301,11 +314,63 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
     def list(self, request, *args, **kwargs):
         qs = self.filter_queryset(self.get_queryset())
         page = self.paginate_queryset(qs)
-        data = [self._item(item) for item in (page if page is not None else qs)]
+        entries = list(page if page is not None else qs)
+        movement_totals = {
+            row["source_entry_id"]: row["total"]
+            for row in StockMovement.objects.filter(
+                source_entry_id__in=[entry.pk for entry in entries],
+            ).values("source_entry_id").annotate(total=Sum("quantity_delta"))
+        }
+        data = [
+            self._item(entry, entry.quantity_available + movement_totals.get(entry.pk, 0))
+            for entry in entries
+        ]
         return self.get_paginated_response(data) if page is not None else Response(data)
 
     def retrieve(self, request, *args, **kwargs):
-        return Response(self._item(self.get_object()))
+        entry = self.get_object()
+        return Response(self._item(entry, saldo_entrada(entry)))
+
+    @action(detail=False, methods=["post"], url_path="cortesias")
+    def create_courtesy(self, request):
+        serializer = CourtesyInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            item, created = registrar_cortesia(actor=request.user, **serializer.validated_data)
+        except DjangoValidationError as exc:
+            raise ValidationError(exc.messages)
+        return Response({
+            "id": item.pk,
+            "stock_entry_id": item.source_entry_id,
+            "school_id": item.school_id,
+            "quantity": -item.quantity_delta,
+            "recipient_name": item.recipient_name,
+            "recipient_role": item.recipient_role,
+            "entry_balance": saldo_entrada(item.source_entry),
+            "message": "Cortesía registrada y stock actualizado." if created else "Esta cortesía ya estaba registrada.",
+        }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+    @action(detail=False, methods=["get"], url_path="salidas")
+    def outflows(self, request):
+        qs = StockMovement.objects.filter(source_entry__in=self.get_queryset()).select_related(
+            "source_entry__product", "school", "created_by", "source_entry__receipt_line__receipt",
+        ).order_by("-created_at", "-pk")[:100]
+        return Response([{
+            "id": move.pk,
+            "type": move.kind,
+            "stock_entry_id": move.source_entry_id,
+            "product": move.source_entry.product.name,
+            "school": move.school.name,
+            "guide": move.source_entry.receipt_line.receipt.document_number,
+            "quantity": -move.quantity_delta,
+            "recipient_name": move.recipient_name,
+            "recipient_role": move.recipient_role,
+            "notes": move.notes,
+            "cost_unit": str(move.unit_cost_snapshot) if move.unit_cost_snapshot is not None else None,
+            "cost_reference": str(-move.quantity_delta * move.unit_cost_snapshot) if move.unit_cost_snapshot is not None else None,
+            "created_by": move.created_by_id,
+            "created_at": move.created_at,
+        } for move in qs])
 
     @action(detail=False, methods=["get"], url_path="resumen")
     def inventory_summary(self, request):
