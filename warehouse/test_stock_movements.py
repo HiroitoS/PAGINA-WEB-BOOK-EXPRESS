@@ -143,3 +143,36 @@ class StockCourtesyTests(TestCase):
         self.assertEqual(history.status_code, 200)
         self.assertEqual(history.data[0]["quantity"], 2)
         self.assertEqual(history.data[0]["cost_reference"], "60.00")
+
+    def test_solo_entradas_del_colegio_con_saldo_y_busqueda_paginada(self):
+        client = APIClient()
+        client.force_authenticate(self.actor)
+        url = "/api/admin/erp/almacen/inventario/entradas-disponibles/"
+        response = client.get(url, {"q": self.school.name})
+        self.assertEqual(response.status_code, 200, response.data)
+        rows = response.data["results"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["net_available"], 12)
+        self.assertEqual(rows[0]["school_id"], self.school.pk)
+
+        registrar_cortesia(**self.data(quantity=12))
+        empty = client.get(url, {"q": self.school.name})
+        self.assertEqual(empty.status_code, 200)
+        self.assertEqual(empty.data["count"], 0)
+
+    def test_usuario_sin_permiso_no_puede_registrar_cortesia(self):
+        employee = get_user_model().objects.create_user(
+            username="sin-permiso-cortesia", password="dummy",
+        )
+        client = APIClient()
+        client.force_authenticate(employee)
+        response = client.post("/api/admin/erp/almacen/inventario/cortesias/", {
+            "stock_entry_id": self.entry.pk,
+            "school_id": self.school.pk,
+            "quantity": 1,
+            "recipient_name": "Directora",
+            "recipient_role": "Dirección",
+            "idempotency_key": str(uuid4()),
+        }, format="json")
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(StockMovement.objects.count(), 0)
