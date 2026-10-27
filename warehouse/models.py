@@ -208,3 +208,48 @@ class StockEntry(TimeStampedModel):
                 name="wh_stock_extra_within_available",
             ),
         ]
+
+
+class StockMovement(TimeStampedModel):
+    """Salida inmutable desde una entrada documental de stock.
+
+    quantity_delta es negativo para cortesías. El saldo no modifica la entrada
+    histórica: ingreso conforme más movimientos de la misma entrada.
+    """
+    class Kind(models.TextChoices):
+        COURTESY = "courtesy", "Cortesía a colegio"
+
+    source_entry = models.ForeignKey(
+        StockEntry, on_delete=models.PROTECT, related_name="movements",
+    )
+    kind = models.CharField(max_length=24, choices=Kind.choices)
+    quantity_delta = models.IntegerField()
+    school = models.ForeignKey(
+        "crm.School", on_delete=models.PROTECT, related_name="stock_movements",
+    )
+    recipient_name = models.CharField(max_length=200)
+    recipient_role = models.CharField(max_length=80)
+    notes = models.CharField(max_length=500, blank=True)
+    unit_cost_snapshot = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True,
+    )
+    idempotency_key = models.UUIDField(unique=True, editable=False)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="stock_movements_created",
+    )
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+        permissions = [
+            ("view_stock_movements", "Puede consultar movimientos de stock"),
+            ("manage_stock_courtesies", "Puede registrar cortesías desde almacén"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(quantity_delta__lt=0), name="wh_stock_movement_negative",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["source_entry", "created_at"], name="wh_move_entry_date_idx"),
+        ]
