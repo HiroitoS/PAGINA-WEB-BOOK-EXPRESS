@@ -181,40 +181,46 @@ class WarehouseLocationViewSet(
     def location_summary(self, request):
         if not usuario_tiene_permiso(request.user, "warehouse.view_receiving"):
             raise PermissionDenied("No tienes permiso para consultar las existencias.")
-        entries = list(
-            StockEntry.objects.select_related(
-                "initial_location__location", "product"
-            ).all()
-        )
+        from warehouse.transfers import posiciones_lotes
+
+        entries = list(StockEntry.objects.select_related(
+            "initial_location", "product",
+        ).all())
         balances = _saldos_entradas(entries)
+        positions = posiciones_lotes(entries)
         totals = {}
-        sin_asignar = {"available": 0, "observed": 0, "lots": 0}
+        unassigned = {"available": 0, "observed": 0, "lots": 0}
         for entry in entries:
             assignment = getattr(entry, "initial_location", None)
             if assignment is None:
-                total = sin_asignar
-            else:
-                total = totals.setdefault(assignment.location_id, {
-                    "available": 0, "observed": 0, "lots": 0,
-                })
-            total["available"] += balances[entry.pk]
-            total["observed"] += entry.quantity_quarantined
-            total["lots"] += 1
+                unassigned["available"] += balances[entry.pk]
+                unassigned["observed"] += entry.quantity_quarantined
+                unassigned["lots"] += 1
+                continue
+            item = totals.setdefault(assignment.location_id, {
+                "available": 0, "observed": 0, "lots": 0,
+            })
+            item["observed"] += entry.quantity_quarantined
+        for (entry_id, loc_id), quantity in positions.items():
+            item = totals.setdefault(loc_id, {
+                "available": 0, "observed": 0, "lots": 0,
+            })
+            item["available"] += quantity
+            if quantity > 0:
+                item["lots"] += 1
         locations = list(WarehouseLocation.objects.order_by("name", "pk"))
         return Response({
             "locations": [{
-                "id": loc.pk,
-                "name": loc.name,
-                "kind": loc.kind,
+                "id": loc.pk, "name": loc.name, "kind": loc.kind,
                 **totals.get(loc.pk, {"available": 0, "observed": 0, "lots": 0}),
             } for loc in locations],
-            "unassigned": sin_asignar,
+            "unassigned": unassigned,
             "global": {
                 "available": sum(balances.values()),
                 "observed": sum(e.quantity_quarantined for e in entries),
                 "lots": len(entries),
             },
-            "note": "Ubicación inicial por lote completo. No representa traslados, reservas ni deudas a editoriales.",
+            "note": "Los traslados redistribuyen saldos por ubicación sin alterar el total global.",
         })
 
     @action(detail=True, methods=["post"], url_path="conciliar")

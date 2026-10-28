@@ -63,6 +63,14 @@ def registrar_cortesia(
             raise ValidationError("La clave de operación ya corresponde a otra salida.")
         return anterior, False
 
+    # La cortesía sale solo del lugar inicial del lote; nunca de stock ya trasladado.
+    # Los movimientos históricos anteriores a la conciliación están en la foto inicial.
+    from warehouse.models import StockEntryLocation
+    from warehouse.transfers import saldo_en_ubicacion
+    assignment = StockEntryLocation.objects.filter(stock_entry=entry).first()
+    if assignment and saldo_en_ubicacion(entry, assignment.location_id) < quantity:
+        raise ValidationError("No hay unidades suficientes en la ubicación original de este colegio.")
+
     if saldo_entrada(entry) < quantity:
         raise ValidationError("No existe stock conforme suficiente para esta cortesía.")
 

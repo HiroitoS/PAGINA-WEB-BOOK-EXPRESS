@@ -318,3 +318,45 @@ class StockMovement(TimeStampedModel):
         indexes = [
             models.Index(fields=["source_entry", "created_at"], name="wh_move_entry_date_idx"),
         ]
+
+
+class StockTransfer(TimeStampedModel):
+    """Movimiento confirmado de un lote entre ubicaciones. No altera el stock global."""
+
+    stock_entry = models.ForeignKey(
+        StockEntry, on_delete=models.PROTECT, related_name="transfers",
+    )
+    source = models.ForeignKey(
+        WarehouseLocation, on_delete=models.PROTECT,
+        related_name="transfers_dispatched",
+    )
+    destination = models.ForeignKey(
+        WarehouseLocation, on_delete=models.PROTECT,
+        related_name="transfers_received",
+    )
+    quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    idempotency_key = models.UUIDField(unique=True)
+    notes = models.CharField(max_length=500, blank=True)
+    unit_cost_snapshot = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True,
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="warehouse_transfers_created",
+    )
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+        permissions = [
+            ("view_stock_transfers", "Puede consultar traslados de mercadería"),
+            ("manage_stock_transfers", "Puede registrar traslados de mercadería"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(quantity__gte=1), name="wh_transfer_quantity_positive",
+            ),
+            models.CheckConstraint(
+                condition=~Q(source=F("destination")), name="wh_transfer_distinct_locations",
+            ),
+        ]
+
