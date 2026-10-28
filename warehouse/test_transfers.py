@@ -75,6 +75,7 @@ class StockTransferTests(TestCase):
             "stock_entry_id": self.entry.pk,
             "source_id": self.main.pk, "destination_id": self.store.pk,
             "quantity": 5, "idempotency_key": str(uuid4()), "notes": "Feria escolar",
+            "entrega_confirmada": True,
         }
         client = self.client_as(self.actor)
         response = client.post(url, payload, format="json")
@@ -94,13 +95,13 @@ class StockTransferTests(TestCase):
         key = uuid4()
         registrar_traslado(
             actor=self.actor, stock_entry_id=self.entry.pk, source_id=self.main.pk,
-            destination_id=self.store.pk, quantity=10, idempotency_key=key,
+            destination_id=self.store.pk, quantity=10, idempotency_key=key, entrega_confirmada=True,
         )
         response = self.client_as(self.actor).post(
             "/api/admin/erp/almacen/traslados/", {
                 "stock_entry_id": self.entry.pk, "source_id": self.main.pk,
                 "destination_id": self.store.pk, "quantity": 3,
-                "idempotency_key": str(uuid4()),
+                "idempotency_key": str(uuid4()), "entrega_confirmada": True,
             }, format="json",
         )
         self.assertEqual(response.status_code, 400, response.data)
@@ -109,7 +110,7 @@ class StockTransferTests(TestCase):
     def test_cortesia_no_puede_consumir_stock_trasladado(self):
         registrar_traslado(
             actor=self.actor, stock_entry_id=self.entry.pk, source_id=self.main.pk,
-            destination_id=self.store.pk, quantity=11, idempotency_key=uuid4(),
+            destination_id=self.store.pk, quantity=11, idempotency_key=uuid4(), entrega_confirmada=True,
         )
         result = self.client_as(self.actor).post(
             "/api/admin/erp/almacen/inventario/cortesias/", {
@@ -125,7 +126,7 @@ class StockTransferTests(TestCase):
             "/api/admin/erp/almacen/traslados/", {
                 "stock_entry_id": self.entry.pk, "source_id": self.main.pk,
                 "destination_id": self.store.pk, "quantity": 1,
-                "idempotency_key": str(uuid4()),
+                "idempotency_key": str(uuid4()), "entrega_confirmada": True,
             }, format="json",
         )
         self.assertEqual(result.status_code, 403)
