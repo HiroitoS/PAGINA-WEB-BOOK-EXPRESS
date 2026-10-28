@@ -1,8 +1,12 @@
-"""Administración controlada de ubicaciones físicas (P-08.1a).
+"""Administración de ubicaciones físicas (P-08).
 
-No asigna stock, no crea movimientos ni acepta eliminaciones. Los saldos
-por ubicación llegarán tras conciliar físicamente cada lote preexistente.
+Crear una ubicación NO registra entradas ni asigna saldos históricos.
+El código interno es estable, único y generado por el servidor; nunca se
+solicita al responsable de almacén.
 """
+import uuid
+
+from django.db import IntegrityError, transaction
 from rest_framework import mixins, serializers, viewsets
 from rest_framework.permissions import BasePermission
 
@@ -10,8 +14,13 @@ from accounts.permissions import usuario_tiene_permiso
 from warehouse.models import WarehouseLocation
 
 
+def generar_codigo_ubicacion():
+    """Identificador interno opaco, independiente del nombre y del tipo."""
+    return f"UBI-{uuid.uuid4().hex[:24].upper()}"
+
+
 class WarehouseLocationAccess(BasePermission):
-    """Consulta y modificación son permisos funcionales distintos."""
+    """Consulta y modificación están protegidas por permisos distintos."""
 
     def has_permission(self, request, view):
         permiso = (
@@ -26,32 +35,33 @@ class WarehouseLocationSerializer(serializers.ModelSerializer):
     class Meta:
         model = WarehouseLocation
         fields = ("id", "code", "name", "kind", "address", "is_active", "notes")
-        read_only_fields = ("id",)
-
-    def validate_code(self, value):
-        code = value.strip().upper()
-        if not code:
-            raise serializers.ValidationError("Ingresa un código de ubicación.")
-        if not all(ch.isalnum() or ch in "-_" for ch in code):
-            raise serializers.ValidationError(
-                "El código solo permite letras, números, guiones y guiones bajos."
-            )
-        qs = WarehouseLocation.objects.filter(code__iexact=code)
-        if self.instance is not None:
-            qs = qs.exclude(pk=self.instance.pk)
-        if qs.exists():
-            raise serializers.ValidationError("Este código ya está registrado.")
-        return code
+        read_only_fields = ("id", "code")
 
     def validate(self, attrs):
-        if self.instance is not None:
-            # No alterar identificadores usados por futuras integraciones.
-            new_code = attrs.get("code")
-            if new_code is not None and new_code != self.instance.code:
-                raise serializers.ValidationError({
-                    "code": "No se puede cambiar el código de una ubicación existente."
-                })
+        if self.instance is not None and "code" in self.initial_data:
+            # El código de un lugar registrado no cambia, aunque cambie el
+            # nombre, el tipo de custodia o la dirección.
+            raise serializers.ValidationError({
+                "code": "El identificador interno no puede modificarse."
+            })
         return attrs
+
+    def create(self, validated_data):
+        # El campo tiene UNIQUE en PostgreSQL. Una colisión muy improbable
+        # se recupera con un nuevo UUID y un savepoint por intento.
+        for _ in range(5):
+            code = generar_codigo_ubicacion()
+            try:
+                with transaction.atomic():
+                    return WarehouseLocation.objects.create(
+                        code=code, **validated_data
+                    )
+            except IntegrityError:
+                if not WarehouseLocation.objects.filter(code=code).exists():
+                    raise  # No ocultar errores de integridad no relacionados.
+        raise serializers.ValidationError({
+            "detail": "No se pudo asignar un identificador. Intenta nuevamente."
+        })
 
 
 class WarehouseLocationViewSet(
@@ -61,7 +71,7 @@ class WarehouseLocationViewSet(
     mixins.UpdateModelMixin,
     viewsets.GenericViewSet,
 ):
-    """GET/POST/PATCH protegidos; DELETE siempre deshabilitado."""
+    """GET/POST/PATCH protegidos. No se admiten eliminaciones."""
 
     serializer_class = WarehouseLocationSerializer
     permission_classes = (WarehouseLocationAccess,)
