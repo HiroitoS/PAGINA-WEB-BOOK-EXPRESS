@@ -77,9 +77,9 @@ def registrar_traslado(
         raise ValidationError("La observación supera los 500 caracteres.")
 
     try:
-        entry = StockEntry.objects.select_for_update().select_related(
-            "initial_location",
-        ).get(pk=stock_entry_id)
+        # Bloquear solo StockEntry: PostgreSQL no permite FOR UPDATE sobre
+        # el lado nullable del LEFT JOIN de initial_location.
+        entry = StockEntry.objects.select_for_update().get(pk=stock_entry_id)
     except StockEntry.DoesNotExist:
         raise ValidationError("El lote de mercadería ya no existe.")
 
