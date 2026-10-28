@@ -208,11 +208,30 @@ class WarehouseLocationViewSet(
             item["available"] += quantity
             if quantity > 0:
                 item["lots"] += 1
+        # Valoración por lugar al costo histórico del lote; sin inventar costos.
+        from decimal import Decimal
+        entries_by_id = {entry.pk: entry for entry in entries}
+        values = {}
+        for (entry_id, location_id), quantity in positions.items():
+            if quantity <= 0:
+                continue
+            amount = values.setdefault(location_id, {
+                "value": Decimal("0.00"), "missing_cost": 0,
+            })
+            cost = entries_by_id[entry_id].unit_cost_snapshot
+            if cost is None:
+                amount["missing_cost"] += quantity
+            else:
+                amount["value"] += cost * quantity
         locations = list(WarehouseLocation.objects.order_by("name", "pk"))
         return Response({
             "locations": [{
                 "id": loc.pk, "name": loc.name, "kind": loc.kind,
                 **totals.get(loc.pk, {"available": 0, "observed": 0, "lots": 0}),
+                "available_value_reference": str(
+                    values.get(loc.pk, {}).get("value", Decimal("0.00"))
+                ),
+                "unvalued_available_units": values.get(loc.pk, {}).get("missing_cost", 0),
             } for loc in locations],
             "unassigned": unassigned,
             "global": {
