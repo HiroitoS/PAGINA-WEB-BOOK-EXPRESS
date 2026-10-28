@@ -242,6 +242,39 @@ class StockEntry(TimeStampedModel):
         ]
 
 
+
+class StockEntryLocation(TimeStampedModel):
+    """Primera ubicación física comprobada de un lote de recepción.
+
+    Un lote conserva su cantidad histórica; esta relación no suma stock.
+    Los traslados parciales futuros usarán su propio libro de movimientos.
+    Las existencias anteriores quedan sin asignar hasta una conciliación.
+    """
+
+    class Origin(models.TextChoices):
+        RECEIPT = "receipt", "Recepción con ubicación principal"
+        RECONCILIATION = "reconciliation", "Conciliación física inicial"
+
+    stock_entry = models.OneToOneField(
+        StockEntry, on_delete=models.PROTECT, related_name="initial_location",
+    )
+    location = models.ForeignKey(
+        WarehouseLocation, on_delete=models.PROTECT,
+        related_name="initial_stock_entries",
+    )
+    origin = models.CharField(max_length=20, choices=Origin.choices)
+    available_at_assignment = models.PositiveIntegerField(default=0)
+    observed_at_assignment = models.PositiveIntegerField(default=0)
+    assigned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="stock_locations_assigned",
+    )
+    notes = models.CharField(max_length=500, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+
+
 class StockMovement(TimeStampedModel):
     """Salida inmutable desde una entrada documental de stock.
 
