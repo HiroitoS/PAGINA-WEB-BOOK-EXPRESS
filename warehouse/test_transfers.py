@@ -130,3 +130,30 @@ class StockTransferTests(TestCase):
             }, format="json",
         )
         self.assertEqual(result.status_code, 403)
+
+    def test_retorno_parcial_desde_tienda_conserva_totales(self):
+        registrar_traslado(
+            actor=self.actor, stock_entry_id=self.entry.pk,
+            source_id=self.main.pk, destination_id=self.store.pk,
+            quantity=6, idempotency_key=uuid4(), entrega_confirmada=True,
+        )
+        registrar_traslado(
+            actor=self.actor, stock_entry_id=self.entry.pk,
+            source_id=self.store.pk, destination_id=self.main.pk,
+            quantity=2, idempotency_key=uuid4(), entrega_confirmada=True,
+        )
+        self.assertEqual(saldo_en_ubicacion(self.entry, self.main.pk), 8)
+        self.assertEqual(saldo_en_ubicacion(self.entry, self.store.pk), 4)
+        self.assertEqual(saldo_entrada(self.entry), 12)
+
+    def test_no_permite_anotar_mercaderia_que_sigue_en_camino(self):
+        result = self.client_as(self.actor).post(
+            "/api/admin/erp/almacen/traslados/", {
+                "stock_entry_id": self.entry.pk,
+                "source_id": self.main.pk, "destination_id": self.store.pk,
+                "quantity": 2, "idempotency_key": str(uuid4()),
+                "entrega_confirmada": False,
+            }, format="json",
+        )
+        self.assertEqual(result.status_code, 400, result.data)
+        self.assertEqual(StockTransfer.objects.count(), 0)
