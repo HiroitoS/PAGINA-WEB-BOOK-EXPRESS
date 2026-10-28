@@ -18,7 +18,15 @@ class TransferInputSerializer(serializers.Serializer):
     destination_id = serializers.IntegerField(min_value=1)
     quantity = serializers.IntegerField(min_value=1)
     idempotency_key = serializers.UUIDField()
+    entrega_confirmada = serializers.BooleanField()
     notes = serializers.CharField(max_length=500, allow_blank=True, required=False)
+
+    def validate_entrega_confirmada(self, value):
+        if not value:
+            raise serializers.ValidationError(
+                "Confirma que el destino recibió físicamente los libros."
+            )
+        return value
 
 
 def _pagina(request):
