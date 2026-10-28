@@ -112,6 +112,17 @@ class WarehouseLocationTests(TestCase):
         )
         self.assertEqual(response.status_code, 400, response.data)
 
+    def test_no_permite_dos_almacenes_principales_activos(self):
+        client = self.client_as(self.admin)
+        url = "/api/admin/erp/almacen/ubicaciones/"
+        response = client.post(url, {
+            "name": "Otro depósito principal", "kind": "main",
+        }, format="json")
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertEqual(WarehouseLocation.objects.filter(
+            kind=WarehouseLocation.Kind.MAIN, is_active=True,
+        ).count(), 1)
+
     def test_no_se_pueden_borrar_ubicaciones(self):
         response = self.client_as(self.admin).delete(
             f"/api/admin/erp/almacen/ubicaciones/{self.main.pk}/"
