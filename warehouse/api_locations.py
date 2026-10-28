@@ -16,7 +16,7 @@ from rest_framework import mixins, serializers, viewsets
 from rest_framework.permissions import BasePermission
 
 from accounts.permissions import usuario_tiene_permiso
-from warehouse.models import StockEntry, StockEntryLocation, StockMovement, WarehouseLocation
+from warehouse.models import StockEntry, StockMovement, WarehouseLocation
 from warehouse.location_assignment import conciliar_lotes
 
 
@@ -45,11 +45,24 @@ class WarehouseLocationSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         if self.instance is not None and "code" in self.initial_data:
-            # El código de un lugar registrado no cambia, aunque cambie el
-            # nombre, el tipo de custodia o la dirección.
+            # Identificador inmutable para documentos e integraciones futuras.
             raise serializers.ValidationError({
                 "code": "El identificador interno no puede modificarse."
             })
+        kind = attrs.get("kind", self.instance.kind if self.instance else None)
+        is_active = attrs.get(
+            "is_active", self.instance.is_active if self.instance else True,
+        )
+        if kind == WarehouseLocation.Kind.MAIN and is_active:
+            main_qs = WarehouseLocation.objects.filter(
+                kind=WarehouseLocation.Kind.MAIN, is_active=True,
+            )
+            if self.instance is not None:
+                main_qs = main_qs.exclude(pk=self.instance.pk)
+            if main_qs.exists():
+                raise serializers.ValidationError({
+                    "kind": "Ya existe un almacén principal activo. Usa otro tipo de ubicación.",
+                })
         return attrs
 
     def create(self, validated_data):
