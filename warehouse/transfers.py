@@ -62,7 +62,7 @@ def saldo_en_ubicacion(entry, location_id):
 @transaction.atomic
 def registrar_traslado(
     *, actor, stock_entry_id, source_id, destination_id,
-    quantity, idempotency_key, notes="",
+    quantity, idempotency_key, entrega_confirmada=False, notes="",
 ):
     if not actor or not actor.is_authenticated or not usuario_tiene_permiso(
         actor, "warehouse.manage_stock_transfers"
@@ -72,6 +72,10 @@ def registrar_traslado(
         raise ValidationError("La cantidad debe ser un entero mayor que cero.")
     if source_id == destination_id:
         raise ValidationError("El origen y el destino deben ser diferentes.")
+    if entrega_confirmada is not True:
+        raise ValidationError(
+            "Confirma que la mercadería fue entregada físicamente al destino."
+        )
     notes = str(notes or "").strip()
     if len(notes) > 500:
         raise ValidationError("La observación supera los 500 caracteres.")
