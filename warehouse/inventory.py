@@ -4,6 +4,7 @@ from django.db import transaction
 
 from accounts.permissions import usuario_tiene_permiso
 from warehouse.models import GoodsReceipt, GoodsReceiptLine, StockEntry
+from warehouse.location_assignment import asignar_nueva_entrada
 
 
 @transaction.atomic
@@ -36,5 +37,8 @@ def registrar_entrada_recepcion(*, actor, receipt_id):
             or entry.unit_cost_snapshot != line.order_item.unit_supplier_cost
         ):
             raise ValidationError("La entrada ya existe con otras cantidades. Requiere auditoría.")
+        if is_new:
+            # Solamente nuevos ingresos: los históricos requieren conciliación física.
+            asignar_nueva_entrada(entry=entry, actor=actor)
         created += int(is_new)
     return {"receipt_id": receipt.pk, "new_entries": created, "total_lines": len(lines)}
