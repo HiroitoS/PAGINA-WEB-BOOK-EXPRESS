@@ -17,6 +17,38 @@ from django.utils import timezone
 from core.models import TimeStampedModel
 
 
+class WarehouseLocation(TimeStampedModel):
+    """Ubicación física o custodio externo: NO representa entradas ni cortesías.
+
+    El catálogo no asigna implícitamente las existencias anteriores a un almacén.
+    Esa vinculación requerirá conciliación de saldos en P-08.
+    """
+
+    class Kind(models.TextChoices):
+        MAIN = "main", "Almacén principal"
+        STORE = "store", "Tienda"
+        FAIR = "fair", "Feria temporal"
+        CONSIGNMENT = "consignment", "Consignación"
+        OTHER = "other", "Otro depósito"
+
+    code = models.CharField(max_length=32, unique=True)
+    name = models.CharField(max_length=120)
+    kind = models.CharField(max_length=20, choices=Kind.choices)
+    address = models.CharField(max_length=255, blank=True)
+    is_active = models.BooleanField(default=True)
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["name", "pk"]
+        permissions = [
+            ("view_warehouse_locations", "Puede consultar ubicaciones de almacén"),
+            ("manage_warehouse_locations", "Puede gestionar ubicaciones de almacén"),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
 class GoodsReceipt(TimeStampedModel):
     class Status(models.TextChoices):
         DRAFT = "draft", "Borrador"
