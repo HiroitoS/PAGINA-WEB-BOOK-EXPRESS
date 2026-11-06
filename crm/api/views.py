@@ -3194,6 +3194,8 @@ class OpportunityViewSet(viewsets.ModelViewSet):
             def matches_search(product):
                 values = (
                     product.name,
+                    product.code,
+                    product.sku,
                     product.provider.name,
                     product.area.name if product.area_id else "",
                     product.series.name if product.series_id else "",
