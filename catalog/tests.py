@@ -6,7 +6,9 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from openpyxl import Workbook
 
+from catalog.models import Product
 from catalog.services.importar_productos_excel import (
+    confirmar_importacion_productos,
     crear_vista_previa_productos,
 )
 
@@ -95,3 +97,62 @@ class CatalogImportYearValidationTests(TestCase):
 
         self.assertEqual(carga.estado, "VALIDADO")
         self.assertEqual(carga.total_errores, 0)
+
+    def test_import_garden_access_with_sin_nivel_uses_generic_classification(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Catalogo_Maestro_2027"
+        sheet.append([
+            "proveedor_editorial",
+            "codigo_producto",
+            "nombre",
+            "nivel",
+            "grado",
+            "serie",
+            "tipo_producto",
+            "linea_comercial",
+            "anio_catalogo",
+            "precio_referencial",
+            "consultar_precio",
+            "activo",
+        ])
+        sheet.append([
+            "Santillana",
+            "9900000030926",
+            "CODIGO DE ACCESO AL SISTEMA GARDEN STAND ALONE",
+            "Sin Nivel",
+            "SIN NIVEL",
+            "GARDEN",
+            "Acceso digital",
+            "Texto escolar",
+            2027,
+            9,
+            "NO",
+            "SI",
+        ])
+
+        buffer = BytesIO()
+        workbook.save(buffer)
+        archivo = SimpleUploadedFile(
+            "garden_2027.xlsx",
+            buffer.getvalue(),
+            content_type=(
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+        )
+
+        carga = crear_vista_previa_productos(
+            archivo=archivo,
+            anio_catalogo=2027,
+        )
+        self.assertEqual(carga.total_errores, 0)
+
+        confirmar_importacion_productos(carga.pk)
+        product = Product.objects.select_related("series").get(
+            code="9900000030926",
+        )
+        self.assertIsNone(product.level_id)
+        self.assertIsNone(product.grade_id)
+        self.assertEqual(product.series.name, "GARDEN")
+        self.assertEqual(product.commercial_line, Product.CommercialLine.SCHOOL_TEXT)
