@@ -517,6 +517,34 @@ class CRMCommercialProjectionTests(TestCase):
             {self.provider.id, second_provider.id},
         )
 
+    def test_projection_products_api_searches_product_code_and_sku(self):
+        self.product.code = "9900000030926"
+        self.product.sku = "GARDEN-ACCESS-2027"
+        self.product.save(update_fields=["code", "sku"])
+        self.client.force_authenticate(user=self.advisor)
+
+        url = reverse(
+            "crm:opportunity-projection-products",
+            args=[self.opportunity.id],
+        )
+
+        for term in ("9900000030926", "GARDEN-ACCESS-2027"):
+            with self.subTest(term=term):
+                response = self.client.get(
+                    url,
+                    {
+                        "service": self.service.id,
+                        "grade": self.grade.id,
+                        "commercial_line": "school_text",
+                        "product_search": term,
+                    },
+                )
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(
+                    [item["id"] for item in response.data["results"]],
+                    [self.product.id],
+                )
+
     def test_projection_rejects_product_from_other_commercial_line(self):
         plan_product = Product.objects.create(
             provider=self.provider,
