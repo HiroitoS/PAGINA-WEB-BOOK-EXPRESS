@@ -32,6 +32,14 @@ def limpiar_texto(valor):
     if valor is None:
         return ""
     return str(valor).strip()
+def normalizar_clasificacion_opcional(valor):
+    """Una marca como 'SIN NIVEL' no es un nivel ni un grado real."""
+    nombre = limpiar_texto(valor)
+    if slugify(nombre) in {"sin-nivel", "sin-grado", "sin-asignar"}:
+        return ""
+    return nombre
+
+
 def obtener_o_crear_por_slug(modelo, nombre):
     """
     Busca un registro por slug antes de crearlo.
@@ -306,8 +314,8 @@ def leer_datos_excel(ruta_archivo, anio_catalogo=None):
             "unidad": limpiar_texto(obtener_valor(fila, columnas, "unidad")),
             "categoria_original": limpiar_texto(obtener_valor(fila, columnas, "categoria_original")),
             "subcategoria_original": limpiar_texto(obtener_valor(fila, columnas, "subcategoria_original")),
-            "nivel": limpiar_texto(obtener_valor(fila, columnas, "nivel")),
-            "grado": limpiar_texto(obtener_valor(fila, columnas, "grado")),
+            "nivel": normalizar_clasificacion_opcional(obtener_valor(fila, columnas, "nivel")),
+            "grado": normalizar_clasificacion_opcional(obtener_valor(fila, columnas, "grado")),
             "area": limpiar_texto(obtener_valor(fila, columnas, "area")),
             "serie": limpiar_texto(obtener_valor(fila, columnas, "serie")),
             "tipo_producto": limpiar_texto(obtener_valor(fila, columnas, "tipo_producto")),
@@ -437,17 +445,17 @@ def confirmar_importacion_productos(carga_id):
         )
 
         level = None
-        if data.get("nivel"):
+        if normalizar_clasificacion_opcional(data.get("nivel")):
             level, _ = obtener_o_crear_por_slug(
                 Level,
-                data["nivel"]
+                normalizar_clasificacion_opcional(data["nivel"])
             )
 
         grade = None
-        if data.get("grado"):
+        if normalizar_clasificacion_opcional(data.get("grado")):
             grade, _ = obtener_o_crear_por_slug(
                 Grade,
-                data["grado"]
+                normalizar_clasificacion_opcional(data["grado"])
             )
 
         area = None
