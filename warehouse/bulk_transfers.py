@@ -12,7 +12,7 @@ from django.db import transaction
 
 from accounts.permissions import usuario_tiene_permiso
 from warehouse.models import (
-    GoodsReceipt, StockEntry, StockTransferBatch,
+    GoodsReceipt, StockEntry, StockTransferBatch, WarehouseLocation,
 )
 from warehouse.transfers import registrar_traslado
 
@@ -39,6 +39,10 @@ def registrar_traslado_por_guia(
         raise ValidationError("La observación supera los 500 caracteres.")
     if not items or len(items) > 200:
         raise ValidationError("Selecciona entre 1 y 200 lotes de una misma guía.")
+    if WarehouseLocation.objects.filter(
+        pk__in=[source_id, destination_id], is_active=True,
+    ).count() != 2:
+        raise ValidationError("Selecciona dos almacenes activos y válidos.")
 
     selected = sorted(items, key=lambda item: item["stock_entry_id"])
     ids = [item["stock_entry_id"] for item in selected]
