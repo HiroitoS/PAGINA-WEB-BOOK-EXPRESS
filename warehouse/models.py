@@ -320,11 +320,41 @@ class StockMovement(TimeStampedModel):
         ]
 
 
+class StockTransferBatch(TimeStampedModel):
+    """Operación atómica de traslado de una guía, con idempotencia de grupo."""
+
+    idempotency_key = models.UUIDField(unique=True)
+    receipt = models.ForeignKey(
+        GoodsReceipt, on_delete=models.PROTECT, related_name="transfer_batches",
+    )
+    source = models.ForeignKey(
+        WarehouseLocation, on_delete=models.PROTECT,
+        related_name="transfer_batches_dispatched",
+    )
+    destination = models.ForeignKey(
+        WarehouseLocation, on_delete=models.PROTECT,
+        related_name="transfer_batches_received",
+    )
+    request_hash = models.CharField(max_length=64)
+    notes = models.CharField(max_length=500, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="warehouse_transfer_batches_created",
+    )
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+
+
 class StockTransfer(TimeStampedModel):
     """Movimiento confirmado de un lote entre ubicaciones. No altera el stock global."""
 
     stock_entry = models.ForeignKey(
         StockEntry, on_delete=models.PROTECT, related_name="transfers",
+    )
+    batch = models.ForeignKey(
+        StockTransferBatch, on_delete=models.PROTECT,
+        related_name="transfers", null=True, blank=True,
     )
     source = models.ForeignKey(
         WarehouseLocation, on_delete=models.PROTECT,
