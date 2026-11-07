@@ -1167,6 +1167,9 @@ def update_commercial_quotation_from_projection(
         item.school_discount_percent, item.parent_price,
         item.commercial_line, item.reading_month, item.commission_mode,
         item.commission_input_amount, item.school_commission,
+        item.commercial_margin_unit, item.commercial_margin_total,
+        item.profitability_band, item.price_year_snapshot,
+        item.price_campaign_snapshot, item.uses_reference_price,
     ) for item in existing_items)
 
     prepared_items = []
@@ -1321,6 +1324,9 @@ def update_commercial_quotation_from_projection(
         prepared["parent_price"], prepared["commercial_line"],
         prepared["reading_month"], prepared["commission_mode"],
         prepared["commission_input_amount"], prepared["school_commission"],
+        prepared["commercial_margin_unit"], prepared["commercial_margin_total"],
+        prepared["profitability_band"], prepared["price_year_snapshot"],
+        prepared["price_campaign_snapshot"], prepared["uses_reference_price"],
     ) for prepared in prepared_items)
     keep_approval = (
         requires_approval
