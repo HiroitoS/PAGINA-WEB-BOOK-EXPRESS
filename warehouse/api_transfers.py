@@ -8,8 +8,9 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 
 from accounts.permissions import usuario_tiene_permiso
-from warehouse.models import StockEntry, StockTransfer, WarehouseLocation
+from warehouse.models import GoodsReceipt, StockEntry, StockTransfer, WarehouseLocation
 from warehouse.transfers import posiciones_lotes, registrar_traslado
+from warehouse.bulk_transfers import registrar_traslado_por_guia
 
 
 class TransferInputSerializer(serializers.Serializer):
@@ -26,6 +27,38 @@ class TransferInputSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 "Confirma que el destino recibió físicamente los libros."
             )
+        return value
+
+
+class TransferBatchItemSerializer(serializers.Serializer):
+    stock_entry_id = serializers.IntegerField(min_value=1)
+    quantity = serializers.IntegerField(min_value=1)
+
+
+class TransferBatchInputSerializer(serializers.Serializer):
+    receipt_id = serializers.IntegerField(min_value=1)
+    source_id = serializers.IntegerField(min_value=1)
+    destination_id = serializers.IntegerField(min_value=1)
+    items = TransferBatchItemSerializer(many=True, allow_empty=False)
+    idempotency_key = serializers.UUIDField()
+    entrega_confirmada = serializers.BooleanField()
+    notes = serializers.CharField(max_length=500, allow_blank=True, required=False)
+
+    def validate_entrega_confirmada(self, value):
+        if not value:
+            raise serializers.ValidationError(
+                "Confirma que todos los libros fueron entregados en el destino."
+            )
+        return value
+
+    def validate_items(self, value):
+        if len(value) > 200:
+            raise serializers.ValidationError(
+                "Selecciona como máximo 200 lotes por operación."
+            )
+        ids = [item["stock_entry_id"] for item in value]
+        if len(ids) != len(set(ids)):
+            raise serializers.ValidationError("Hay lotes repetidos.")
         return value
 
 
@@ -70,6 +103,7 @@ class StockTransferViewSet(viewsets.ViewSet):
         return {
             "id": move.pk,
             "stock_entry_id": entry.pk,
+            "batch_id": move.batch_id,
             "product": entry.product.name,
             "school": order.school_name_snapshot or "Pedido independiente",
             "guide": entry.receipt_line.receipt.document_number,
@@ -132,12 +166,97 @@ class StockTransferViewSet(viewsets.ViewSet):
                 "product": e.product.name,
                 "editorial": e.product.provider.name,
                 "guide": e.receipt_line.receipt.document_number,
+                "receipt_id": e.receipt_line.receipt_id,
                 "school": e.receipt_line.order_item.order.school_name_snapshot,
                 "available": balances[(e.pk, location_id)],
                 "unit_cost": (str(e.unit_cost_snapshot)
                               if e.unit_cost_snapshot is not None else None),
             } for e in current],
         })
+
+    @action(detail=False, methods=["get"], url_path="guia")
+    def guide_lots(self, request):
+        """Lista completa y actualizada de los lotes trasladables de una guía."""
+        self._autorizar(request)
+        receipt_raw = request.query_params.get("receipt_id", "")
+        source_raw = request.query_params.get("source_id", "")
+        if not receipt_raw.isdecimal() or int(receipt_raw) < 1:
+            raise ValidationError({"receipt_id": "Selecciona una guía válida."})
+        if not source_raw.isdecimal() or int(source_raw) < 1:
+            raise ValidationError({"source_id": "Selecciona el almacén de origen."})
+        receipt_id, source_id = int(receipt_raw), int(source_raw)
+        receipt = GoodsReceipt.objects.select_related("provider").filter(
+            pk=receipt_id, status=GoodsReceipt.Status.VALIDATED,
+            document_type=GoodsReceipt.DocumentType.GUIDE,
+        ).first()
+        if receipt is None:
+            raise ValidationError({"receipt_id": "La guía ya no está disponible."})
+        if not WarehouseLocation.objects.filter(pk=source_id, is_active=True).exists():
+            raise ValidationError({"source_id": "El almacén de origen no está activo."})
+        entries = list(StockEntry.objects.select_related(
+            "initial_location", "product__provider",
+            "receipt_line__order_item__order",
+        ).filter(
+            receipt_line__receipt_id=receipt_id,
+        ).filter(
+            Q(initial_location__location_id=source_id)
+            | Q(transfers__destination_id=source_id)
+        ).distinct().order_by("product__name", "pk"))
+        balances = posiciones_lotes(entries)
+        rows = [{
+            "id": entry.pk, "product": entry.product.name,
+            "editorial": entry.product.provider.name,
+            "school": entry.receipt_line.order_item.order.school_name_snapshot,
+            "available": balances.get((entry.pk, source_id), 0),
+            "unit_cost": (
+                str(entry.unit_cost_snapshot)
+                if entry.unit_cost_snapshot is not None else None
+            ),
+        } for entry in entries if balances.get((entry.pk, source_id), 0) > 0]
+        if len(rows) > 200:
+            raise ValidationError({
+                "detail": (
+                    "Esta guía supera 200 lotes. Coordina su división en "
+                    "operaciones controladas antes de trasladar."
+                ),
+            })
+        return Response({
+            "receipt_id": receipt.pk,
+            "guide": receipt.document_number,
+            "editorial": receipt.provider.name,
+            "source_id": source_id,
+            "results": rows,
+        })
+
+    @action(detail=False, methods=["post"], url_path="por-guia")
+    def create_batch(self, request):
+        """Traslada la selección completa o parcial de una guía en una transacción."""
+        self._autorizar(request, write=True)
+        serializer = TransferBatchInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            batch, movements, created = registrar_traslado_por_guia(
+                actor=request.user, **serializer.validated_data
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError(exc.messages)
+        qs = StockTransfer.objects.filter(
+            pk__in=[move.pk for move in movements]
+        ).select_related(
+            "stock_entry__product", "stock_entry__receipt_line__receipt",
+            "stock_entry__receipt_line__order_item__order", "source",
+            "destination", "created_by",
+        ).order_by("stock_entry_id")
+        return Response({
+            "batch_id": batch.pk,
+            "guide": batch.receipt.document_number,
+            "count": len(movements),
+            "results": [self._movimiento(move) for move in qs],
+            "message": (
+                "Guía trasladada: se actualizaron los saldos por almacén."
+                if created else "Este traslado de guía ya estaba confirmado."
+            ),
+        }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
     def create(self, request):
         self._autorizar(request, write=True)
