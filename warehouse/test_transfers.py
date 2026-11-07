@@ -10,7 +10,7 @@ from rest_framework.test import APIClient
 from catalog.models import Product, Provider
 from crm.models import School, Campaign
 from purchasing.models import PurchaseOrder, PurchaseOrderItem
-from warehouse.models import GoodsReceipt, StockEntry, StockTransfer, WarehouseLocation
+from warehouse.models import GoodsReceipt, StockEntry, StockTransfer, StockTransferBatch, WarehouseLocation
 from warehouse.receiving import crear_borrador_recepcion, validar_recepcion
 from warehouse.stock_movements import registrar_cortesia, saldo_entrada
 from warehouse.transfers import registrar_traslado, saldo_en_ubicacion
@@ -157,3 +157,124 @@ class StockTransferTests(TestCase):
         )
         self.assertEqual(result.status_code, 400, result.data)
         self.assertEqual(StockTransfer.objects.count(), 0)
+
+    def _crear_guia_dos_productos(self):
+        extra_product = Product.objects.create(
+            name="Segundo libro para traslado", code=f"TRA-B-{uuid4().hex[:10]}",
+            provider=self.provider,
+        )
+        extra_order = PurchaseOrder.objects.create(
+            origin=PurchaseOrder.Origin.MANUAL, provider=self.provider,
+            school=self.school, campaign=self.campaign,
+            provider_name_snapshot=self.provider.name,
+            school_name_snapshot=self.school.name,
+            campaign_name_snapshot=self.campaign.name,
+            created_by=self.actor, status=PurchaseOrder.Status.SENT,
+            sent_at=timezone.now(),
+        )
+        lines = []
+        for product, qty in [(self.product, 4), (extra_product, 6)]:
+            order_item = PurchaseOrderItem.objects.create(
+                order=extra_order, product=product,
+                product_name_snapshot=product.name,
+                quantity_ordered=qty, unit_supplier_cost=Decimal("25.00"),
+            )
+            lines.append({
+                "order_item_id": order_item.pk,
+                "quantity_documented": qty,
+                "quantity_arrived": qty,
+                "quantity_accepted": qty,
+                "quantity_extra": 0,
+                "quantity_observed": 0,
+            })
+        receipt = crear_borrador_recepcion(
+            actor=self.actor, provider_id=self.provider.pk,
+            document_type=GoodsReceipt.DocumentType.GUIDE,
+            document_number=f"TRF-BATCH-{uuid4().hex[:12]}",
+            received_on=timezone.localdate(), lines=lines,
+        )
+        validar_recepcion(actor=self.actor, receipt_id=receipt.pk)
+        entries = list(StockEntry.objects.filter(
+            receipt_line__receipt=receipt,
+        ).order_by("pk"))
+        return receipt, entries
+
+    def test_traslado_guia_completa_es_atomico_y_reintentable(self):
+        receipt, entries = self._crear_guia_dos_productos()
+        payload = {
+            "receipt_id": receipt.pk, "source_id": self.main.pk,
+            "destination_id": self.store.pk,
+            "entrega_confirmada": True,
+            "idempotency_key": str(uuid4()),
+            "notes": "Feria, guía completa",
+            "items": [
+                {"stock_entry_id": entry.pk, "quantity": available}
+                for entry, available in zip(entries, [4, 6])
+            ],
+        }
+        client = self.client_as(self.actor)
+        result = client.get(
+            "/api/admin/erp/almacen/traslados/guia/",
+            {"receipt_id": receipt.pk, "source_id": self.main.pk},
+        )
+        self.assertEqual(result.status_code, 200, result.data)
+        self.assertEqual(len(result.data["results"]), 2)
+        first = client.post(
+            "/api/admin/erp/almacen/traslados/por-guia/",
+            payload, format="json",
+        )
+        self.assertEqual(first.status_code, 201, first.data)
+        self.assertEqual(first.data["count"], 2)
+        for entry in entries:
+            self.assertEqual(saldo_en_ubicacion(entry, self.main.pk), 0)
+        self.assertEqual(sum(
+            saldo_en_ubicacion(entry, self.store.pk) for entry in entries
+        ), 10)
+        self.assertEqual(StockTransferBatch.objects.count(), 1)
+        before = StockTransfer.objects.count()
+        again = client.post(
+            "/api/admin/erp/almacen/traslados/por-guia/",
+            payload, format="json",
+        )
+        self.assertEqual(again.status_code, 200, again.data)
+        self.assertEqual(StockTransfer.objects.count(), before)
+
+    def test_traslado_guia_falla_completo_si_un_lote_no_tiene_saldo(self):
+        receipt, entries = self._crear_guia_dos_productos()
+        result = self.client_as(self.actor).post(
+            "/api/admin/erp/almacen/traslados/por-guia/",
+            {
+                "receipt_id": receipt.pk, "source_id": self.main.pk,
+                "destination_id": self.store.pk,
+                "entrega_confirmada": True,
+                "idempotency_key": str(uuid4()),
+                "items": [
+                    {"stock_entry_id": entries[0].pk, "quantity": 2},
+                    {"stock_entry_id": entries[1].pk, "quantity": 99},
+                ],
+            }, format="json",
+        )
+        self.assertEqual(result.status_code, 400, result.data)
+        self.assertEqual(StockTransferBatch.objects.count(), 0)
+        self.assertEqual(StockTransfer.objects.count(), 0)
+        self.assertEqual(saldo_en_ubicacion(entries[0], self.main.pk), 4)
+        self.assertEqual(saldo_en_ubicacion(entries[1], self.main.pk), 6)
+
+    def test_traslado_guia_no_acepta_lote_de_otra_guia(self):
+        receipt, entries = self._crear_guia_dos_productos()
+        result = self.client_as(self.actor).post(
+            "/api/admin/erp/almacen/traslados/por-guia/",
+            {
+                "receipt_id": receipt.pk, "source_id": self.main.pk,
+                "destination_id": self.store.pk,
+                "entrega_confirmada": True,
+                "idempotency_key": str(uuid4()),
+                "items": [
+                    {"stock_entry_id": entries[0].pk, "quantity": 1},
+                    {"stock_entry_id": self.entry.pk, "quantity": 1},
+                ],
+            }, format="json",
+        )
+        self.assertEqual(result.status_code, 400, result.data)
+        self.assertEqual(StockTransfer.objects.count(), 0)
+        self.assertEqual(StockTransferBatch.objects.count(), 0)
