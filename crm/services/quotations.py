@@ -1,3 +1,4 @@
+from collections import Counter
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from django.core.exceptions import ValidationError
@@ -1154,10 +1155,22 @@ def update_commercial_quotation_from_projection(
 
         adjustments[projection_item.pk] = payload
 
+    existing_items = list(locked_quotation.items.all())
     existing_items_by_product = {
-        item.product_id: item
-        for item in locked_quotation.items.all()
+        item.product_id: item for item in existing_items
     }
+    # La aprobación corresponde a condiciones comerciales, no a notas o
+    # fechas. Se compara el contenido antes de reconstruir los ítems.
+    previous_terms = Counter((
+        item.product_id, item.quantity, item.pvp, item.supplier_cost,
+        item.supplier_discount_percent, item.school_price,
+        item.school_discount_percent, item.parent_price,
+        item.commercial_line, item.reading_month, item.commission_mode,
+        item.commission_input_amount, item.school_commission,
+        item.commercial_margin_unit, item.commercial_margin_total,
+        item.profitability_band, item.price_year_snapshot,
+        item.price_campaign_snapshot, item.uses_reference_price,
+    ) for item in existing_items)
 
     prepared_items = []
     requires_approval = False
@@ -1170,16 +1183,20 @@ def update_commercial_quotation_from_projection(
             payload=payload,
         )
 
-        discount = _discount_value(
-            payload.get(
-                "school_discount_percent",
-                STANDARD_SCHOOL_DISCOUNT,
-            )
-        )
-        pvp = _money(projection_item.unit_price)
         existing_item = existing_items_by_product.get(
             projection_item.product_id
         )
+        discount = _discount_value(
+            payload.get(
+                "school_discount_percent",
+                (
+                    existing_item.school_discount_percent
+                    if existing_item is not None
+                    else STANDARD_SCHOOL_DISCOUNT
+                ),
+            )
+        )
+        pvp = _money(projection_item.unit_price)
         (
             supplier_discount_percent,
             supplier_cost,
@@ -1300,6 +1317,24 @@ def update_commercial_quotation_from_projection(
         fair_end_time=fair_end_time,
     )
 
+    proposed_terms = Counter((
+        prepared["product"].pk, prepared["quantity"], prepared["pvp"],
+        prepared["supplier_cost"], prepared["supplier_discount_percent"],
+        prepared["school_price"], prepared["school_discount_percent"],
+        prepared["parent_price"], prepared["commercial_line"],
+        prepared["reading_month"], prepared["commission_mode"],
+        prepared["commission_input_amount"], prepared["school_commission"],
+        prepared["commercial_margin_unit"], prepared["commercial_margin_total"],
+        prepared["profitability_band"], prepared["price_year_snapshot"],
+        prepared["price_campaign_snapshot"], prepared["uses_reference_price"],
+    ) for prepared in prepared_items)
+    keep_approval = (
+        requires_approval
+        and locked_quotation.discount_approval_status
+        == CommercialQuotation.DiscountApprovalStatus.APPROVED
+        and previous_terms == proposed_terms
+    )
+
     locked_quotation.items.all().delete()
 
     for prepared in prepared_items:
@@ -1360,13 +1395,18 @@ def update_commercial_quotation_from_projection(
     locked_quotation.fair_end_time = fair_end_time
     locked_quotation.requires_discount_approval = requires_approval
     locked_quotation.discount_approval_status = (
-        CommercialQuotation.DiscountApprovalStatus.PENDING
-        if requires_approval
-        else CommercialQuotation.DiscountApprovalStatus.NOT_REQUIRED
+        CommercialQuotation.DiscountApprovalStatus.APPROVED
+        if keep_approval
+        else (
+            CommercialQuotation.DiscountApprovalStatus.PENDING
+            if requires_approval
+            else CommercialQuotation.DiscountApprovalStatus.NOT_REQUIRED
+        )
     )
-    locked_quotation.discount_approved_at = None
-    locked_quotation.discount_approved_by = None
-    locked_quotation.discount_approval_note = ""
+    if not keep_approval:
+        locked_quotation.discount_approved_at = None
+        locked_quotation.discount_approved_by = None
+        locked_quotation.discount_approval_note = ""
     locked_quotation.full_clean()
     locked_quotation.save(
         update_fields=[

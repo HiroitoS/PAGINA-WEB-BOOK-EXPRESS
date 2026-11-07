@@ -985,3 +985,62 @@ class CRMQuotationFromProjectionTests(TestCase):
                 ],
             )
 
+    def test_editar_solo_notas_conserva_aprobacion_y_descuento(self):
+        quotation = create_commercial_quotation_from_projection(
+            opportunity=self.opportunity, actor=self.admin,
+            item_adjustments=[{
+                "projection_item": self.projection_item,
+                "school_discount_percent": Decimal("25.00"),
+                "supplier_discount_percent": Decimal("40.00"),
+            }],
+        )
+        approved = approve_commercial_quotation_discount(
+            quotation=quotation, actor=self.admin,
+            note="Condiciones comerciales autorizadas.",
+        )
+        approved_at = approved.discount_approved_at
+
+        updated = update_commercial_quotation_from_projection(
+            quotation=approved, actor=self.admin,
+            item_adjustments=[], notes="Entrega coordinada con colegio.",
+        )
+        updated.refresh_from_db()
+        item = updated.items.get()
+        self.assertEqual(
+            updated.discount_approval_status,
+            CommercialQuotation.DiscountApprovalStatus.APPROVED,
+        )
+        self.assertEqual(updated.discount_approved_by, self.admin)
+        self.assertEqual(updated.discount_approved_at, approved_at)
+        self.assertEqual(item.school_discount_percent, Decimal("25.00"))
+        self.assertEqual(item.supplier_discount_percent, Decimal("40.00"))
+        self.assertEqual(item.school_price, Decimal("75.00"))
+
+    def test_cambiar_condiciones_financieras_invalida_aprobacion(self):
+        quotation = create_commercial_quotation_from_projection(
+            opportunity=self.opportunity, actor=self.admin,
+            item_adjustments=[{
+                "projection_item": self.projection_item,
+                "school_discount_percent": Decimal("25.00"),
+                "supplier_discount_percent": Decimal("40.00"),
+            }],
+        )
+        approve_commercial_quotation_discount(
+            quotation=quotation, actor=self.admin, note="Autorización inicial.",
+        )
+        updated = update_commercial_quotation_from_projection(
+            quotation=quotation, actor=self.admin,
+            item_adjustments=[{
+                "projection_item": self.projection_item,
+                "school_discount_percent": Decimal("26.00"),
+                "supplier_discount_percent": Decimal("40.00"),
+            }],
+        )
+        updated.refresh_from_db()
+        self.assertEqual(
+            updated.discount_approval_status,
+            CommercialQuotation.DiscountApprovalStatus.PENDING,
+        )
+        self.assertIsNone(updated.discount_approved_by)
+        self.assertIsNone(updated.discount_approved_at)
+        self.assertEqual(updated.items.get().school_discount_percent, Decimal("26.00"))
