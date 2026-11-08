@@ -14,6 +14,7 @@ from rest_framework.views import APIView
 
 from accounts.permissions import usuario_es_administrador
 
+from .crm_context import get_crm_school
 from .models import (
     CalendarEvent,
     Task,
@@ -333,7 +334,9 @@ class TaskViewSet(viewsets.ModelViewSet):
         return TaskSerializer
 
     def get_queryset(self):
-        queryset = visible_tasks_queryset(self.request.user)
+        queryset = visible_tasks_queryset(self.request.user).prefetch_related(
+            "crm_links__school",
+        )
 
         my_day_selections = TaskMyDaySelection.objects.filter(
             task_id=OuterRef("pk"),
@@ -1240,18 +1243,24 @@ class WorkspaceCalendarAPIView(APIView):
         )
         group = request.query_params.get("group")
 
-        tasks = visible_tasks_queryset(request.user).filter(
+        tasks = visible_tasks_queryset(request.user).prefetch_related(
+            "crm_links__school",
+        ).filter(
             Q(due_at__range=(start, end))
             | Q(start_at__range=(start, end))
         ).exclude(
             status__in=["completed", "cancelled"],
         )
 
-        events = visible_events_queryset(request.user).filter(
+        events = visible_events_queryset(request.user).prefetch_related(
+            "crm_links__school",
+        ).filter(
             start_at__range=(start, end),
         )
 
-        reminders = visible_reminders_queryset(request.user).filter(
+        reminders = visible_reminders_queryset(request.user).prefetch_related(
+            "crm_links__school", "task__crm_links__school",
+        ).filter(
             remind_at__range=(start, end),
         ).exclude(
             status__in=["completed", "dismissed"],
@@ -1274,6 +1283,7 @@ class WorkspaceCalendarAPIView(APIView):
                 and not can_complete
             )
             display_at = task.due_at or task.start_at
+            crm_school_id, crm_school_name = get_crm_school(task)
 
             if display_at:
                 calendar_items.append({
@@ -1283,6 +1293,8 @@ class WorkspaceCalendarAPIView(APIView):
                     "type": "task",
                     "title": task.title,
                     "description": task.description,
+                    "crm_school_id": crm_school_id,
+                    "crm_school_name": crm_school_name,
                     "start": display_at,
                     "end": display_at,
                     "start_at": task.start_at,
@@ -1306,6 +1318,7 @@ class WorkspaceCalendarAPIView(APIView):
                 })
 
         for event in events:
+            crm_school_id, crm_school_name = get_crm_school(event)
             can_edit_details = usuario_puede_editar_datos_evento(request.user, event)
             is_read_only = not can_edit_details
 
@@ -1316,6 +1329,8 @@ class WorkspaceCalendarAPIView(APIView):
                 "type": "event",
                 "title": event.title,
                 "description": event.description,
+                "crm_school_id": crm_school_id,
+                "crm_school_name": crm_school_name,
                 "start": event.start_at,
                 "end": event.end_at,
                 "status": "scheduled",
@@ -1337,6 +1352,7 @@ class WorkspaceCalendarAPIView(APIView):
             })
 
         for reminder in reminders:
+            crm_school_id, crm_school_name = get_crm_school(reminder)
             can_edit_details = usuario_puede_editar_datos_recordatorio(
                 request.user,
                 reminder,
@@ -1354,6 +1370,8 @@ class WorkspaceCalendarAPIView(APIView):
                 "type": "reminder",
                 "title": reminder.title,
                 "description": reminder.message,
+                "crm_school_id": crm_school_id,
+                "crm_school_name": crm_school_name,
                 "message": reminder.message,
                 "start": reminder.remind_at,
                 "end": reminder.remind_at,

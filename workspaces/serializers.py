@@ -2,6 +2,7 @@ from django.contrib.auth.models import User
 from django.utils import timezone
 from rest_framework import serializers
 
+from .crm_context import get_crm_school
 from .models import (
     CalendarEvent,
     Reminder,
@@ -285,6 +286,8 @@ class TaskListSerializer(serializers.ModelSerializer):
         source="task_list.name",
         read_only=True,
     )
+    crm_school_id = serializers.SerializerMethodField()
+    crm_school_name = serializers.SerializerMethodField()
     status_display = serializers.CharField(
         source="get_status_display",
         read_only=True,
@@ -328,6 +331,8 @@ class TaskListSerializer(serializers.ModelSerializer):
             "group_name",
             "task_list",
             "task_list_name",
+            "crm_school_id",
+            "crm_school_name",
             "created_by",
             "created_by_name",
             "assigned_to",
@@ -355,6 +360,8 @@ class TaskListSerializer(serializers.ModelSerializer):
             "created_by",
             "created_by_name",
             "task_list_name",
+            "crm_school_id",
+            "crm_school_name",
             "assigned_to_name",
             "status",
             "completed_at",
@@ -367,6 +374,12 @@ class TaskListSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+    def get_crm_school_id(self, obj):
+        return get_crm_school(obj)[0]
+
+    def get_crm_school_name(self, obj):
+        return get_crm_school(obj)[1]
 
     def get_created_by_name(self, obj):
         return get_user_display_name(obj.created_by)
