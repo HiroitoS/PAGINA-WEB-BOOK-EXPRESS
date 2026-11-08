@@ -1,4 +1,6 @@
-"""API de P-08.2: consulta y traslados confirmados entre ubicaciones."""
+"""API de traslados confirmados: movimientos, historial y saldos verificables."""
+from datetime import date
+
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Q
 from django.core.paginator import Paginator, EmptyPage
@@ -69,6 +71,26 @@ def _pagina(request):
     return int(value)
 
 
+def _identificador_filtro(request, campo):
+    """Devuelve un ID positivo o None; los filtros inválidos no se ignoran."""
+    value = request.query_params.get(campo, "").strip()
+    if not value:
+        return None
+    if not value.isdecimal() or int(value) < 1:
+        raise ValidationError({campo: "Selecciona un valor válido."})
+    return int(value)
+
+
+def _fecha_filtro(request, campo):
+    value = request.query_params.get(campo, "").strip()
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValidationError({campo: "Selecciona una fecha válida."}) from exc
+
+
 class StockTransferViewSet(viewsets.ViewSet):
     """No permite editar ni borrar movimientos confirmados."""
 
@@ -79,12 +101,41 @@ class StockTransferViewSet(viewsets.ViewSet):
             raise PermissionDenied("No tienes permiso para esta operación.")
 
     def list(self, request):
+        """Historial paginado y filtrable, inalterable, con cada línea de cada traslado."""
         self._autorizar(request)
         qs = StockTransfer.objects.select_related(
-            "stock_entry__product", "stock_entry__receipt_line__receipt",
+            "stock_entry__product__provider", "stock_entry__receipt_line__receipt",
             "stock_entry__receipt_line__order_item__order", "source",
             "destination", "created_by",
         ).order_by("-created_at", "-pk")
+        source_id = _identificador_filtro(request, "source_id")
+        destination_id = _identificador_filtro(request, "destination_id")
+        batch_id = _identificador_filtro(request, "batch_id")
+        date_from = _fecha_filtro(request, "date_from")
+        date_to = _fecha_filtro(request, "date_to")
+        if date_from and date_to and date_from > date_to:
+            raise ValidationError({"date_to": "La fecha final debe ser igual o posterior a la inicial."})
+        q = request.query_params.get("q", "").strip()
+        if len(q) > 100:
+            raise ValidationError({"q": "La búsqueda no puede superar 100 caracteres."})
+        if source_id:
+            qs = qs.filter(source_id=source_id)
+        if destination_id:
+            qs = qs.filter(destination_id=destination_id)
+        if batch_id:
+            qs = qs.filter(batch_id=batch_id)
+        if date_from:
+            qs = qs.filter(created_at__date__gte=date_from)
+        if date_to:
+            qs = qs.filter(created_at__date__lte=date_to)
+        if q:
+            qs = qs.filter(
+                Q(stock_entry__product__name__icontains=q)
+                | Q(stock_entry__product__code__icontains=q)
+                | Q(stock_entry__product__provider__name__icontains=q)
+                | Q(stock_entry__receipt_line__receipt__document_number__icontains=q)
+                | Q(stock_entry__receipt_line__order_item__order__school_name_snapshot__icontains=q)
+            )
         page = Paginator(qs, 25)
         try:
             current = page.page(_pagina(request))
@@ -104,9 +155,17 @@ class StockTransferViewSet(viewsets.ViewSet):
             "id": move.pk,
             "stock_entry_id": entry.pk,
             "batch_id": move.batch_id,
+            "operation_reference": (
+                f"BE-TG-{move.batch_id:06d}" if move.batch_id
+                else f"BE-TI-{move.pk:06d}"
+            ),
+            "operation_type": "guia" if move.batch_id else "individual",
             "product": entry.product.name,
+            "editorial": entry.product.provider.name,
+            "product_code": entry.product.code,
             "school": order.school_name_snapshot or "Pedido independiente",
             "guide": entry.receipt_line.receipt.document_number,
+            "receipt_id": entry.receipt_line.receipt_id,
             "source": move.source.name,
             "source_id": move.source_id,
             "destination": move.destination.name,
@@ -119,6 +178,7 @@ class StockTransferViewSet(viewsets.ViewSet):
             "notes": move.notes,
             "created_at": move.created_at,
             "created_by": move.created_by_id,
+            "created_by_name": move.created_by.get_full_name().strip() or move.created_by.username,
         }
 
     @action(detail=False, methods=["get"], url_path="lotes")
