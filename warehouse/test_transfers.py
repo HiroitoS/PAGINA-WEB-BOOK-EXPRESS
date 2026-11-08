@@ -278,3 +278,84 @@ class StockTransferTests(TestCase):
         self.assertEqual(result.status_code, 400, result.data)
         self.assertEqual(StockTransfer.objects.count(), 0)
         self.assertEqual(StockTransferBatch.objects.count(), 0)
+
+
+    def test_historial_muestra_cada_traslado_con_responsable_y_referencia(self):
+        for cantidad in (2, 3):
+            registrar_traslado(
+                actor=self.actor, stock_entry_id=self.entry.pk,
+                source_id=self.main.pk, destination_id=self.store.pk,
+                quantity=cantidad, idempotency_key=uuid4(),
+                entrega_confirmada=True, notes="Entrega a tienda",
+            )
+        client = self.client_as(self.actor)
+        url = "/api/admin/erp/almacen/traslados/"
+        response = client.get(url, {"source_id": str(self.main.pk), "q": "TRA-001"})
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["count"], 2)
+        for record in response.data["results"]:
+            self.assertTrue(record["operation_reference"].startswith("BE-TI-"))
+            self.assertEqual(record["operation_type"], "individual")
+            self.assertEqual(record["created_by_name"], self.actor.username)
+            self.assertEqual(record["editorial"], self.provider.name)
+            self.assertEqual(record["product_code"], self.product.code)
+            self.assertEqual(record["receipt_id"], self.entry.receipt_line.receipt_id)
+            self.assertEqual(record["source_id"], self.main.pk)
+            self.assertEqual(record["destination_id"], self.store.pk)
+            self.assertEqual(record["notes"], "Entrega a tienda")
+            self.assertIsNotNone(record["created_at"])
+        self.assertEqual(client.get(url, {"source_id": self.store.pk}).data["count"], 0)
+        self.assertEqual(client.get(url, {"q": "NUNCA EXISTIÓ"}).data["count"], 0)
+        self.assertEqual(client.get(url, {"date_from": "2099-01-01"}).data["count"], 0)
+        self.assertEqual(client.get(url, {"date_to": "2001-01-01"}).data["count"], 0)
+
+    def test_historial_rechaza_filtros_incorrectos_y_respeta_permisos(self):
+        url = "/api/admin/erp/almacen/traslados/"
+        client = self.client_as(self.actor)
+        casos = [
+            {"page": "-1"},
+            {"source_id": "abc"},
+            {"destination_id": "0"},
+            {"batch_id": "-2"},
+            {"date_from": "ayer"},
+            {"date_to": "2026-13-99"},
+            {"date_from": "2027-11-01", "date_to": "2027-01-01"},
+            {"q": "X" * 101},
+        ]
+        for params in casos:
+            with self.subTest(params=params):
+                self.assertEqual(client.get(url, params).status_code, 400)
+        self.assertEqual(self.client_as(self.employee).get(url).status_code, 403)
+
+    def test_historial_de_guia_conserva_operacion_agrupada(self):
+        receipt, entries = self._crear_guia_dos_productos()
+        client = self.client_as(self.actor)
+        payload = {
+            "receipt_id": receipt.pk, "source_id": self.main.pk,
+            "destination_id": self.store.pk, "entrega_confirmada": True,
+            "idempotency_key": str(uuid4()), "notes": "Entrega recibida",
+            "items": [
+                {"stock_entry_id": entry.pk, "quantity": amount}
+                for entry, amount in zip(entries, [2, 3])
+            ],
+        }
+        created = client.post(
+            "/api/admin/erp/almacen/traslados/por-guia/", payload, format="json",
+        )
+        self.assertEqual(created.status_code, 201, created.data)
+        batch = StockTransferBatch.objects.get()
+        result = client.get(
+            "/api/admin/erp/almacen/traslados/",
+            {"batch_id": batch.pk, "q": receipt.document_number},
+        )
+        self.assertEqual(result.status_code, 200, result.data)
+        self.assertEqual(result.data["count"], 2)
+        for item in result.data["results"]:
+            self.assertEqual(item["batch_id"], batch.pk)
+            self.assertEqual(item["operation_reference"], f"BE-TG-{batch.pk:06d}")
+            self.assertEqual(item["operation_type"], "guia")
+            self.assertEqual(item["guide"], receipt.document_number)
+        self.assertEqual(
+            client.get("/api/admin/erp/almacen/traslados/",
+                       {"batch_id": batch.pk + 100}).data["count"], 0,
+        )
