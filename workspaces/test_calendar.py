@@ -5,6 +5,9 @@ from django.urls import reverse
 from django.utils import timezone
 
 from rest_framework import status
+
+from crm.models import CRMWorkItemLink, School
+from workspaces.serializers import TaskListSerializer
 from rest_framework.test import APITestCase
 
 from .models import CalendarEvent, Reminder, Task
@@ -158,3 +161,57 @@ class WorkspaceCalendarApiTests(APITestCase):
                 f"task-{later_task.id}",
             ],
         )
+
+
+    def test_crm_school_is_visible_in_todo_and_calendar_without_editing_title(self):
+        school = School.objects.create(
+            name="Colegio Zárate", created_by=self.user,
+        )
+        due_at = self.range_start + timedelta(hours=11)
+        task = Task.objects.create(
+            title="Entregar propuesta pedagógica",
+            task_type="school",
+            created_by=self.user,
+            assigned_to=self.user,
+            due_at=due_at,
+        )
+        event = CalendarEvent.objects.create(
+            title="Reunión con directivos",
+            created_by=self.user,
+            assigned_to=self.user,
+            start_at=due_at + timedelta(hours=1),
+        )
+        CRMWorkItemLink.objects.create(
+            school=school, task=task, created_by=self.user,
+        )
+        CRMWorkItemLink.objects.create(
+            school=school, event=event, created_by=self.user,
+        )
+
+        todo_data = TaskListSerializer(task).data
+        self.assertEqual(todo_data["crm_school_name"], "Colegio Zárate")
+        self.assertEqual(todo_data["crm_school_id"], school.pk)
+        self.assertEqual(todo_data["title"], "Entregar propuesta pedagógica")
+
+        items = self.get_calendar().data
+        task_item = next(i for i in items if i["id"] == f"task-{task.pk}")
+        event_item = next(i for i in items if i["id"] == f"event-{event.pk}")
+        for item in (task_item, event_item):
+            self.assertEqual(item["crm_school_name"], school.name)
+            self.assertEqual(item["crm_school_id"], school.pk)
+        self.assertEqual(task_item["title"], task.title)
+
+    def test_regular_task_has_no_school_context(self):
+        task = Task.objects.create(
+            title="Preparar materiales internos",
+            created_by=self.user,
+            assigned_to=self.user,
+            due_at=self.range_start + timedelta(hours=9),
+        )
+        self.assertIsNone(TaskListSerializer(task).data["crm_school_id"])
+        self.assertEqual(TaskListSerializer(task).data["crm_school_name"], "")
+        calendar_item = next(
+            i for i in self.get_calendar().data
+            if i["id"] == f"task-{task.pk}"
+        )
+        self.assertEqual(calendar_item["crm_school_name"], "")
