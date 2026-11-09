@@ -72,7 +72,10 @@ ROLE_PERMISSIONS = {
         "crm.supervise_crm",
         "crm.export_crm_reports",
     ],
-    ROL_ALMACEN: [],
+    ROL_ALMACEN: [
+        "warehouse.view_internal_stock_requests",
+        "warehouse.manage_internal_stock_requests",
+    ],
 }
 
 
