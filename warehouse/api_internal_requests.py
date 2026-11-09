@@ -103,7 +103,7 @@ class RequestOutput(serializers.ModelSerializer):
             "id", "reference", "source", "source_name", "destination",
             "destination_name", "operation_name", "responsible_name",
             "needed_on", "notes", "status", "created_at", "updated_at",
-            "approved_at", "created_by_name", "approved_by_name", "items", "events",
+            "approved_at", "created_by", "approved_by", "created_by_name", "approved_by_name", "items", "events",
         )
 
     def get_created_by_name(self, obj):
