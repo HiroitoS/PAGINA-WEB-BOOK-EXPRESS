@@ -2,11 +2,13 @@
 
 Uso:
   python manage.py preparar_demo_erp --year 2027
+  python manage.py preparar_demo_erp --year 2027 --crear --local
   DB_NAME=bookexpress_demo_db python manage.py preparar_demo_erp --year 2027 --crear
 
-La vista previa es de solo lectura. --crear requiere una copia de base de datos
-con nombre bookexpress_demo_* y DEBUG=True. Crea una oportunidad, proyección
-y cotización en BORRADOR, nunca una adopción o recepción confirmada.
+La vista previa es de solo lectura. --crear --local solo funciona en PostgreSQL
+local bookexpress_db con DEBUG=True. El modo de base aislada se mantiene.
+Crea una oportunidad, proyección y cotización en BORRADOR usando la campaña
+escolar activa, nunca otra campaña ni una adopción o recepción confirmada.
 """
 from datetime import date, timedelta
 
@@ -31,9 +33,24 @@ from crm.services.education import grade_matches_level
 DEMO_PREFIX = "[PRUEBA ERP]"
 
 
+def _is_local_connection():
+    config = settings.DATABASES["default"]
+    return (
+        settings.DEBUG
+        and config.get("ENGINE") == "django.db.backends.postgresql"
+        and str(config.get("HOST") or "").lower() in {"localhost", "127.0.0.1", "::1"}
+    )
+
+
 def _is_demo_database():
-    name = str(settings.DATABASES["default"]["NAME"] or "").lower()
-    return settings.DEBUG and name.startswith("bookexpress_demo_")
+    config = settings.DATABASES["default"]
+    name = str(config.get("NAME") or "").lower()
+    return _is_local_connection() and name.startswith("bookexpress_demo_")
+
+
+def _is_local_dev_database():
+    config = settings.DATABASES["default"]
+    return _is_local_connection() and str(config.get("NAME") or "").lower() == "bookexpress_db"
 
 
 def _eligible_products(year, selected_id=None):
@@ -75,7 +92,11 @@ class Command(BaseCommand):
         parser.add_argument("--quantity", type=int, default=10)
         parser.add_argument(
             "--crear", action="store_true",
-            help="Escribe SOLO en BD aislada bookexpress_demo_*.",
+            help="Registra una prueba delimitada; necesita base demo o --local.",
+        )
+        parser.add_argument(
+            "--local", action="store_true",
+            help="Autoriza pruebas claramente identificadas solo en bookexpress_db local.",
         )
 
     def handle(self, *args, **options):
@@ -137,6 +158,19 @@ class Command(BaseCommand):
                 "y su etapa inicial. Revisa Configuración de CRM."
             )
 
+        campaigns = list(Campaign.objects.filter(
+            year=year,
+            campaign_type=Campaign.CampaignType.SCHOOL,
+            status=Campaign.Status.ACTIVE,
+        ).order_by("pk")[:2])
+        if len(campaigns) != 1:
+            raise CommandError(
+                f"Debe existir exactamente una campaña escolar activa para {year}. "
+                "Revísala en CRM → Campañas; no se creará otra campaña."
+            )
+        campaign = campaigns[0]
+
+        self.stdout.write(f"Campaña activa que se reutilizará: {campaign.name}")
         self.stdout.write(
             "Recorrido propuesto: colegio DEMO → oportunidad → proyección "
             "→ cotización en BORRADOR → revisión manual en CRM → "
@@ -145,16 +179,21 @@ class Command(BaseCommand):
         if not options["crear"]:
             self.stdout.write(self.style.SUCCESS(
                 "Vista previa terminada. No se cambió ningún registro. "
-                "Para generar la demostración usa una base bookexpress_demo_* "
-                "con --crear."
+                "Para crear un escenario de prueba en tu PostgreSQL local "
+                "usa --crear --local."
             ))
             return
 
-        if not _is_demo_database():
+        if options["local"] and not _is_local_dev_database():
             raise CommandError(
-                "Operación bloqueada. --crear solo se permite cuando DEBUG=True "
-                "y DB_NAME comienza con bookexpress_demo_. Clona antes tu "
-                "base local de desarrollo; no utilices producción."
+                "Operación bloqueada. --local solo está disponible en "
+                "bookexpress_db con PostgreSQL local y DEBUG=True. "
+                "No ejecutes datos de demostración en producción."
+            )
+        if not (_is_demo_database() or (options["local"] and _is_local_dev_database())):
+            raise CommandError(
+                "Operación bloqueada. Para preparar datos en tu base local "
+                "de desarrollo ejecuta --crear --local. Nunca en producción."
             )
 
         User = get_user_model()
@@ -164,7 +203,6 @@ class Command(BaseCommand):
                 "No existe un superusuario activo para registrar el caso de prueba."
             )
 
-        code = f"BE-DEMO-{year}"
         demo_code = f"DEMO{year}S{school.pk}"[:24]
         with transaction.atomic():
             existing = School.objects.filter(book_express_code=demo_code).first()
@@ -177,24 +215,9 @@ class Command(BaseCommand):
                 ))
                 return
 
-            campaign, _ = Campaign.objects.get_or_create(
-                code=code,
-                defaults={
-                    "name": f"{DEMO_PREFIX} Campaña {year}",
-                    "year": year,
-                    "campaign_type": Campaign.CampaignType.SCHOOL,
-                    "status": Campaign.Status.ACTIVE,
-                    "created_by": actor,
-                },
-            )
-            if campaign.year != year or campaign.status == Campaign.Status.CLOSED:
-                raise CommandError(
-                    "La campaña de demostración existe con un año o estado incompatible."
-                )
-
             demo_school = School.objects.create(
                 book_express_code=demo_code,
-                name=f"{DEMO_PREFIX} {school.name}"[:220],
+                name=f"{DEMO_PREFIX} Colegio de demostración {year}"[:220],
                 notes=(
                     f"Escenario de prueba basado en el colegio de referencia #{school.pk}. "
                     "NO es una negociación ni adopción real."
@@ -261,7 +284,7 @@ class Command(BaseCommand):
             f"#{quotation.pk} EN BORRADOR."
         ))
         self.stdout.write(
-            "Abre el CRM de la base demo: completa la condición editorial, "
+            "Abre el CRM de esta base local: completa la condición editorial, "
             "envía y acepta la cotización SOLO COMO PRUEBA, "
             "confirma la adopción ficticia y genera pedidos desde Compras. "
             "Después prueba recepciones parciales y traslados reales de DEMO."
