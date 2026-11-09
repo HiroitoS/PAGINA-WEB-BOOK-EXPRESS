@@ -22,6 +22,8 @@ class Migration(migrations.Migration):
                 ("created_at", models.DateTimeField(auto_now_add=True, verbose_name="Fecha de creación")),
                 ("updated_at", models.DateTimeField(auto_now=True, verbose_name="Fecha de actualización")),
                 ("reference", models.UUIDField(default=uuid.uuid4, editable=False, unique=True)),
+                ("idempotency_key", models.UUIDField(unique=True)),
+                ("request_hash", models.CharField(max_length=64)),
                 ("operation_name", models.CharField(blank=True, max_length=180)),
                 ("responsible_name", models.CharField(max_length=180)),
                 ("needed_on", models.DateField(blank=True, null=True)),
