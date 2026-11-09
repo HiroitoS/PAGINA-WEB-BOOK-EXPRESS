@@ -6,7 +6,7 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase, override_settings
+from django.test import TestCase
 
 from catalog.models import Grade, Level, Product, ProductPrice, Provider
 from crm.models import (
@@ -36,6 +36,14 @@ class DemoSeedTests(TestCase):
             product=cls.product, year=2027, campaign="Campaña escolar",
             price=Decimal("95.00"), cost_price=Decimal("57.00"),
             is_active=True,
+        )
+        cls.campaign = Campaign.objects.create(
+            code="SCHOOL-2027",
+            name="Campaña escolar 2027",
+            year=2027,
+            campaign_type=Campaign.CampaignType.SCHOOL,
+            status=Campaign.Status.ACTIVE,
+            created_by=cls.actor,
         )
         cls.pipeline = Pipeline.objects.create(
             code="CRM-PIPELINE-DEMO-TEST", name="Pipeline de test",
@@ -71,6 +79,43 @@ class DemoSeedTests(TestCase):
             call_command("preparar_demo_erp", *self.params(), "--crear", stdout=StringIO())
         self.assertEqual(School.objects.count(), 1)
 
+    def test_local_necesita_autorizacion_explicita(self):
+        with patch(
+            "crm.management.commands.preparar_demo_erp._is_local_dev_database",
+            return_value=True,
+        ):
+            with self.assertRaisesMessage(CommandError, "Operación bloqueada"):
+                call_command("preparar_demo_erp", *self.params(), "--crear", stdout=StringIO())
+
+            with patch(
+                "crm.management.commands.preparar_demo_erp._is_demo_database",
+                return_value=False,
+            ):
+                call_command(
+                    "preparar_demo_erp", *self.params(),
+                    "--crear", "--local", stdout=StringIO(),
+                )
+        self.assertEqual(School.objects.count(), 2)
+        self.assertEqual(Campaign.objects.count(), 1)
+
+    def test_local_bloqueado_fuera_del_entorno_permitido(self):
+        with patch(
+            "crm.management.commands.preparar_demo_erp._is_local_dev_database",
+            return_value=False,
+        ):
+            with self.assertRaisesMessage(CommandError, "Operación bloqueada"):
+                call_command(
+                    "preparar_demo_erp", *self.params(),
+                    "--crear", "--local", stdout=StringIO(),
+                )
+        self.assertEqual(School.objects.count(), 1)
+
+    def test_no_crea_campana_activa_por_si_mismo(self):
+        Campaign.objects.all().delete()
+        with self.assertRaisesMessage(CommandError, "campaña escolar activa"):
+            call_command("preparar_demo_erp", *self.params(), stdout=StringIO())
+        self.assertEqual(School.objects.count(), 1)
+
     def test_crea_demostracion_con_producto_real_y_cotizacion_en_borrador(self):
         with patch(
             "crm.management.commands.preparar_demo_erp._is_demo_database",
@@ -96,4 +141,6 @@ class DemoSeedTests(TestCase):
         self.assertEqual(quotation.items.get().quantity, 10)
         self.assertEqual(quotation.items.get().pvp, Decimal("95.00"))
         self.assertEqual(quotation.items.get().product_id, self.product.pk)
-        self.assertEqual(Campaign.objects.filter(code="BE-DEMO-2027").count(), 1)
+        self.assertEqual(Campaign.objects.count(), 1)
+        self.assertEqual(Campaign.objects.get().pk, self.campaign.pk)
+        self.assertEqual(opportunity.campaign_id, self.campaign.pk)
