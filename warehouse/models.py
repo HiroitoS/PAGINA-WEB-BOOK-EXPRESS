@@ -402,6 +402,8 @@ class InternalStockRequest(TimeStampedModel):
         CANCELLED = "cancelled", "Anulada"
 
     reference = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    idempotency_key = models.UUIDField(unique=True)
+    request_hash = models.CharField(max_length=64)
     source = models.ForeignKey(
         WarehouseLocation, on_delete=models.PROTECT,
         related_name="stock_requests_origin",
