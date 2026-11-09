@@ -1,7 +1,7 @@
 import unicodedata
 
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import CharField, Count, F, Func, Prefetch, Q, Value
 from django.http import HttpResponse
 from django.utils import timezone
@@ -110,6 +110,8 @@ from .serializers import (
     AdoptionConfirmSerializer,
     AdoptionSerializer,
     CampaignSerializer,
+    CampaignCreateSerializer,
+    CampaignUpdateSerializer,
     CommercialActivityCreateSerializer,
     CommercialActivityEvidenceCreateSerializer,
     CommercialActivityEvidenceSerializer,
@@ -605,13 +607,56 @@ class CRMReportExportAPIView(
         return response
 
 
-class CampaignViewSet(viewsets.ReadOnlyModelViewSet):
+class CampaignViewSet(viewsets.ModelViewSet):
+    """Campañas desde CRM; sin terminal, sin eliminación ni edición de año/tipo."""
+
     permission_classes = [EsUsuarioCRM]
     pagination_class = None
     serializer_class = CampaignSerializer
+    http_method_names = ["get", "post", "patch", "head", "options"]
 
     def get_queryset(self):
         return Campaign.objects.all().order_by("-year", "name")
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return CampaignCreateSerializer
+        if self.action == "partial_update":
+            return CampaignUpdateSerializer
+        return CampaignSerializer
+
+    def _can_manage(self, request):
+        if not usuario_tiene_permiso(request.user, "crm.manage_campaigns"):
+            raise PermissionDenied("No tienes autorización para gestionar campañas.")
+
+    def create(self, request, *args, **kwargs):
+        self._can_manage(request)
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            with transaction.atomic():
+                campaign = serializer.save()
+        except IntegrityError:
+            raise serializers.ValidationError({
+                "year": "Ya existe una campaña con ese año y tipo. Actualiza la lista.",
+            }) from None
+        return Response(
+            CampaignSerializer(campaign).data, status=status.HTTP_201_CREATED,
+        )
+
+    def partial_update(self, request, *args, **kwargs):
+        self._can_manage(request)
+        # Lock prevents two simultaneous edits to the same campaign.
+        with transaction.atomic():
+            campaign = Campaign.objects.select_for_update().get(
+                pk=kwargs["pk"],
+            ) if Campaign.objects.filter(pk=kwargs["pk"]).exists() else self.get_object()
+            serializer = self.get_serializer(
+                campaign, data=request.data, partial=True,
+            )
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+        return Response(CampaignSerializer(campaign).data)
 
 
 class PipelineViewSet(viewsets.ReadOnlyModelViewSet):
