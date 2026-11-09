@@ -1,4 +1,6 @@
 """Solicitudes internas de mercadería: autorización sin reservas ni salida de stock."""
+import hashlib
+import json
 from django.core.paginator import EmptyPage, Paginator
 from django.db import transaction
 from django.db.models import Q
@@ -24,6 +26,7 @@ class RequestLineInput(serializers.Serializer):
 
 
 class RequestInput(serializers.Serializer):
+    idempotency_key = serializers.UUIDField()
     source_id = serializers.PrimaryKeyRelatedField(
         source="source", queryset=WarehouseLocation.objects.filter(is_active=True),
     )
@@ -100,7 +103,7 @@ class RequestOutput(serializers.ModelSerializer):
     class Meta:
         model = InternalStockRequest
         fields = (
-            "id", "reference", "source", "source_name", "destination",
+            "id", "reference", "idempotency_key", "source", "source_name", "destination",
             "destination_name", "operation_name", "responsible_name",
             "needed_on", "notes", "status", "created_at", "updated_at",
             "approved_at", "created_by", "approved_by", "created_by_name", "approved_by_name", "items", "events",
@@ -190,25 +193,49 @@ class InternalRequestViewSet(viewsets.ViewSet):
         serializer.is_valid(raise_exception=True)
         values = dict(serializer.validated_data)
         items = values.pop("items")
+        request_key = values.pop("idempotency_key")
+        canonical = json.dumps({
+            "source_id": values["source"].pk,
+            "destination_id": values["destination"].pk,
+            "operation_name": values.get("operation_name", ""),
+            "responsible_name": values["responsible_name"],
+            "needed_on": values.get("needed_on").isoformat() if values.get("needed_on") else "",
+            "notes": values.get("notes", ""),
+            "items": sorted(
+                [(row["product"].pk, row["quantity"]) for row in items],
+            ),
+        }, sort_keys=True, ensure_ascii=False)
+        fingerprint = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         with transaction.atomic():
-            record = InternalStockRequest.objects.create(
-                **values, created_by=request.user,
+            record, created = InternalStockRequest.objects.get_or_create(
+                idempotency_key=request_key,
+                defaults={
+                    **values, "request_hash": fingerprint, "created_by": request.user,
+                },
             )
-            InternalStockRequestItem.objects.bulk_create([
-                InternalStockRequestItem(
-                    request=record, product=row["product"],
-                    product_name_snapshot=row["product"].name,
-                    product_code_snapshot=row["product"].code,
-                    quantity_requested=row["quantity"],
+            if record.created_by_id != request.user.pk or record.request_hash != fingerprint:
+                raise ValidationError({
+                    "detail": "Los datos de esta solicitud cambiaron. Inicia una nueva solicitud para continuar.",
+                })
+            if created:
+                InternalStockRequestItem.objects.bulk_create([
+                    InternalStockRequestItem(
+                        request=record, product=row["product"],
+                        product_name_snapshot=row["product"].name,
+                        product_code_snapshot=row["product"].code,
+                        quantity_requested=row["quantity"],
+                    )
+                    for row in items
+                ])
+                InternalStockRequestEvent.objects.create(
+                    request=record, actor=request.user,
+                    action="created", to_status=record.status,
+                    note="Solicitud registrada para revisión.",
                 )
-                for row in items
-            ])
-            InternalStockRequestEvent.objects.create(
-                request=record, actor=request.user,
-                action="created", to_status=record.status,
-                note="Solicitud registrada para revisión.",
-            )
-        return Response(RequestOutput(self._get(record.pk)).data, status=status.HTTP_201_CREATED)
+        return Response(
+            RequestOutput(self._get(record.pk)).data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
 
     def _transition(self, request, pk, action_name):
         permission = (
