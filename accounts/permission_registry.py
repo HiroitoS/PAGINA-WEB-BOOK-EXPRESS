@@ -158,6 +158,27 @@ FUNCTIONAL_PERMISSIONS = (
         "requires": ["crm.view_crm"],
     },
     {
+        "code": "warehouse.view_internal_stock_requests",
+        "category": "Almacén",
+        "label": "Consultar solicitudes de mercadería",
+        "description": "Permite consultar requerimientos internos y su historial.",
+        "requires": [],
+    },
+    {
+        "code": "warehouse.manage_internal_stock_requests",
+        "category": "Almacén",
+        "label": "Registrar solicitudes de mercadería",
+        "description": "Permite solicitar mercadería y anular solicitudes propias pendientes.",
+        "requires": ["warehouse.view_internal_stock_requests"],
+    },
+    {
+        "code": "warehouse.approve_internal_stock_requests",
+        "category": "Almacén",
+        "label": "Aprobar solicitudes de mercadería",
+        "description": "Permite autorizar o rechazar requerimientos, sin modificar inventario.",
+        "requires": ["warehouse.view_internal_stock_requests"],
+    },
+    {
         "code": "crm.export_crm_reports",
         "category": "CRM",
         "label": "Exportar reportes CRM",
