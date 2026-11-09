@@ -156,6 +156,14 @@ class InternalRequestViewSet(viewsets.ViewSet):
         self._require(request.user, "view_internal_stock_requests")
         return Response(RequestOutput(self._get(pk)).data)
 
+    @action(detail=False, methods=["get"], url_path="ubicaciones")
+    def locations(self, request):
+        self._require(request.user, "view_internal_stock_requests")
+        return Response([
+            {"id": item.pk, "name": item.name, "kind": item.kind}
+            for item in WarehouseLocation.objects.filter(is_active=True).order_by("name", "pk")
+        ])
+
     @action(detail=False, methods=["get"], url_path="productos")
     def products(self, request):
         self._require(request.user, "view_internal_stock_requests")
