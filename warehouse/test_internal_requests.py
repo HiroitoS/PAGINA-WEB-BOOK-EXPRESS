@@ -1,5 +1,6 @@
 """Pruebas P-09: requerimientos, permisos e historial sin mover inventario."""
 from datetime import timedelta
+from uuid import uuid4
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
@@ -57,6 +58,7 @@ class InternalRequestTests(TestCase):
 
     def payload(self, **updates):
         data = {
+            "idempotency_key": str(uuid4()),
             "source_id": self.main.pk, "destination_id": self.store.pk,
             "responsible_name": "Encargado de tienda",
             "needed_on": (timezone.localdate() + timedelta(days=2)).isoformat(),
@@ -170,6 +172,23 @@ class InternalRequestTests(TestCase):
         self.assertEqual(rows.data["results"][0]["items"][0]["product_code_snapshot"], "REQ-001")
         self.assertEqual(self.client_as(self.worker).get(base, {"status": "desconocido"}).status_code, 400)
         self.assertEqual(self.client_as(self.worker).get(base, {"page": "0"}).status_code, 400)
+
+    def test_reintento_de_registro_no_duplica_lineas_ni_historial(self):
+        base = "/api/admin/erp/almacen/solicitudes-internas/"
+        data = self.payload()
+        client = self.client_as(self.worker)
+        first = client.post(base, data, format="json")
+        second = client.post(base, data, format="json")
+        self.assertEqual(first.status_code, 201, first.data)
+        self.assertEqual(second.status_code, 200, second.data)
+        self.assertEqual(first.data["id"], second.data["id"])
+        self.assertEqual(InternalStockRequest.objects.count(), 1)
+        self.assertEqual(InternalStockRequestItem.objects.count(), 2)
+        self.assertEqual(InternalStockRequestEvent.objects.count(), 1)
+
+        changed = client.post(base, {**data, "responsible_name": "Otra persona"}, format="json")
+        self.assertEqual(changed.status_code, 400)
+        self.assertEqual(InternalStockRequest.objects.count(), 1)
 
     def test_no_expone_metodos_para_modificar_solicitud_confirmada(self):
         url = "/api/admin/erp/almacen/solicitudes-internas/"
