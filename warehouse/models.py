@@ -390,3 +390,107 @@ class StockTransfer(TimeStampedModel):
             ),
         ]
 
+
+
+class InternalStockRequest(TimeStampedModel):
+    """Solicitud para preparar mercadería, NO reserva ni movimiento de inventario."""
+
+    class Status(models.TextChoices):
+        SUBMITTED = "submitted", "Pendiente de aprobación"
+        APPROVED = "approved", "Aprobada para preparación"
+        REJECTED = "rejected", "Rechazada"
+        CANCELLED = "cancelled", "Anulada"
+
+    reference = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    source = models.ForeignKey(
+        WarehouseLocation, on_delete=models.PROTECT,
+        related_name="stock_requests_origin",
+    )
+    destination = models.ForeignKey(
+        WarehouseLocation, on_delete=models.PROTECT,
+        related_name="stock_requests_destination",
+    )
+    operation_name = models.CharField(max_length=180, blank=True)
+    responsible_name = models.CharField(max_length=180)
+    needed_on = models.DateField(null=True, blank=True)
+    notes = models.CharField(max_length=500, blank=True)
+    status = models.CharField(
+        max_length=20, choices=Status.choices,
+        default=Status.SUBMITTED, db_index=True,
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="stock_requests_created",
+    )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        null=True, blank=True, related_name="stock_requests_approved",
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+        permissions = [
+            ("view_internal_stock_requests", "Puede consultar solicitudes internas"),
+            ("manage_internal_stock_requests", "Puede registrar solicitudes internas"),
+            ("approve_internal_stock_requests", "Puede aprobar solicitudes internas"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=~Q(source=F("destination")),
+                name="wh_req_distinct_locations",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["status", "created_at"],
+                name="wh_req_status_date_idx",
+            ),
+        ]
+
+
+class InternalStockRequestItem(TimeStampedModel):
+    request = models.ForeignKey(
+        InternalStockRequest, on_delete=models.PROTECT, related_name="items",
+    )
+    product = models.ForeignKey(
+        "catalog.Product", on_delete=models.PROTECT,
+        related_name="internal_stock_request_items",
+    )
+    product_name_snapshot = models.CharField(max_length=250)
+    product_code_snapshot = models.CharField(max_length=100, blank=True)
+    quantity_requested = models.PositiveIntegerField(
+        validators=[MinValueValidator(1)],
+    )
+
+    class Meta:
+        ordering = ["pk"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["request", "product"], name="wh_req_item_unique_product",
+            ),
+            models.CheckConstraint(
+                condition=Q(quantity_requested__gte=1),
+                name="wh_req_item_positive",
+            ),
+        ]
+
+
+class InternalStockRequestEvent(TimeStampedModel):
+    """Registro de cambios, solamente agregado por el servicio de negocio."""
+
+    request = models.ForeignKey(
+        InternalStockRequest, on_delete=models.PROTECT,
+        related_name="events",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="stock_request_events",
+    )
+    action = models.CharField(max_length=30)
+    from_status = models.CharField(max_length=20, blank=True)
+    to_status = models.CharField(max_length=20)
+    note = models.CharField(max_length=500, blank=True)
+
+    class Meta:
+        ordering = ["created_at", "pk"]
