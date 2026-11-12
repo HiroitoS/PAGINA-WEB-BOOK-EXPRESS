@@ -134,3 +134,107 @@ class PurchaseOrderEvent(TimeStampedModel):
     class Meta:
         ordering = ["created_at", "pk"]
         indexes = [models.Index(fields=["order", "created_at"], name="purch_event_order_time_idx")]
+
+
+class SupplierInvoice(TimeStampedModel):
+    """Documento de compra para conciliación, NO ingreso físico ni CxP contabilizada."""
+
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Pendiente de conciliación"
+
+    reference = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    provider = models.ForeignKey(
+        "catalog.Provider", on_delete=models.PROTECT, related_name="supplier_invoices",
+    )
+    document_number = models.CharField(max_length=80)
+    issued_on = models.DateField()
+    currency = models.CharField(max_length=3, default="PEN")
+    total_document = models.DecimalField(
+        max_digits=14, decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.00"))],
+    )
+    status = models.CharField(
+        max_length=12, choices=Status.choices, default=Status.DRAFT,
+    )
+    notes = models.CharField(max_length=1000, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="supplier_invoices_created",
+    )
+
+    class Meta:
+        ordering = ["-issued_on", "-pk"]
+        permissions = [
+            ("view_supplier_invoices", "Puede consultar facturas de editoriales"),
+            ("manage_supplier_invoices", "Puede registrar y corregir borradores de factura"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                models.functions.Upper(models.functions.Trim("document_number")),
+                "provider",
+                name="purch_invoice_provider_number_ci",
+            ),
+            models.CheckConstraint(
+                condition=Q(total_document__gte=0),
+                name="purch_invoice_total_nonnegative",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.provider_id} · {self.document_number}"
+
+
+class SupplierInvoiceLine(TimeStampedModel):
+    """Una factura usa el ítem existente del pedido, nunca crea un libro o stock."""
+
+    invoice = models.ForeignKey(
+        SupplierInvoice, on_delete=models.PROTECT, related_name="items",
+    )
+    order_item = models.ForeignKey(
+        PurchaseOrderItem, on_delete=models.PROTECT,
+        related_name="supplier_invoice_items",
+    )
+    quantity_billed = models.PositiveIntegerField(
+        validators=[MinValueValidator(1)],
+    )
+    unit_cost_billed = models.DecimalField(
+        max_digits=12, decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.00"))],
+    )
+    expected_unit_cost_snapshot = models.DecimalField(
+        max_digits=12, decimal_places=2,
+    )
+
+    class Meta:
+        ordering = ["pk"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["invoice", "order_item"],
+                name="purch_invoice_once_per_order_item",
+            ),
+            models.CheckConstraint(
+                condition=Q(quantity_billed__gte=1),
+                name="purch_invoice_line_positive",
+            ),
+            models.CheckConstraint(
+                condition=Q(unit_cost_billed__gte=0),
+                name="purch_invoice_cost_nonnegative",
+            ),
+        ]
+
+
+class SupplierInvoiceEvent(TimeStampedModel):
+    """Auditoría de registro y corrección de borradores, preserva contenido anterior."""
+
+    invoice = models.ForeignKey(
+        SupplierInvoice, on_delete=models.PROTECT, related_name="events",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="supplier_invoice_events",
+    )
+    action = models.CharField(max_length=30)
+    detail = models.JSONField(default=dict)
+
+    class Meta:
+        ordering = ["created_at", "pk"]
