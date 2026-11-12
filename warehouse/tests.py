@@ -188,6 +188,7 @@ class RecepcionMercaderiaTests(TestCase):
         self.assertEqual(totals.data[0]["physical"], 102)
         self.assertEqual(totals.data[0]["unvalued_units"], 0)
         self.assertEqual(round(float(totals.data[0]["value_reference"]), 2), 2631.60)
+        self.assertEqual(totals.data[0]["unit_cost_average_reference"], "25.80")
         resumen = client.get("/api/admin/erp/almacen/inventario/resumen/")
         self.assertEqual(resumen.status_code, 200)
         self.assertEqual(resumen.data["physical"], 102)
