@@ -1,5 +1,5 @@
 """API de Inventario y movimientos; separada de Recepción sin cambiar rutas."""
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Sum, F, Q, OuterRef, Subquery, DecimalField, ExpressionWrapper, Case, When, Value, IntegerField
@@ -292,6 +292,16 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
             value = (row["value_reference"] or Decimal("0")) + (
                 out.get("value_delta") or Decimal("0")
             )
+            unvalued = row["unvalued_units"] + (out.get("unvalued_delta") or 0)
+            # El mismo libro puede tener lotes con costos históricos distintos.
+            # No afirmar que hay un único costo si falta alguno.
+            average_cost = (
+                (value / Decimal(available)).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP,
+                )
+                if available > 0 and unvalued == 0
+                else None
+            )
             result.append({
                 "product_id": row["product_id"],
                 "product": row["product__name"],
@@ -301,7 +311,8 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
                 "nonconforming": row["nonconforming"],
                 "extra_included": row["extra_included"],
                 "physical": available + row["nonconforming"],
-                "value_reference": str(value) if row["value_reference"] is not None else None,
-                "unvalued_units": row["unvalued_units"] + (out.get("unvalued_delta") or 0),
+                "value_reference": str(value) if unvalued == 0 else None,
+                "unit_cost_average_reference": str(average_cost) if average_cost is not None else None,
+                "unvalued_units": unvalued,
             })
         return Response(result)
