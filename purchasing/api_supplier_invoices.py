@@ -292,12 +292,14 @@ class SupplierInvoiceViewSet(viewsets.ViewSet):
     def partial_update(self, request, pk=None):
         self._require(request, "manage_supplier_invoices")
         # Se reemplaza TODO el borrador: se conserva el antes/después auditado.
-        serializer = SupplierInvoiceInput(data=request.data)
-        serializer.is_valid(raise_exception=True)
         with transaction.atomic():
             record = get_object_or_404(
                 SupplierInvoice.objects.select_for_update(), pk=pk,
             )
+            serializer = SupplierInvoiceInput(
+                instance=record, data=request.data,
+            )
+            serializer.is_valid(raise_exception=True)
             if record.status != SupplierInvoice.Status.DRAFT:
                 raise ValidationError({
                     "detail": "Esta factura ya no puede editarse. Solicita una corrección autorizada.",
