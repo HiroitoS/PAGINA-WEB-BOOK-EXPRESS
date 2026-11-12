@@ -16,7 +16,12 @@ from purchasing.test_integration import GeneracionPedidosAdopcionTests
 from warehouse.models import GoodsReceipt, GoodsReceiptLine, StockEntry
 
 
-class SupplierInvoiceAPITests(GeneracionPedidosAdopcionTests):
+class SupplierInvoiceAPITests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        GeneracionPedidosAdopcionTests.setUpTestData.__func__(cls)
+
     def setUp(self):
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)
