@@ -179,6 +179,20 @@ FUNCTIONAL_PERMISSIONS = (
         "requires": ["warehouse.view_internal_stock_requests"],
     },
     {
+        "code": "purchasing.view_supplier_invoices",
+        "category": "Compras",
+        "label": "Consultar facturas de editoriales",
+        "description": "Permite revisar facturas y diferencias con los pedidos y recepciones.",
+        "requires": ["purchasing.view_purchasing"],
+    },
+    {
+        "code": "purchasing.manage_supplier_invoices",
+        "category": "Compras",
+        "label": "Registrar y corregir facturas de editoriales",
+        "description": "Permite registrar borradores económicos con historial sin cambiar inventario.",
+        "requires": ["purchasing.view_supplier_invoices"],
+    },
+    {
         "code": "crm.export_crm_reports",
         "category": "CRM",
         "label": "Exportar reportes CRM",
