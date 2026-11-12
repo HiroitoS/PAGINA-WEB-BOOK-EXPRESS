@@ -231,6 +231,10 @@ class StockTransferViewSet(viewsets.ViewSet):
                 "available": balances[(e.pk, location_id)],
                 "unit_cost": (str(e.unit_cost_snapshot)
                               if e.unit_cost_snapshot is not None else None),
+                "value_reference": (
+                    str(e.unit_cost_snapshot * balances[(e.pk, location_id)])
+                    if e.unit_cost_snapshot is not None else None
+                ),
             } for e in current],
         })
 
@@ -270,6 +274,10 @@ class StockTransferViewSet(viewsets.ViewSet):
             "available": balances.get((entry.pk, source_id), 0),
             "unit_cost": (
                 str(entry.unit_cost_snapshot)
+                if entry.unit_cost_snapshot is not None else None
+            ),
+            "value_reference": (
+                str(entry.unit_cost_snapshot * balances[(entry.pk, source_id)])
                 if entry.unit_cost_snapshot is not None else None
             ),
         } for entry in entries if balances.get((entry.pk, source_id), 0) > 0]
