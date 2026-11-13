@@ -133,6 +133,28 @@ class StockTransferTests(TestCase):
         )
         self.assertEqual(StockEntry.objects.count(), 1)
 
+    def test_cantidades_con_decimales_no_crean_traslados(self):
+        """Los libros se cuentan en unidades completas, sin error del servidor."""
+        client = self.client_as(self.actor)
+        for cantidad in ("1.5", "1.2345", "-2.3"):
+            with self.subTest(cantidad=cantidad):
+                respuesta = client.post(
+                    "/api/admin/erp/almacen/traslados/",
+                    {
+                        "stock_entry_id": self.entry.pk,
+                        "source_id": self.main.pk,
+                        "destination_id": self.store.pk,
+                        "quantity": cantidad,
+                        "idempotency_key": str(uuid4()),
+                        "entrega_confirmada": True,
+                    },
+                    format="json",
+                )
+                self.assertEqual(respuesta.status_code, 400, respuesta.data)
+        self.assertEqual(StockTransfer.objects.count(), 0)
+        self.assertEqual(saldo_en_ubicacion(self.entry, self.main.pk), 12)
+        self.assertEqual(saldo_en_ubicacion(self.entry, self.store.pk), 0)
+
     def test_sobregiro_y_salida_duplicada_son_rechazados(self):
         key = uuid4()
         registrar_traslado(
