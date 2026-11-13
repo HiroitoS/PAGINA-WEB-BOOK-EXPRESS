@@ -51,6 +51,10 @@ def consultar_consolidado(*, grupo="editorial", query="", page=1, provider_id=No
     locations = {
         loc.pk: loc.name for loc in WarehouseLocation.objects.all()
     }
+    positions_by_entry = defaultdict(list)
+    for (entry_id, location_id), amount in positions.items():
+        if amount > 0:
+            positions_by_entry[entry_id].append((location_id, amount))
     rows = {}
     unreconciled = 0
 
@@ -101,11 +105,7 @@ def consultar_consolidado(*, grupo="editorial", query="", page=1, provider_id=No
             raise ValidationError({
                 "inventario": "Se detectó un saldo negativo. Revisa los movimientos del lote.",
             })
-        placed = [
-            (location_id, amount)
-            for (entry_id, location_id), amount in positions.items()
-            if entry_id == entry.pk and amount > 0
-        ]
+        placed = positions_by_entry.get(entry.pk, [])
         placed_total = sum(amount for _, amount in placed)
         for location_id, amount in placed:
             add(entry, location_id=location_id, available=amount)
