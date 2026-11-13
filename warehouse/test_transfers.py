@@ -91,6 +91,48 @@ class StockTransferTests(TestCase):
         self.assertEqual(summary.status_code, 200, summary.data)
         self.assertEqual(summary.data["global"]["available"], 12)
 
+    def test_consolidado_muestra_global_editorial_colegio_y_almacenes(self):
+        registrar_traslado(
+            actor=self.actor, stock_entry_id=self.entry.pk,
+            source_id=self.main.pk, destination_id=self.store.pk,
+            quantity=5, idempotency_key=uuid4(), entrega_confirmada=True,
+        )
+        client = self.client_as(self.actor)
+        base = "/api/admin/erp/almacen/inventario/consolidado/"
+        by_editorial = client.get(base, {"grupo": "editorial"})
+        self.assertEqual(by_editorial.status_code, 200, by_editorial.data)
+        self.assertEqual(by_editorial.data["resumen"]["disponible"], 12)
+        self.assertEqual(by_editorial.data["resumen"]["valor_referencial"], "300.00")
+        self.assertEqual(by_editorial.data["resumen"]["unidades_sin_ubicacion"], 0)
+        self.assertEqual(by_editorial.data["resultados"][0]["costo_promedio"], "25.00")
+        self.assertEqual(by_editorial.data["resultados"][0]["disponible"], 12)
+
+        by_school = client.get(base, {"grupo": "colegio"})
+        self.assertEqual(by_school.status_code, 200, by_school.data)
+        self.assertEqual(by_school.data["resultados"][0]["grupo_nombre"], self.school.name)
+        self.assertEqual(by_school.data["resumen"]["disponible"], 12)
+        self.assertEqual(by_school.data["resumen"]["valor_referencial"], "300.00")
+
+        by_location = client.get(base, {"grupo": "almacen"})
+        self.assertEqual(by_location.status_code, 200, by_location.data)
+        self.assertEqual(by_location.data["resumen"]["disponible"], 12)
+        rows = {row["grupo_nombre"]: row for row in by_location.data["resultados"]}
+        self.assertEqual(rows[self.main.name]["disponible"], 7)
+        self.assertEqual(rows[self.store.name]["disponible"], 5)
+        self.assertEqual(rows[self.main.name]["valor_referencial"], "175.00")
+        self.assertEqual(rows[self.store.name]["valor_referencial"], "125.00")
+
+        self.assertEqual(
+            client.get(base, {"grupo": "desconocido"}).status_code, 400,
+        )
+        self.assertEqual(
+            client.get(base, {"grupo": "almacen", "pagina": "0"}).status_code, 400,
+        )
+        self.assertEqual(
+            self.client_as(self.employee).get(base).status_code, 403,
+        )
+        self.assertEqual(StockEntry.objects.count(), 1)
+
     def test_sobregiro_y_salida_duplicada_son_rechazados(self):
         key = uuid4()
         registrar_traslado(
