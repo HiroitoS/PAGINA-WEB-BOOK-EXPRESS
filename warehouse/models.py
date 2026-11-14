@@ -496,3 +496,108 @@ class InternalStockRequestEvent(TimeStampedModel):
 
     class Meta:
         ordering = ["created_at", "pk"]
+
+
+class DistributionOperation(TimeStampedModel):
+    """Plan logístico independiente de la modalidad original de adopción.
+
+    Planificar o cambiar la modalidad no reserva, traslada ni vende unidades.
+    """
+
+    class Mode(models.TextChoices):
+        POINT_OF_SALE = "point_of_sale", "Punto de venta"
+        FAIR = "fair", "Feria"
+        CONSIGNMENT = "consignment", "Consignación"
+
+    class Status(models.TextChoices):
+        PLANNED = "planned", "Por preparar"
+        CANCELLED = "cancelled", "Anulada"
+
+    reference = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    idempotency_key = models.UUIDField(unique=True)
+    adoption = models.ForeignKey(
+        "crm.Adoption", on_delete=models.PROTECT,
+        related_name="warehouse_distribution_operations",
+    )
+    school = models.ForeignKey(
+        "crm.School", on_delete=models.PROTECT,
+        related_name="warehouse_distribution_operations",
+    )
+    source = models.ForeignKey(
+        WarehouseLocation, on_delete=models.PROTECT,
+        related_name="distribution_operations_origin",
+    )
+    destination = models.ForeignKey(
+        WarehouseLocation, on_delete=models.PROTECT,
+        related_name="distribution_operations_destination",
+    )
+    original_mode = models.CharField(max_length=20, choices=Mode.choices, blank=True)
+    mode = models.CharField(max_length=20, choices=Mode.choices)
+    operation_name = models.CharField(max_length=180)
+    responsible_name = models.CharField(max_length=180)
+    scheduled_on = models.DateField(null=True, blank=True)
+    scheduled_until = models.DateField(null=True, blank=True)
+    notes = models.CharField(max_length=500, blank=True)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PLANNED)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="distribution_operations_created",
+    )
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+        permissions = [
+            ("view_distribution_operations", "Puede consultar distribución de mercadería"),
+            ("manage_distribution_operations", "Puede planificar y modificar distribución"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=~Q(source=F("destination")),
+                name="wh_distribution_locations_differ",
+            ),
+        ]
+
+
+class DistributionOperationLine(TimeStampedModel):
+    """Cantidad solicitada por adopción; no equivale a cantidad preparada."""
+
+    operation = models.ForeignKey(
+        DistributionOperation, on_delete=models.PROTECT, related_name="items",
+    )
+    product = models.ForeignKey(
+        "catalog.Product", on_delete=models.PROTECT,
+        related_name="distribution_operation_lines",
+    )
+    product_name_snapshot = models.CharField(max_length=250)
+    quantity_planned = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+
+    class Meta:
+        ordering = ["pk"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["operation", "product"], name="wh_distribution_item_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(quantity_planned__gte=1),
+                name="wh_distribution_quantity_positive",
+            ),
+        ]
+
+
+class DistributionOperationEvent(TimeStampedModel):
+    """Auditoría inmutable de planificación, cambio o anulación."""
+
+    operation = models.ForeignKey(
+        DistributionOperation, on_delete=models.PROTECT, related_name="events",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="distribution_operation_events",
+    )
+    action = models.CharField(max_length=24)
+    reason = models.CharField(max_length=500, blank=True)
+    previous = models.JSONField(default=dict, blank=True)
+    current = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["created_at", "pk"]
