@@ -217,7 +217,7 @@ class Command(BaseCommand):
 
             demo_school = School.objects.create(
                 book_express_code=demo_code,
-                name=f"{DEMO_PREFIX} Colegio de demostración {year}"[:220],
+                name=f"{DEMO_PREFIX} {school.name} · {year}"[:220],
                 notes=(
                     f"Escenario de prueba basado en el colegio de referencia #{school.pk}. "
                     "NO es una negociación ni adopción real."
