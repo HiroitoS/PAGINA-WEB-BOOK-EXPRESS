@@ -7,6 +7,7 @@ from collections import defaultdict
 
 from django.core.paginator import EmptyPage, Paginator
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
@@ -191,11 +192,33 @@ class DistributionOperationViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=["get"], url_path="opciones")
     def options(self, request):
+        """Buscar cualquier adopción vigente por colegio o campaña, sin límite oculto."""
         self._authorize(request)
-        # Solo adopciones confirmadas y vigentes, sin exponer precios internos.
+        search = request.query_params.get("buscar", "").strip()
+        year = request.query_params.get("anio", "").strip()
+        raw_page = request.query_params.get("page", "1").strip()
+        if len(search) > 100:
+            raise ValidationError({"buscar": "Busca por un nombre de hasta 100 caracteres."})
+        if year and (len(year) != 4 or not year.isdecimal() or int(year) < 2000):
+            raise ValidationError({"anio": "Indica un año de campaña válido."})
+        if not raw_page.isdecimal() or int(raw_page) < 1:
+            raise ValidationError({"page": "Selecciona una página válida."})
+
         adoptions = Adoption.objects.filter(is_current=True).select_related(
-            "school",
-        ).prefetch_related("items").order_by("-confirmed_at", "-pk")[:100]
+            "school", "campaign",
+        ).prefetch_related("items").order_by("-confirmed_at", "-pk")
+        if search:
+            adoptions = adoptions.filter(
+                Q(school_name_snapshot__icontains=search)
+                | Q(campaign_name_snapshot__icontains=search)
+            )
+        if year:
+            adoptions = adoptions.filter(campaign__year=int(year))
+        pages = Paginator(adoptions, 20)
+        try:
+            selected = pages.page(int(raw_page))
+        except EmptyPage:
+            raise ValidationError({"page": "No existen adopciones en esa página."})
         locations = WarehouseLocation.objects.filter(is_active=True).order_by("name")
         return Response({
             "adoptions": [
@@ -209,8 +232,13 @@ class DistributionOperationViewSet(viewsets.ViewSet):
                         for item in record.items.all()
                     ],
                 }
-                for record in adoptions
+                for record in selected
             ],
+            "adoptions_meta": {
+                "count": pages.count,
+                "page": selected.number,
+                "pages": pages.num_pages,
+            },
             "locations": [
                 {"id": loc.pk, "name": loc.name, "kind": loc.kind}
                 for loc in locations
