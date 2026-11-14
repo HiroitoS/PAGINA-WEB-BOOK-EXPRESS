@@ -6,6 +6,7 @@ from warehouse.api_inventory import InventoryEntryViewSet
 from warehouse.api_locations import WarehouseLocationViewSet
 from warehouse.api_transfers import StockTransferViewSet
 from warehouse.api_internal_requests import InternalRequestViewSet
+from warehouse.api_distribution import DistributionOperationViewSet
 
 router = DefaultRouter()
 router.register("recepciones", GoodsReceiptViewSet, basename="recepcion-mercaderia")
@@ -15,5 +16,6 @@ router.register("inventario", InventoryEntryViewSet, basename="inventario")
 router.register("ubicaciones", WarehouseLocationViewSet, basename="ubicaciones-almacen")
 router.register("traslados", StockTransferViewSet, basename="traslados-almacen")
 router.register("solicitudes-internas", InternalRequestViewSet, basename="solicitudes-internas-almacen")
+router.register("operaciones-distribucion", DistributionOperationViewSet, basename="operaciones-distribucion")
 
 urlpatterns = [path("", include(router.urls))]
