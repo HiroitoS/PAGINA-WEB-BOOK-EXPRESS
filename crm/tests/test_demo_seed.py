@@ -144,3 +144,67 @@ class DemoSeedTests(TestCase):
         self.assertEqual(Campaign.objects.count(), 1)
         self.assertEqual(Campaign.objects.get().pk, self.campaign.pk)
         self.assertEqual(opportunity.campaign_id, self.campaign.pk)
+
+    def test_lote_selecciona_colegios_y_no_duplica_borradores(self):
+        segundo = School.objects.create(
+            name="Otro colegio importado", created_by=self.actor,
+        )
+        otra_editorial = Provider.objects.create(name="Editorial para la segunda prueba")
+        segundo_libro = Product.objects.create(
+            name="Comunicación del catálogo", code="DEMO-COM4",
+            provider=otra_editorial, level=self.level, grade=self.grade,
+            commercial_line=Product.CommercialLine.SCHOOL_TEXT,
+        )
+        ProductPrice.objects.create(
+            product=segundo_libro, year=2027, campaign="Campaña escolar",
+            price=Decimal("80.00"), cost_price=Decimal("50.00"),
+            is_active=True,
+        )
+
+        vista_previa = StringIO()
+        call_command(
+            "preparar_demo_erp_lote", "--year", "2027", "--cantidad", "2",
+            stdout=vista_previa,
+        )
+        self.assertIn("No se guardó ningún registro", vista_previa.getvalue())
+        self.assertEqual(School.objects.count(), 2)
+        self.assertFalse(Opportunity.objects.exists())
+
+        with patch(
+            "crm.management.commands.preparar_demo_erp_lote._is_demo_database",
+            return_value=True,
+        ), patch(
+            "crm.management.commands.preparar_demo_erp._is_demo_database",
+            return_value=True,
+        ):
+            call_command(
+                "preparar_demo_erp_lote", "--year", "2027", "--cantidad", "2",
+                "--crear", stdout=StringIO(),
+            )
+            call_command(
+                "preparar_demo_erp_lote", "--year", "2027", "--cantidad", "2",
+                "--crear", stdout=StringIO(),
+            )
+        self.assertEqual(School.objects.count(), 4)
+        self.assertEqual(Opportunity.objects.count(), 2)
+        self.assertEqual(CommercialQuotation.objects.count(), 2)
+        self.assertEqual(
+            set(CommercialQuotation.objects.values_list(
+                "items__product__provider_id", flat=True,
+            )),
+            {self.provider.pk, otra_editorial.pk},
+        )
+        self.assertTrue(School.objects.filter(pk=segundo.pk).exists())
+        self.assertTrue(all(
+            quotation.status == CommercialQuotation.Status.DRAFT
+            for quotation in CommercialQuotation.objects.all()
+        ))
+
+    def test_lote_bloqueado_fuera_de_entorno_local(self):
+        School.objects.create(name="Colegio de apoyo", created_by=self.actor)
+        with self.assertRaisesMessage(CommandError, "Operación bloqueada"):
+            call_command(
+                "preparar_demo_erp_lote", "--year", "2027", "--cantidad", "2",
+                "--crear", "--local", stdout=StringIO(),
+            )
+        self.assertFalse(Opportunity.objects.exists())
