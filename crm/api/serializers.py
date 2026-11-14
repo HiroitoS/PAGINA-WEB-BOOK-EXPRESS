@@ -123,6 +123,95 @@ class CampaignSerializer(serializers.ModelSerializer):
         )
 
 
+class CampaignCreateSerializer(serializers.ModelSerializer):
+    """Alta desde CRM; el código se genera en servidor, nunca en React."""
+
+    name = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    year = serializers.IntegerField(min_value=2000, max_value=2100)
+    status = serializers.ChoiceField(
+        choices=[Campaign.Status.PLANNING, Campaign.Status.ACTIVE],
+        default=Campaign.Status.PLANNING,
+    )
+
+    class Meta:
+        model = Campaign
+        fields = (
+            "id", "code", "name", "year", "campaign_type",
+            "status", "starts_on", "ends_on",
+        )
+        read_only_fields = ("id", "code")
+
+    def validate(self, attrs):
+        year = attrs["year"]
+        kind = attrs.get("campaign_type", Campaign.CampaignType.SCHOOL)
+        if Campaign.objects.filter(year=year, campaign_type=kind).exists():
+            raise serializers.ValidationError({
+                "year": "Ya existe una campaña de este tipo para ese año. Revísala en el listado.",
+            })
+        if attrs.get("status") == Campaign.Status.ACTIVE and (
+            kind == Campaign.CampaignType.SCHOOL
+            and Campaign.objects.filter(
+                campaign_type=Campaign.CampaignType.SCHOOL,
+                status=Campaign.Status.ACTIVE,
+            ).exists()
+        ):
+            raise serializers.ValidationError({
+                "status": "Ya hay una campaña escolar activa. Ciérrala antes de activar la nueva.",
+            })
+        starts = attrs.get("starts_on")
+        ends = attrs.get("ends_on")
+        if starts and ends and ends < starts:
+            raise serializers.ValidationError({
+                "ends_on": "La fecha final no puede ser anterior a la inicial.",
+            })
+        return attrs
+
+    def create(self, validated_data):
+        year = validated_data["year"]
+        kind = validated_data.get("campaign_type", Campaign.CampaignType.SCHOOL)
+        validated_data["code"] = f"{kind.replace('_', '-').upper()}-{year}"
+        validated_data["name"] = validated_data.get("name", "").strip() or (
+            {
+                Campaign.CampaignType.SCHOOL: "Campaña escolar",
+                Campaign.CampaignType.READING_PLAN: "Plan lector",
+                Campaign.CampaignType.GENERAL: "Campaña general",
+            }[kind] + f" {year}"
+        )
+        validated_data["created_by"] = self.context["request"].user
+        return super().create(validated_data)
+
+
+class CampaignUpdateSerializer(serializers.ModelSerializer):
+    """No se permite cambiar el año o tipo de una campaña existente."""
+
+    class Meta:
+        model = Campaign
+        fields = ("name", "status", "starts_on", "ends_on")
+        extra_kwargs = {"name": {"required": False, "allow_blank": False}}
+
+    def validate(self, attrs):
+        campaign = self.instance
+        new_status = attrs.get("status", campaign.status)
+        if (
+            campaign.campaign_type == Campaign.CampaignType.SCHOOL
+            and new_status == Campaign.Status.ACTIVE
+            and Campaign.objects.filter(
+                campaign_type=Campaign.CampaignType.SCHOOL,
+                status=Campaign.Status.ACTIVE,
+            ).exclude(pk=campaign.pk).exists()
+        ):
+            raise serializers.ValidationError({
+                "status": "Ya hay una campaña escolar activa. Ciérrala antes de activar la nueva.",
+            })
+        starts = attrs.get("starts_on", campaign.starts_on)
+        ends = attrs.get("ends_on", campaign.ends_on)
+        if starts and ends and ends < starts:
+            raise serializers.ValidationError({
+                "ends_on": "La fecha final no puede ser anterior a la inicial.",
+            })
+        return attrs
+
+
 class PipelineStageSerializer(serializers.ModelSerializer):
     category_display = serializers.CharField(source="get_category_display", read_only=True)
 

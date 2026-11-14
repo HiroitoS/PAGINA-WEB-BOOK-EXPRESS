@@ -84,6 +84,44 @@ class RecepcionMercaderiaTests(TestCase):
         self.assertEqual(linea.quantity_extra, 2)
         self.assertEqual(saldos_pedido(actor=self.actor, order_id=self.pedido.pk)["productos"][0]["cantidad_pendiente"], 0)
 
+    def test_pedido_100_guia_120_fisico_120_sin_diferencia_documental(self):
+        # Documentación y conteo coinciden: 20 adicionales frente al pedido,
+        # no 20 libros faltantes ni una segunda entrada al inventario.
+        receipt = crear_borrador_recepcion(
+            actor=self.actor,
+            provider_id=self.editorial.pk,
+            document_type=GoodsReceipt.DocumentType.GUIDE,
+            document_number="G-120",
+            received_on=timezone.localdate(),
+            notes="Editorial despachó 20 adicionales respecto al pedido.",
+            lines=[{
+                "order_item_id": self.item.pk,
+                "quantity_documented": 120,
+                "quantity_arrived": 120,
+                "quantity_accepted": 100,
+                "quantity_extra": 20,
+                "quantity_observed": 0,
+            }],
+        )
+        validar_recepcion(actor=self.actor, receipt_id=receipt.pk)
+        entry = StockEntry.objects.get(receipt_line__receipt=receipt)
+        self.assertEqual(entry.quantity_available, 120)
+        self.assertEqual(entry.quantity_extra, 20)
+        self.assertFalse(ReceivingIncident.objects.filter(receipt_line__receipt=receipt).exists())
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.status, PurchaseOrder.Status.RECEIVED)
+        self.assertEqual(saldos_pedido(actor=self.actor, order_id=self.pedido.pk)["productos"][0]["cantidad_pendiente"], 0)
+
+        client = APIClient()
+        client.force_authenticate(user=self.actor)
+        response = client.get("/api/admin/erp/almacen/inventario/existencias/")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data[0]["available"], 120)
+        self.assertEqual(response.data[0]["extra_included"], 20)
+        self.assertEqual(response.data[0]["value_reference"], "3096.00")
+        self.assertEqual(registrar_entrada_recepcion(actor=self.actor, receipt_id=receipt.pk)["new_entries"], 0)
+        self.assertEqual(StockEntry.objects.count(), 1)
+
     def test_incidencias_se_crean_por_faltante_de_guia_y_no_conformes(self):
         recepcion = crear_borrador_recepcion(
             actor=self.actor, provider_id=self.editorial.pk,
@@ -188,6 +226,7 @@ class RecepcionMercaderiaTests(TestCase):
         self.assertEqual(totals.data[0]["physical"], 102)
         self.assertEqual(totals.data[0]["unvalued_units"], 0)
         self.assertEqual(round(float(totals.data[0]["value_reference"]), 2), 2631.60)
+        self.assertEqual(totals.data[0]["unit_cost_average_reference"], "25.80")
         resumen = client.get("/api/admin/erp/almacen/inventario/resumen/")
         self.assertEqual(resumen.status_code, 200)
         self.assertEqual(resumen.data["physical"], 102)

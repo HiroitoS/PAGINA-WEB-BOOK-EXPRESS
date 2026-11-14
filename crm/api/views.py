@@ -1,7 +1,9 @@
 import unicodedata
 
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.core.management import call_command
+from django.shortcuts import get_object_or_404
+from django.db import IntegrityError, transaction
 from django.db.models import CharField, Count, F, Func, Prefetch, Q, Value
 from django.http import HttpResponse
 from django.utils import timezone
@@ -110,6 +112,8 @@ from .serializers import (
     AdoptionConfirmSerializer,
     AdoptionSerializer,
     CampaignSerializer,
+    CampaignCreateSerializer,
+    CampaignUpdateSerializer,
     CommercialActivityCreateSerializer,
     CommercialActivityEvidenceCreateSerializer,
     CommercialActivityEvidenceSerializer,
@@ -605,13 +609,56 @@ class CRMReportExportAPIView(
         return response
 
 
-class CampaignViewSet(viewsets.ReadOnlyModelViewSet):
+class CampaignViewSet(viewsets.ModelViewSet):
+    """Campañas desde CRM; sin terminal, sin eliminación ni edición de año/tipo."""
+
     permission_classes = [EsUsuarioCRM]
     pagination_class = None
     serializer_class = CampaignSerializer
+    http_method_names = ["get", "post", "patch", "head", "options"]
 
     def get_queryset(self):
         return Campaign.objects.all().order_by("-year", "name")
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return CampaignCreateSerializer
+        if self.action == "partial_update":
+            return CampaignUpdateSerializer
+        return CampaignSerializer
+
+    def _can_manage(self, request):
+        if not usuario_tiene_permiso(request.user, "crm.manage_campaigns"):
+            raise PermissionDenied("No tienes autorización para gestionar campañas.")
+
+    def create(self, request, *args, **kwargs):
+        self._can_manage(request)
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            with transaction.atomic():
+                campaign = serializer.save()
+        except IntegrityError:
+            raise serializers.ValidationError({
+                "year": "Ya existe una campaña con ese año y tipo. Actualiza la lista.",
+            }) from None
+        return Response(
+            CampaignSerializer(campaign).data, status=status.HTTP_201_CREATED,
+        )
+
+    def partial_update(self, request, *args, **kwargs):
+        self._can_manage(request)
+        # Lock prevents two simultaneous edits to the same campaign.
+        with transaction.atomic():
+            campaign = get_object_or_404(
+                Campaign.objects.select_for_update(), pk=kwargs["pk"],
+            )
+            serializer = self.get_serializer(
+                campaign, data=request.data, partial=True,
+            )
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+        return Response(CampaignSerializer(campaign).data)
 
 
 class PipelineViewSet(viewsets.ReadOnlyModelViewSet):
@@ -621,6 +668,30 @@ class PipelineViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         return Pipeline.objects.filter(is_active=True).prefetch_related("stages").order_by("-is_default", "name")
+
+    @action(detail=False, methods=["post"], url_path="configurar-inicial")
+    def setup_initial(self, request):
+        """Provisiona el flujo una vez, solo cuando no existen pipelines."""
+        if not usuario_tiene_permiso(request.user, "crm.manage_campaigns"):
+            raise PermissionDenied("No tienes autorización para configurar el proceso comercial.")
+        if Pipeline.objects.exists():
+            return Response({
+                "detail": "Ya existe un proceso comercial. Revisa su configuración antes de modificarlo.",
+            }, status=status.HTTP_409_CONFLICT)
+        # Existing management command includes stage canonicalization; it is
+        # safe here exclusively because no pipeline data exists yet.
+        with transaction.atomic():
+            if Pipeline.objects.exists():
+                return Response({
+                    "detail": "El proceso comercial ya fue configurado. Actualiza la página.",
+                }, status=status.HTTP_409_CONFLICT)
+            call_command("sync_crm_pipeline", verbosity=0)
+        return Response({
+            "detail": "Proceso comercial configurado correctamente.",
+            "pipelines": PipelineSerializer(
+                self.get_queryset(), many=True,
+            ).data,
+        }, status=status.HTTP_201_CREATED)
 
 
 class CommercialTeamViewSet(viewsets.ModelViewSet):

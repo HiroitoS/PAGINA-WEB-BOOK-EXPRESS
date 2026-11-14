@@ -320,11 +320,41 @@ class StockMovement(TimeStampedModel):
         ]
 
 
+class StockTransferBatch(TimeStampedModel):
+    """Operación atómica de traslado de una guía, con idempotencia de grupo."""
+
+    idempotency_key = models.UUIDField(unique=True)
+    receipt = models.ForeignKey(
+        GoodsReceipt, on_delete=models.PROTECT, related_name="transfer_batches",
+    )
+    source = models.ForeignKey(
+        WarehouseLocation, on_delete=models.PROTECT,
+        related_name="transfer_batches_dispatched",
+    )
+    destination = models.ForeignKey(
+        WarehouseLocation, on_delete=models.PROTECT,
+        related_name="transfer_batches_received",
+    )
+    request_hash = models.CharField(max_length=64)
+    notes = models.CharField(max_length=500, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="warehouse_transfer_batches_created",
+    )
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+
+
 class StockTransfer(TimeStampedModel):
     """Movimiento confirmado de un lote entre ubicaciones. No altera el stock global."""
 
     stock_entry = models.ForeignKey(
         StockEntry, on_delete=models.PROTECT, related_name="transfers",
+    )
+    batch = models.ForeignKey(
+        StockTransferBatch, on_delete=models.PROTECT,
+        related_name="transfers", null=True, blank=True,
     )
     source = models.ForeignKey(
         WarehouseLocation, on_delete=models.PROTECT,
@@ -360,3 +390,214 @@ class StockTransfer(TimeStampedModel):
             ),
         ]
 
+
+
+class InternalStockRequest(TimeStampedModel):
+    """Solicitud para preparar mercadería, NO reserva ni movimiento de inventario."""
+
+    class Status(models.TextChoices):
+        SUBMITTED = "submitted", "Pendiente de aprobación"
+        APPROVED = "approved", "Aprobada para preparación"
+        REJECTED = "rejected", "Rechazada"
+        CANCELLED = "cancelled", "Anulada"
+
+    reference = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    idempotency_key = models.UUIDField(unique=True)
+    request_hash = models.CharField(max_length=64)
+    source = models.ForeignKey(
+        WarehouseLocation, on_delete=models.PROTECT,
+        related_name="stock_requests_origin",
+    )
+    destination = models.ForeignKey(
+        WarehouseLocation, on_delete=models.PROTECT,
+        related_name="stock_requests_destination",
+    )
+    operation_name = models.CharField(max_length=180, blank=True)
+    responsible_name = models.CharField(max_length=180)
+    needed_on = models.DateField(null=True, blank=True)
+    notes = models.CharField(max_length=500, blank=True)
+    status = models.CharField(
+        max_length=20, choices=Status.choices,
+        default=Status.SUBMITTED, db_index=True,
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="stock_requests_created",
+    )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        null=True, blank=True, related_name="stock_requests_approved",
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+        permissions = [
+            ("view_internal_stock_requests", "Puede consultar solicitudes internas"),
+            ("manage_internal_stock_requests", "Puede registrar solicitudes internas"),
+            ("approve_internal_stock_requests", "Puede aprobar solicitudes internas"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=~Q(source=F("destination")),
+                name="wh_req_distinct_locations",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["status", "created_at"],
+                name="wh_req_status_date_idx",
+            ),
+        ]
+
+
+class InternalStockRequestItem(TimeStampedModel):
+    request = models.ForeignKey(
+        InternalStockRequest, on_delete=models.PROTECT, related_name="items",
+    )
+    product = models.ForeignKey(
+        "catalog.Product", on_delete=models.PROTECT,
+        related_name="internal_stock_request_items",
+    )
+    product_name_snapshot = models.CharField(max_length=250)
+    product_code_snapshot = models.CharField(max_length=100, blank=True)
+    quantity_requested = models.PositiveIntegerField(
+        validators=[MinValueValidator(1)],
+    )
+
+    class Meta:
+        ordering = ["pk"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["request", "product"], name="wh_req_item_unique_product",
+            ),
+            models.CheckConstraint(
+                condition=Q(quantity_requested__gte=1),
+                name="wh_req_item_positive",
+            ),
+        ]
+
+
+class InternalStockRequestEvent(TimeStampedModel):
+    """Registro de cambios, solamente agregado por el servicio de negocio."""
+
+    request = models.ForeignKey(
+        InternalStockRequest, on_delete=models.PROTECT,
+        related_name="events",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="stock_request_events",
+    )
+    action = models.CharField(max_length=30)
+    from_status = models.CharField(max_length=20, blank=True)
+    to_status = models.CharField(max_length=20)
+    note = models.CharField(max_length=500, blank=True)
+
+    class Meta:
+        ordering = ["created_at", "pk"]
+
+
+class DistributionOperation(TimeStampedModel):
+    """Plan logístico independiente de la modalidad original de adopción.
+
+    Planificar o cambiar la modalidad no reserva, traslada ni vende unidades.
+    """
+
+    class Mode(models.TextChoices):
+        POINT_OF_SALE = "point_of_sale", "Punto de venta"
+        FAIR = "fair", "Feria"
+        CONSIGNMENT = "consignment", "Consignación"
+
+    class Status(models.TextChoices):
+        PLANNED = "planned", "Por preparar"
+        CANCELLED = "cancelled", "Anulada"
+
+    reference = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    idempotency_key = models.UUIDField(unique=True)
+    adoption = models.ForeignKey(
+        "crm.Adoption", on_delete=models.PROTECT,
+        related_name="warehouse_distribution_operations",
+    )
+    school = models.ForeignKey(
+        "crm.School", on_delete=models.PROTECT,
+        related_name="warehouse_distribution_operations",
+    )
+    source = models.ForeignKey(
+        WarehouseLocation, on_delete=models.PROTECT,
+        related_name="distribution_operations_origin",
+    )
+    destination = models.ForeignKey(
+        WarehouseLocation, on_delete=models.PROTECT,
+        related_name="distribution_operations_destination",
+    )
+    original_mode = models.CharField(max_length=20, choices=Mode.choices, blank=True)
+    mode = models.CharField(max_length=20, choices=Mode.choices)
+    operation_name = models.CharField(max_length=180)
+    responsible_name = models.CharField(max_length=180)
+    scheduled_on = models.DateField(null=True, blank=True)
+    scheduled_until = models.DateField(null=True, blank=True)
+    notes = models.CharField(max_length=500, blank=True)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PLANNED)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="distribution_operations_created",
+    )
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+        permissions = [
+            ("view_distribution_operations", "Puede consultar distribución de mercadería"),
+            ("manage_distribution_operations", "Puede planificar y modificar distribución"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=~Q(source=F("destination")),
+                name="wh_distribution_locations_differ",
+            ),
+        ]
+
+
+class DistributionOperationLine(TimeStampedModel):
+    """Cantidad solicitada por adopción; no equivale a cantidad preparada."""
+
+    operation = models.ForeignKey(
+        DistributionOperation, on_delete=models.PROTECT, related_name="items",
+    )
+    product = models.ForeignKey(
+        "catalog.Product", on_delete=models.PROTECT,
+        related_name="distribution_operation_lines",
+    )
+    product_name_snapshot = models.CharField(max_length=250)
+    quantity_planned = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+
+    class Meta:
+        ordering = ["pk"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["operation", "product"], name="wh_distribution_item_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(quantity_planned__gte=1),
+                name="wh_distribution_quantity_positive",
+            ),
+        ]
+
+
+class DistributionOperationEvent(TimeStampedModel):
+    """Auditoría inmutable de planificación, cambio o anulación."""
+
+    operation = models.ForeignKey(
+        DistributionOperation, on_delete=models.PROTECT, related_name="events",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="distribution_operation_events",
+    )
+    action = models.CharField(max_length=24)
+    reason = models.CharField(max_length=500, blank=True)
+    previous = models.JSONField(default=dict, blank=True)
+    current = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["created_at", "pk"]

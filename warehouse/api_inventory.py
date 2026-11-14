@@ -1,5 +1,5 @@
 """API de Inventario y movimientos; separada de Recepción sin cambiar rutas."""
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Sum, F, Q, OuterRef, Subquery, DecimalField, ExpressionWrapper, Case, When, Value, IntegerField
@@ -14,6 +14,7 @@ from warehouse.models import GoodsReceipt, StockEntry, StockMovement
 from warehouse.inventory import registrar_entrada_recepcion
 from warehouse.stock_movements import registrar_cortesia, saldo_entrada
 from warehouse.valuation import valorizar_por_editorial
+from warehouse.consolidated import consultar_consolidado
 
 
 class CourtesyInputSerializer(serializers.Serializer):
@@ -247,6 +248,24 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
             "note": "Saldo neto actual tras cortesías. Adicionales históricos incluidos; no representa deuda a editorial.",
         })
 
+    @action(detail=False, methods=["get"], url_path="consolidado")
+    def consolidated_stock(self, request):
+        """Reporte paginado de existencias globales por dimensión, sin movimientos."""
+        # get_queryset verifica permiso de inventario antes de cualquier lectura.
+        self.get_queryset()
+        raw_page = request.query_params.get("pagina", "1")
+        provider = request.query_params.get("editorial_id", "")
+        if not raw_page.isdecimal() or int(raw_page) < 1:
+            raise ValidationError({"pagina": "Selecciona una página válida."})
+        if provider and (not provider.isdecimal() or int(provider) < 1):
+            raise ValidationError({"editorial_id": "Selecciona una editorial válida."})
+        return Response(consultar_consolidado(
+            grupo=request.query_params.get("grupo", "editorial"),
+            query=request.query_params.get("buscar", "").strip(),
+            page=int(raw_page),
+            provider_id=int(provider) if provider else None,
+        ))
+
     @action(detail=False, methods=["get"], url_path="resumen-por-editorial")
     def summary_by_editorial(self, request):
         """Valorización por editorial, basada en costos históricos y movimientos."""
@@ -292,6 +311,16 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
             value = (row["value_reference"] or Decimal("0")) + (
                 out.get("value_delta") or Decimal("0")
             )
+            unvalued = row["unvalued_units"] + (out.get("unvalued_delta") or 0)
+            # El mismo libro puede tener lotes con costos históricos distintos.
+            # No afirmar que hay un único costo si falta alguno.
+            average_cost = (
+                (value / Decimal(available)).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP,
+                )
+                if available > 0 and unvalued == 0
+                else None
+            )
             result.append({
                 "product_id": row["product_id"],
                 "product": row["product__name"],
@@ -301,7 +330,8 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
                 "nonconforming": row["nonconforming"],
                 "extra_included": row["extra_included"],
                 "physical": available + row["nonconforming"],
-                "value_reference": str(value) if row["value_reference"] is not None else None,
-                "unvalued_units": row["unvalued_units"] + (out.get("unvalued_delta") or 0),
+                "value_reference": str(value) if unvalued == 0 else None,
+                "unit_cost_average_reference": str(average_cost) if average_cost is not None else None,
+                "unvalued_units": unvalued,
             })
         return Response(result)
