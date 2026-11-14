@@ -158,6 +158,20 @@ FUNCTIONAL_PERMISSIONS = (
         "requires": ["crm.view_crm"],
     },
     {
+        "code": "warehouse.view_distribution_operations",
+        "category": "Almacén",
+        "label": "Consultar distribuciones",
+        "description": "Ver planificación y cambios de modalidad de entregas por colegio.",
+        "requires": [],
+    },
+    {
+        "code": "warehouse.manage_distribution_operations",
+        "category": "Almacén",
+        "label": "Planificar distribuciones",
+        "description": "Crear, modificar o anular planificación de punto de venta, feria y consignación.",
+        "requires": ["warehouse.view_distribution_operations"],
+    },
+    {
         "code": "warehouse.view_internal_stock_requests",
         "category": "Almacén",
         "label": "Consultar solicitudes de mercadería",
