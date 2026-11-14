@@ -78,6 +78,40 @@ class DistributionAPITests(TestCase):
             ).status_code, 200,
         )
 
+    def test_opciones_busqueda_por_colegio_anio_y_paginacion(self):
+        client = self.client_as(self.user)
+        url = "/api/admin/erp/almacen/operaciones-distribucion/opciones/"
+        result = client.get(url)
+        self.assertEqual(result.status_code, 200, result.data)
+        self.assertGreaterEqual(result.data["adoptions_meta"]["count"], 1)
+        self.assertEqual(result.data["adoptions_meta"]["page"], 1)
+        self.assertIn(self.adopcion.pk, [item["id"] for item in result.data["adoptions"]])
+
+        name = self.adopcion.school_name_snapshot[:5]
+        filtered = client.get(url, {"buscar": name, "anio": self.adopcion.campaign.year})
+        self.assertEqual(filtered.status_code, 200, filtered.data)
+        self.assertIn(
+            self.adopcion.pk, [item["id"] for item in filtered.data["adoptions"]],
+        )
+
+        no_match = client.get(url, {"buscar": "colegio-que-no-existe-999"})
+        self.assertEqual(no_match.status_code, 200, no_match.data)
+        self.assertEqual(no_match.data["adoptions_meta"]["count"], 0)
+        self.assertEqual(no_match.data["adoptions"], [])
+
+        for params in (
+            {"page": "0"}, {"page": "999999"},
+            {"anio": "20xx"}, {"buscar": "a" * 101},
+        ):
+            with self.subTest(params=params):
+                invalid = client.get(url, params)
+                self.assertEqual(invalid.status_code, 400, invalid.data)
+
+        self.assertEqual(
+            self.client_as(self.outsider).get(url).status_code, 403,
+        )
+        self.assertFalse(DistributionOperation.objects.exists())
+
     def test_transiciones_todas_las_modalidades_y_repetidos_con_historial(self):
         client = self.client_as(self.user)
         for original, destino in [
