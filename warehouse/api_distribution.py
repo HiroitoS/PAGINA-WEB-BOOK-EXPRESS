@@ -218,14 +218,25 @@ class DistributionOperationViewSet(viewsets.ViewSet):
         if not raw_page.isdecimal() or int(raw_page) < 1:
             raise ValidationError({"page": "Selecciona una página válida."})
 
-        adoptions = Adoption.objects.filter(is_current=True).select_related(
+        current_adoptions = Adoption.objects.filter(is_current=True)
+        years = list(
+            current_adoptions.order_by()
+            .values_list("campaign__year", flat=True)
+            .distinct()
+            .order_by("-campaign__year")
+        )
+        adoptions = current_adoptions.select_related(
             "school", "campaign",
         ).prefetch_related("items").order_by("-confirmed_at", "-pk")
         if search:
-            adoptions = adoptions.filter(
+            query = (
                 Q(school_name_snapshot__icontains=search)
+                | Q(school__name__icontains=search)
                 | Q(campaign_name_snapshot__icontains=search)
             )
+            if search.isdecimal():
+                query |= Q(pk=int(search))
+            adoptions = adoptions.filter(query)
         if year:
             adoptions = adoptions.filter(campaign__year=int(year))
         pages = Paginator(adoptions, 20)
@@ -240,6 +251,7 @@ class DistributionOperationViewSet(viewsets.ViewSet):
                     "id": record.pk,
                     "school": record.school_name_snapshot,
                     "campaign": record.campaign_name_snapshot,
+                    "campaign_year": record.campaign.year,
                     "sale_mode": record.sale_mode,
                     "items": [
                         {"product": item.product_name_snapshot, "quantity": item.quantity}
@@ -253,6 +265,7 @@ class DistributionOperationViewSet(viewsets.ViewSet):
                 "page": selected.number,
                 "pages": pages.num_pages,
             },
+            "campaign_years": years,
             "locations": [
                 {"id": loc.pk, "name": loc.name, "kind": loc.kind}
                 for loc in locations
