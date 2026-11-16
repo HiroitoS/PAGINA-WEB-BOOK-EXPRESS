@@ -4,8 +4,6 @@ Una asignación planificada NO reserva stock físico ni genera traslado/venta.
 Todas las escrituras deben bloquear primero la fila Adoption en transacción,
 para serializar las operaciones que compiten por la misma adopción.
 """
-from collections import defaultdict
-
 from django.db.models import Sum
 from rest_framework.exceptions import ValidationError
 
