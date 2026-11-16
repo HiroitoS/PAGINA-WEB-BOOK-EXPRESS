@@ -3,10 +3,8 @@
 Una operación de esta API nunca reserva ni mueve existencias. La entrega
 física requerirá otro servicio con libro de movimientos y constancia.
 """
-from collections import defaultdict
-
 from django.core.paginator import EmptyPage, Paginator
-from django.db import IntegrityError, transaction
+from django.db import transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from rest_framework import serializers, status, viewsets
@@ -16,10 +14,18 @@ from rest_framework.response import Response
 
 from accounts.permissions import usuario_tiene_permiso
 from crm.models import Adoption
+from warehouse.distribution_allocation import (
+    allocation_summary, replace_operation_lines, validate_requested_allocation,
+)
 from warehouse.models import (
     DistributionOperation, DistributionOperationEvent, DistributionOperationLine,
     WarehouseLocation,
 )
+
+
+class AllocationItemInput(serializers.Serializer):
+    product_id = serializers.IntegerField(min_value=1)
+    quantity = serializers.IntegerField(min_value=1, max_value=2_147_483_647)
 
 
 class OperationInput(serializers.Serializer):
@@ -39,6 +45,7 @@ class OperationInput(serializers.Serializer):
     scheduled_on = serializers.DateField(required=False, allow_null=True)
     scheduled_until = serializers.DateField(required=False, allow_null=True)
     notes = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    items = serializers.ListField(child=AllocationItemInput(), min_length=1)
 
     def validate(self, data):
         if data["source"] == data["destination"]:
@@ -77,6 +84,9 @@ class OperationUpdate(serializers.Serializer):
     scheduled_until = serializers.DateField(required=False, allow_null=True)
     notes = serializers.CharField(max_length=500, required=False, allow_blank=True)
     reason = serializers.CharField(min_length=8, max_length=500)
+    items = serializers.ListField(
+        child=AllocationItemInput(), min_length=1, required=False,
+    )
 
     def validate(self, data):
         if not any(key != "reason" for key in data):
@@ -104,6 +114,10 @@ def _state(obj):
         "scheduled_until": obj.scheduled_until.isoformat() if obj.scheduled_until else None,
         "notes": obj.notes,
         "status": obj.status,
+        "items": [
+            {"product_id": row.product_id, "quantity": row.quantity_planned}
+            for row in obj.items.all()
+        ],
     }
 
 
@@ -249,18 +263,57 @@ class DistributionOperationViewSet(viewsets.ViewSet):
             ],
         })
 
+    @action(detail=False, methods=["get"], url_path="asignacion")
+    def allocation(self, request):
+        """Presupuesto de adopción para un alta o edición, sin consulta de stock."""
+        self._authorize(request)
+        raw_adoption = request.query_params.get("adoption_id", "").strip()
+        raw_operation = request.query_params.get("operation_id", "").strip()
+        if not raw_adoption.isdecimal() or int(raw_adoption) < 1:
+            raise ValidationError({"adoption_id": "Selecciona una adopción válida."})
+        if raw_operation and (
+            not raw_operation.isdecimal() or int(raw_operation) < 1
+        ):
+            raise ValidationError({"operation_id": "Selecciona una entrega válida."})
+        adoption = get_object_or_404(Adoption, pk=int(raw_adoption))
+        operation = None
+        if raw_operation:
+            operation = get_object_or_404(
+                DistributionOperation, pk=int(raw_operation),
+                adoption_id=adoption.pk,
+            )
+        elif not adoption.is_current:
+            raise ValidationError({
+                "adoption_id": "Selecciona la versión vigente de la adopción.",
+            })
+        return Response(allocation_summary(adoption, operation))
+
     def create(self, request):
         self._authorize(request, write=True)
         form = OperationInput(data=request.data)
         form.is_valid(raise_exception=True)
         data = form.validated_data
         with transaction.atomic():
+            # Bloquear la misma adopción serializa todos sus planes simultáneos.
+            adoption = Adoption.objects.select_for_update().get(
+                pk=data["adoption"].pk,
+            )
+            if not adoption.is_current:
+                raise ValidationError({
+                    "adoption_id": "Esta adopción cambió de versión; actualiza la lista.",
+                })
             old = DistributionOperation.objects.filter(
                 idempotency_key=data["idempotency_key"],
             ).first()
             if old:
+                existing = {
+                    row.product_id: row.quantity_planned for row in old.items.all()
+                }
+                received = {
+                    item["product_id"]: item["quantity"] for item in data["items"]
+                }
                 if (
-                    old.adoption_id != data["adoption"].pk or old.mode != data["mode"]
+                    old.adoption_id != adoption.pk or old.mode != data["mode"]
                     or old.source_id != data["source"].pk
                     or old.destination_id != data["destination"].pk
                     or old.operation_name != data["operation_name"]
@@ -268,22 +321,15 @@ class DistributionOperationViewSet(viewsets.ViewSet):
                     or old.scheduled_on != data.get("scheduled_on")
                     or old.scheduled_until != data.get("scheduled_until")
                     or old.notes != data.get("notes", "")
+                    or len(received) != len(data["items"])
+                    or received != existing
                 ):
                     raise ValidationError({
                         "detail": "Esta operación ya se registró con otros datos. Actualiza la lista.",
                     })
                 return Response(_output(get_object_or_404(_queryset(), pk=old.pk)))
 
-            adoption = data["adoption"]
-            quantities = defaultdict(int)
-            names = {}
-            for item in adoption.items.all():
-                quantities[item.product_id] += item.quantity
-                names[item.product_id] = item.product_name_snapshot
-            if not quantities:
-                raise ValidationError({
-                    "adoption_id": "Esta adopción no tiene libros para preparar.",
-                })
+            planned = validate_requested_allocation(adoption, data["items"])
             record = DistributionOperation.objects.create(
                 idempotency_key=data["idempotency_key"],
                 adoption=adoption, school=adoption.school,
@@ -296,14 +342,7 @@ class DistributionOperationViewSet(viewsets.ViewSet):
                 scheduled_until=data.get("scheduled_until"),
                 notes=data.get("notes", ""), created_by=request.user,
             )
-            DistributionOperationLine.objects.bulk_create([
-                DistributionOperationLine(
-                    operation=record, product_id=product_id,
-                    product_name_snapshot=names[product_id],
-                    quantity_planned=quantity,
-                )
-                for product_id, quantity in quantities.items()
-            ])
+            replace_operation_lines(record, planned)
             DistributionOperationEvent.objects.create(
                 operation=record, actor=request.user,
                 action="created", current=_state(record),
@@ -319,7 +358,13 @@ class DistributionOperationViewSet(viewsets.ViewSet):
         form.is_valid(raise_exception=True)
         values = dict(form.validated_data)
         reason = values.pop("reason")
+        requested_items = values.pop("items", None)
         with transaction.atomic():
+            # El orden de bloqueo debe coincidir con crear/anular.
+            adoption_id = get_object_or_404(
+                DistributionOperation.objects.only("adoption_id"), pk=pk,
+            ).adoption_id
+            adoption = Adoption.objects.select_for_update().get(pk=adoption_id)
             record = get_object_or_404(
                 DistributionOperation.objects.select_for_update(), pk=pk,
             )
@@ -327,7 +372,13 @@ class DistributionOperationViewSet(viewsets.ViewSet):
                 raise ValidationError({
                     "detail": "Esta operación ya fue anulada. No puedes modificarla.",
                 })
-            prev = _state(record)
+            previous = _state(record)
+            planned = (
+                validate_requested_allocation(
+                    adoption, requested_items, operation=record,
+                )
+                if requested_items is not None else None
+            )
             for field, value in values.items():
                 setattr(record, field, value)
             if record.source_id == record.destination_id:
@@ -341,13 +392,27 @@ class DistributionOperationViewSet(viewsets.ViewSet):
                 raise ValidationError({
                     "scheduled_until": "La fecha final no puede ser anterior a la inicial.",
                 })
-            changed = _state(record) != prev
+            new_items = (
+                [
+                    {"product_id": product_id, "quantity": detail["quantity"]}
+                    for product_id, detail in planned.items()
+                ]
+                if planned is not None else previous["items"]
+            )
+            old_items = sorted(
+                previous["items"], key=lambda row: row["product_id"],
+            )
+            if planned is not None and sorted(
+                new_items, key=lambda row: row["product_id"],
+            ) != old_items:
+                replace_operation_lines(record, planned)
+            changed = _state(record) != previous
             if not changed:
                 raise ValidationError({"detail": "No se detectaron cambios para guardar."})
             record.save()
             DistributionOperationEvent.objects.create(
                 operation=record, actor=request.user, action="updated",
-                reason=reason, previous=prev, current=_state(record),
+                reason=reason, previous=previous, current=_state(record),
             )
         return Response(_output(get_object_or_404(_queryset(), pk=record.pk)))
 
@@ -360,6 +425,10 @@ class DistributionOperationViewSet(viewsets.ViewSet):
                 "reason": "Indica el motivo de la anulación (mínimo ocho caracteres).",
             })
         with transaction.atomic():
+            adoption_id = get_object_or_404(
+                DistributionOperation.objects.only("adoption_id"), pk=pk,
+            ).adoption_id
+            Adoption.objects.select_for_update().get(pk=adoption_id)
             record = get_object_or_404(
                 DistributionOperation.objects.select_for_update(), pk=pk,
             )
