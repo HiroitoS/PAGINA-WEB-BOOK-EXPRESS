@@ -3077,8 +3077,10 @@ class OpportunityViewSet(viewsets.ModelViewSet):
             # Mismo orden de bloqueo que el alta: colegio antes de oportunidad.
             target = self.get_object()
             school = School.objects.select_for_update().get(pk=target.school_id)
+            # self.get_queryset() usa select_related con relaciones opcionales.
+            # Bloquear solo Opportunity evita FOR UPDATE sobre LEFT JOIN.
             opportunity = get_object_or_404(
-                self.get_queryset().select_for_update(), pk=target.pk,
+                school.opportunities.select_for_update(), pk=target.pk,
             )
             if opportunity.owner_id:
                 raise serializers.ValidationError({
