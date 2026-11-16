@@ -100,6 +100,7 @@ from crm.services import (
     transition_opportunity_stage,
 )
 
+from crm.services.opportunities import inherit_school_owner_for_unassigned_opportunities
 from crm.services.commercial_lines import VALID_PROJECTION_LINES
 from crm.services.education import grade_matches_level
 from crm.services.school_imports import (
@@ -1441,6 +1442,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
             status=status.HTTP_201_CREATED,
         )
 
+    @transaction.atomic
     def partial_update(self, request, *args, **kwargs):
         if not usuario_puede_gestionar_colegios(request.user):
             raise PermissionDenied("No tienes permiso para modificar colegios.")
@@ -1509,6 +1511,10 @@ class SchoolViewSet(viewsets.ModelViewSet):
             setattr(school, field, value)
         school.full_clean()
         school.save()
+        if ("owner" in data or "team" in data) and school.owner_id:
+            inherit_school_owner_for_unassigned_opportunities(
+                school=school, actor=request.user,
+            )
         _sync_main_campus_from_school(
             school=school,
             actor=request.user,
@@ -1695,6 +1701,10 @@ class SchoolViewSet(viewsets.ModelViewSet):
                         "updated_at",
                     ]
                 )
+                if school.owner_id:
+                    inherit_school_owner_for_unassigned_opportunities(
+                        school=school, actor=request.user,
+                    )
 
                 if (
                     previous_team_id != school.team_id
@@ -3052,6 +3062,51 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         opportunity.full_clean()
         opportunity.save()
         return Response(OpportunityDetailSerializer(opportunity).data)
+
+    @action(detail=True, methods=["post"], url_path="inherit-school-assignment")
+    def inherit_school_assignment(self, request, pk=None):
+        """Corregir una oportunidad antigua sin responsable, con autorización."""
+        if not (
+            usuario_es_administrador(request.user)
+            or usuario_puede_asignar_oportunidades(request.user)
+        ):
+            raise PermissionDenied(
+                "Solo un administrador o responsable de asignaciones puede vincular asesores."
+            )
+        with transaction.atomic():
+            # Mismo orden de bloqueo que el alta: colegio antes de oportunidad.
+            target = self.get_object()
+            school = School.objects.select_for_update().get(pk=target.school_id)
+            opportunity = get_object_or_404(
+                self.get_queryset().select_for_update(), pk=target.pk,
+            )
+            if opportunity.owner_id:
+                raise serializers.ValidationError({
+                    "detail": "La oportunidad ya tiene un asesor. No se cambiará su responsable.",
+                })
+            if opportunity.is_closed:
+                raise serializers.ValidationError({
+                    "detail": "No se puede reasignar una oportunidad cerrada.",
+                })
+            if not school.owner_id or not school.team_id:
+                raise serializers.ValidationError({
+                    "detail": "Asigna primero un equipo y asesor responsable al colegio.",
+                })
+            if opportunity.team_id and opportunity.team_id != school.team_id:
+                raise serializers.ValidationError({
+                    "detail": "El equipo de la oportunidad es diferente al del colegio. Revisa la asignación comercial.",
+                })
+            try:
+                updated = inherit_school_owner_for_unassigned_opportunities(
+                    school=school, actor=request.user, opportunity_id=opportunity.pk,
+                )
+            except OpportunityTransitionError as exc:
+                _raise_service_validation_error(exc)
+            if not updated:
+                raise serializers.ValidationError({
+                    "detail": "No fue posible heredar el asesor. Revisa el equipo y la vigencia de la oportunidad.",
+                })
+        return Response(OpportunityDetailSerializer(updated[0]).data)
 
     @action(detail=True, methods=["post"], url_path="change-stage")
     def change_stage(self, request, pk=None):
