@@ -13,6 +13,7 @@ from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
+from crm.models import School
 from crm.management.commands.preparar_demo_erp import (
     _eligible_products, _eligible_schools, _is_demo_database,
     _is_local_dev_database,
@@ -28,6 +29,10 @@ class Command(BaseCommand):
         parser.add_argument("--unidades", type=int, default=10)
         parser.add_argument("--crear", action="store_true")
         parser.add_argument("--local", action="store_true")
+        parser.add_argument(
+            "--nuevos", action="store_true",
+            help="Elige otros colegios de referencia sin escenario DEMO previo para ese año.",
+        )
 
     def handle(self, *args, **options):
         year = options["year"]
@@ -49,11 +54,26 @@ class Command(BaseCommand):
                 "bookexpress_db local con --crear --local o en la base demo aislada."
             )
 
-        schools = list(_eligible_schools()[:count])
+        if options["nuevos"]:
+            prefix = f"DEMO{year}S"
+            existing_codes = set(
+                School.objects.filter(book_express_code__startswith=prefix)
+                .values_list("book_express_code", flat=True)
+            )
+            schools = []
+            for school in _eligible_schools().iterator():
+                if f"{prefix}{school.pk}"[:24] in existing_codes:
+                    continue
+                schools.append(school)
+                if len(schools) == count:
+                    break
+        else:
+            schools = list(_eligible_schools()[:count])
         eligible = _eligible_products(year)
         if len(schools) < count:
             raise CommandError(
-                f"Se necesitan {count} colegios importados activos; solo hay {len(schools)}."
+                f"Se necesitan {count} colegios de referencia elegibles; solo hay {len(schools)} "
+                "sin escenario previo con esos filtros."
             )
         if not eligible:
             raise CommandError(
@@ -75,6 +95,10 @@ class Command(BaseCommand):
         ]
 
         self.stdout.write("Se usarán colegios y productos ya importados, sin modificarlos:")
+        if options["nuevos"]:
+            self.stdout.write(
+                "Modo nuevos: se omiten colegios con escenario DEMO existente para este año."
+            )
         for index, (school, product) in enumerate(selected, start=1):
             self.stdout.write(
                 f"{index}. Colegio #{school.pk} {school.name} · "
