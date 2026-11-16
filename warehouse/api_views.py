@@ -53,7 +53,9 @@ class GoodsReceiptViewSet(viewsets.ReadOnlyModelViewSet):
         page = self.paginate_queryset(queryset)
         orders = list(page if page is not None else queryset[:20])
         ids = [order.pk for order in orders]
-        lines = PurchaseOrderItem.objects.filter(order_id__in=ids).annotate(
+        lines = PurchaseOrderItem.objects.filter(order_id__in=ids).select_related(
+            "product__level", "product__grade",
+        ).annotate(
             accepted=Coalesce(
                 Sum(
                     "receipt_lines__quantity_accepted",
@@ -76,6 +78,9 @@ class GoodsReceiptViewSet(viewsets.ReadOnlyModelViewSet):
                     "item_id": line.pk,
                     "producto": line.product_name_snapshot,
                     "codigo": line.product_code_snapshot,
+                    "nivel_id": line.product.level_id,
+                    "nivel": line.product.level.name if line.product.level_id else "",
+                    "grado": line.product.grade.name if line.product.grade_id else "",
                     "solicitadas": line.quantity_ordered,
                     "aceptadas": line.accepted,
                     "pendientes": pending,
