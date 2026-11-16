@@ -89,7 +89,15 @@ class DistributionAPITests(TestCase):
         self.assertEqual(result.status_code, 200, result.data)
         self.assertGreaterEqual(result.data["adoptions_meta"]["count"], 1)
         self.assertEqual(result.data["adoptions_meta"]["page"], 1)
+        self.assertIn(self.adopcion.campaign.year, result.data["campaign_years"])
         self.assertIn(self.adopcion.pk, [item["id"] for item in result.data["adoptions"]])
+        one = next(
+            item for item in result.data["adoptions"] if item["id"] == self.adopcion.pk
+        )
+        self.assertEqual(one["campaign_year"], self.adopcion.campaign.year)
+        exact = client.get(url, {"buscar": str(self.adopcion.pk)})
+        self.assertEqual(exact.status_code, 200, exact.data)
+        self.assertIn(self.adopcion.pk, [x["id"] for x in exact.data["adoptions"]])
 
         name = self.adopcion.school_name_snapshot[:5]
         filtered = client.get(url, {"buscar": name, "anio": self.adopcion.campaign.year})
