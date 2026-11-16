@@ -75,6 +75,8 @@ ROLE_PERMISSIONS = {
     ROL_ALMACEN: [
         "warehouse.view_internal_stock_requests",
         "warehouse.manage_internal_stock_requests",
+        "warehouse.view_distribution_operations",
+        "warehouse.manage_distribution_operations",
     ],
 }
 
