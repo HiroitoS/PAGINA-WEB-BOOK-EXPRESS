@@ -128,6 +128,8 @@ def _output(obj):
         "adoption_id": obj.adoption_id,
         "school_id": obj.school_id,
         "school": obj.school.name,
+        "campaign": obj.adoption.campaign_name_snapshot,
+        "campaign_year": obj.adoption.campaign.year,
         "original_mode": obj.original_mode,
         "mode": obj.mode,
         "source_id": obj.source_id,
@@ -164,7 +166,7 @@ def _output(obj):
 
 def _queryset():
     return DistributionOperation.objects.select_related(
-        "adoption", "school", "source", "destination", "created_by",
+        "adoption__campaign", "school", "source", "destination", "created_by",
     ).prefetch_related("items", "events__actor")
 
 
