@@ -48,6 +48,10 @@ class DistributionAPITests(TestCase):
             "scheduled_on": "2027-02-01",
             "scheduled_until": "2027-02-03",
             "notes": "Sólo planificación",
+            "items": [
+                {"product_id": item.product_id, "quantity": item.quantity}
+                for item in self.adopcion.items.all()
+            ],
         }
         data.update(overrides)
         return data
@@ -149,8 +153,175 @@ class DistributionAPITests(TestCase):
                 self.assertEqual(response.data["events"][1]["current"]["mode"], destino)
                 self.adopcion.refresh_from_db()
                 self.assertEqual(self.adopcion.sale_mode, original)
+                self.assertEqual(
+                    client.post(
+                        f"/api/admin/erp/almacen/operaciones-distribucion/{pk}/anular/",
+                        {"reason": "La prueba pasa a otra modalidad."},
+                        format="json",
+                    ).status_code, 200,
+                )
         self.assertEqual(StockEntry.objects.count(), 0)
         self.assertEqual(StockTransfer.objects.count(), 0)
+
+    def test_b2_distribuir_total_o_dividir_en_tres_entregas(self):
+        client = self.client_as(self.user)
+        url = "/api/admin/erp/almacen/operaciones-distribucion/"
+        product = self.adopcion.items.order_by("-quantity").first()
+        other = self.adopcion.items.exclude(product_id=product.product_id).first()
+
+        def items(q1, q2):
+            return [
+                {"product_id": product.product_id, "quantity": q1},
+                {"product_id": other.product_id, "quantity": q2},
+            ]
+
+        first = client.post(url, self.payload(
+            mode="fair", items=items(50, 20),
+        ), format="json")
+        self.assertEqual(first.status_code, 201, first.data)
+        second = client.post(url, self.payload(
+            mode="point_of_sale", destination_id=self.store.pk,
+            items=items(30, 10),
+        ), format="json")
+        self.assertEqual(second.status_code, 201, second.data)
+        third = client.post(url, self.payload(
+            mode="consignment", destination_id=self.cons.pk,
+            items=items(20, 10),
+        ), format="json")
+        self.assertEqual(third.status_code, 201, third.data)
+
+        summary = client.get(
+            url + "asignacion/", {"adoption_id": self.adopcion.pk},
+        )
+        self.assertEqual(summary.status_code, 200, summary.data)
+        by_product = {line["product_id"]: line for line in summary.data["items"]}
+        self.assertEqual(by_product[product.product_id]["assignable"], 0)
+        self.assertEqual(by_product[other.product_id]["assignable"], 0)
+
+        excessive = client.post(url, self.payload(
+            items=items(1, 1),
+        ), format="json")
+        self.assertEqual(excessive.status_code, 400, excessive.data)
+        self.assertEqual(DistributionOperation.objects.count(), 3)
+        self.assertEqual(StockEntry.objects.count(), 0)
+        self.assertEqual(StockTransfer.objects.count(), 0)
+
+        cancel = client.post(
+            url + f"{third.data['id']}/anular/",
+            {"reason": "El colegio reprograma esta entrega."},
+            format="json",
+        )
+        self.assertEqual(cancel.status_code, 200, cancel.data)
+        summary = client.get(
+            url + "asignacion/", {"adoption_id": self.adopcion.pk},
+        )
+        by_product = {line["product_id"]: line for line in summary.data["items"]}
+        self.assertEqual(by_product[product.product_id]["assignable"], 20)
+        self.assertEqual(by_product[other.product_id]["assignable"], 10)
+
+    def test_b2_editar_cantidades_con_motivo_y_liberar_saldo(self):
+        client = self.client_as(self.user)
+        url = "/api/admin/erp/almacen/operaciones-distribucion/"
+        products = list(self.adopcion.items.all())
+        first = client.post(url, self.payload(
+            items=[
+                {"product_id": item.product_id, "quantity": 10}
+                for item in products
+            ],
+        ), format="json")
+        self.assertEqual(first.status_code, 201, first.data)
+        pk = first.data["id"]
+        summary = client.get(
+            url + "asignacion/",
+            {"adoption_id": self.adopcion.pk, "operation_id": pk},
+        )
+        self.assertEqual(summary.status_code, 200, summary.data)
+        for line in summary.data["items"]:
+            self.assertEqual(line["current_planned"], 10)
+            self.assertEqual(line["other_planned"], 0)
+            self.assertEqual(line["assignable"], line["adopted"])
+
+        only = products[0]
+        edited = client.patch(
+            url + f"{pk}/",
+            {
+                "items": [{"product_id": only.product_id, "quantity": 4}],
+                "reason": "Separar la siguiente entrega a tienda.",
+            },
+            format="json",
+        )
+        self.assertEqual(edited.status_code, 200, edited.data)
+        self.assertEqual(len(edited.data["items"]), 1)
+        self.assertEqual(edited.data["items"][0]["quantity_planned"], 4)
+        self.assertEqual(len(edited.data["events"]), 2)
+        self.assertEqual(
+            sorted(x["quantity"] for x in edited.data["events"][0]["current"]["items"]),
+            [10, 10],
+        )
+        self.assertEqual(
+            edited.data["events"][1]["current"]["items"][0]["quantity"], 4,
+        )
+
+        follow = client.post(
+            url,
+            self.payload(
+                destination_id=self.store.pk, mode="point_of_sale",
+                items=[
+                    {"product_id": only.product_id, "quantity": only.quantity - 4},
+                ],
+            ),
+            format="json",
+        )
+        self.assertEqual(follow.status_code, 201, follow.data)
+
+    def test_b2_rechaza_cantidades_erroneas_y_duplicados(self):
+        client = self.client_as(self.user)
+        url = "/api/admin/erp/almacen/operaciones-distribucion/"
+        item = self.adopcion.items.first()
+        bad_cases = [
+            [],
+            [{"product_id": item.product_id, "quantity": 0}],
+            [{"product_id": item.product_id, "quantity": -1}],
+            [{"product_id": item.product_id, "quantity": 1.5}],
+            [{"product_id": item.product_id, "quantity": item.quantity + 1}],
+            [{"product_id": 9999999, "quantity": 1}],
+            [
+                {"product_id": item.product_id, "quantity": 1},
+                {"product_id": item.product_id, "quantity": 1},
+            ],
+        ]
+        for items in bad_cases:
+            with self.subTest(items=items):
+                response = client.post(
+                    url, self.payload(items=items), format="json",
+                )
+                self.assertEqual(response.status_code, 400, response.data)
+        self.assertFalse(DistributionOperation.objects.exists())
+        self.assertEqual(
+            self.client_as(self.outsider).get(
+                url + "asignacion/", {"adoption_id": self.adopcion.pk},
+            ).status_code, 403,
+        )
+
+    def test_b2_no_reutiliza_clave_para_otras_cantidades(self):
+        client = self.client_as(self.user)
+        url = "/api/admin/erp/almacen/operaciones-distribucion/"
+        data = self.payload()
+        created = client.post(url, data, format="json")
+        self.assertEqual(created.status_code, 201, created.data)
+        again = client.post(url, data, format="json")
+        self.assertEqual(again.status_code, 200, again.data)
+        original = data["items"][0]
+        altered = {
+            **data,
+            "items": [
+                {**original, "quantity": original["quantity"] - 1},
+                *data["items"][1:],
+            ],
+        }
+        duplicate = client.post(url, altered, format="json")
+        self.assertEqual(duplicate.status_code, 400, duplicate.data)
+        self.assertEqual(DistributionOperation.objects.count(), 1)
 
     def test_reintento_idempotente_y_no_permite_reutilizar_clave_con_otros_datos(self):
         client = self.client_as(self.user)
