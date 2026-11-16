@@ -6,7 +6,7 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from catalog.models import Product, Provider
+from catalog.models import Grade, Level, Product, Provider
 from crm.models import Campaign
 from purchasing.models import PurchaseOrder, PurchaseOrderItem
 from warehouse.api_serializers import GoodsReceiptSerializer
@@ -461,6 +461,11 @@ class RecepcionMercaderiaTests(TestCase):
             )
 
     def test_pedidos_pendientes_no_exponen_costos(self):
+        inicial = Level.objects.create(name="Inicial")
+        tres_anios = Grade.objects.create(name="3 AÑOS")
+        self.producto.level = inicial
+        self.producto.grade = tres_anios
+        self.producto.save(update_fields=["level", "grade", "updated_at"])
         client = APIClient()
         client.force_authenticate(self.actor)
         url = "/api/admin/erp/almacen/recepciones/pedidos-pendientes/"
@@ -470,6 +475,9 @@ class RecepcionMercaderiaTests(TestCase):
         self.assertTrue(any(pedido["id"] == self.pedido.pk for pedido in data))
         detalle = next(pedido for pedido in data if pedido["id"] == self.pedido.pk)
         self.assertEqual(detalle["productos"][0]["pendientes"], 100)
+        self.assertEqual(detalle["productos"][0]["nivel_id"], inicial.id)
+        self.assertEqual(detalle["productos"][0]["nivel"], "Inicial")
+        self.assertEqual(detalle["productos"][0]["grado"], "3 AÑOS")
         self.assertNotIn("unit_supplier_cost", str(detalle))
 
     def test_la_misma_guia_de_editoriales_diferentes_es_valida(self):
