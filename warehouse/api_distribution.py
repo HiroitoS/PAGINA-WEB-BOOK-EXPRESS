@@ -238,7 +238,7 @@ class DistributionOperationViewSet(viewsets.ViewSet):
                 | Q(school__name__icontains=search)
                 | Q(campaign_name_snapshot__icontains=search)
             )
-            if search.isdecimal():
+            if search.isdecimal() and len(search) <= 18:
                 query |= Q(pk=int(search))
             adoptions = adoptions.filter(query)
         if year:
