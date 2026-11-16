@@ -200,6 +200,46 @@ class DemoSeedTests(TestCase):
             for quotation in CommercialQuotation.objects.all()
         ))
 
+    def test_lote_nuevos_omite_escenarios_existentes(self):
+        School.objects.create(name="Colegio de referencia 2", created_by=self.actor)
+        School.objects.create(name="Colegio de referencia 3", created_by=self.actor)
+        with patch(
+            "crm.management.commands.preparar_demo_erp_lote._is_demo_database",
+            return_value=True,
+        ), patch(
+            "crm.management.commands.preparar_demo_erp._is_demo_database",
+            return_value=True,
+        ):
+            call_command(
+                "preparar_demo_erp_lote", "--year", "2027", "--cantidad", "1",
+                "--crear", stdout=StringIO(),
+            )
+            current = School.objects.filter(name__startswith="[PRUEBA ERP]").count()
+            self.assertEqual(current, 1)
+
+            preview = StringIO()
+            call_command(
+                "preparar_demo_erp_lote", "--year", "2027", "--cantidad", "2",
+                "--nuevos", stdout=preview,
+            )
+            self.assertIn("Modo nuevos", preview.getvalue())
+            self.assertEqual(
+                School.objects.filter(name__startswith="[PRUEBA ERP]").count(),
+                current,
+            )
+            call_command(
+                "preparar_demo_erp_lote", "--year", "2027", "--cantidad", "2",
+                "--nuevos", "--crear", stdout=StringIO(),
+            )
+        self.assertEqual(
+            School.objects.filter(name__startswith="[PRUEBA ERP]").count(), 3,
+        )
+        self.assertEqual(CommercialQuotation.objects.count(), 3)
+        self.assertTrue(all(
+            quote.status == CommercialQuotation.Status.DRAFT
+            for quote in CommercialQuotation.objects.all()
+        ))
+
     def test_lote_bloqueado_fuera_de_entorno_local(self):
         School.objects.create(name="Colegio de apoyo", created_by=self.actor)
         with self.assertRaisesMessage(CommandError, "Operación bloqueada"):
