@@ -52,6 +52,7 @@ class WarehouseLocation(TimeStampedModel):
 class GoodsReceipt(TimeStampedModel):
     class Status(models.TextChoices):
         DRAFT = "draft", "Borrador"
+        SUBMITTED = "submitted", "Pendiente de aprobación"
         VALIDATED = "validated", "Validada"
         CANCELLED = "cancelled", "Anulada"
 
