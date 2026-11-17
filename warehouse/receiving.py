@@ -44,7 +44,10 @@ def _validar_documento_no_duplicado(
     estados = (
         [GoodsReceipt.Status.VALIDATED]
         if solo_validadas
-        else [GoodsReceipt.Status.DRAFT, GoodsReceipt.Status.VALIDATED]
+        else [
+            GoodsReceipt.Status.DRAFT, GoodsReceipt.Status.SUBMITTED,
+            GoodsReceipt.Status.VALIDATED,
+        ]
     )
     existentes = (
         GoodsReceipt.objects.filter(
