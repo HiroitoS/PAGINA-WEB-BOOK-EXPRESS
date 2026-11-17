@@ -181,25 +181,82 @@ class StockTransferViewSet(viewsets.ViewSet):
             "created_by_name": move.created_by.get_full_name().strip() or move.created_by.username,
         }
 
-    @action(detail=False, methods=["get"], url_path="lotes")
-    def eligible_lots(self, request):
-        self._autorizar(request)
+    @staticmethod
+    def _ubicacion_origen(request):
         raw = request.query_params.get("source_id", "")
         if not raw.isdecimal() or int(raw) < 1:
             raise ValidationError({"source_id": "Selecciona un almacén de origen."})
         location_id = int(raw)
         if not WarehouseLocation.objects.filter(pk=location_id, is_active=True).exists():
             raise ValidationError({"source_id": "La ubicación ya no está activa."})
-        q = request.query_params.get("q", "").strip()
-        if len(q) > 100:
-            raise ValidationError({"q": "La búsqueda es demasiado larga."})
-        qs = StockEntry.objects.select_related(
+        return location_id
+
+    @staticmethod
+    def _lotes_en_ubicacion(location_id):
+        return StockEntry.objects.select_related(
             "initial_location", "product__provider",
             "receipt_line__receipt", "receipt_line__order_item__order",
         ).filter(
             Q(initial_location__location_id=location_id)
             | Q(transfers__destination_id=location_id)
         ).distinct().order_by("product__name", "pk")
+
+    @action(detail=False, methods=["get"], url_path="lotes-filtros")
+    def lot_filters(self, request):
+        """Solo editoriales, colegios y documentos con saldo en el origen.
+
+        No se construyen opciones a partir de la página de resultados, porque
+        faltarían colegios y documentos al paginar.
+        """
+        self._autorizar(request)
+        location_id = self._ubicacion_origen(request)
+        entries = list(self._lotes_en_ubicacion(location_id))
+        balances = posiciones_lotes(entries)
+        providers, schools, documents = {}, {}, {}
+        for entry in entries:
+            if balances.get((entry.pk, location_id), 0) <= 0:
+                continue
+            order = entry.receipt_line.order_item.order
+            receipt = entry.receipt_line.receipt
+            provider = entry.product.provider
+            providers[provider.pk] = {"id": provider.pk, "name": provider.name}
+            if order.school_id:
+                schools[order.school_id] = {
+                    "id": order.school_id,
+                    "name": order.school_name_snapshot or order.school.name,
+                }
+            documents[receipt.pk] = {
+                "id": receipt.pk,
+                "number": receipt.document_number,
+                "type": receipt.document_type,
+                "provider": provider.name,
+            }
+        return Response({
+            "providers": sorted(providers.values(), key=lambda x: (x["name"].casefold(), x["id"])),
+            "schools": sorted(schools.values(), key=lambda x: (x["name"].casefold(), x["id"])),
+            "documents": sorted(
+                documents.values(),
+                key=lambda x: (x["provider"].casefold(), x["number"].casefold(), x["id"]),
+            ),
+        })
+
+    @action(detail=False, methods=["get"], url_path="lotes")
+    def eligible_lots(self, request):
+        self._autorizar(request)
+        location_id = self._ubicacion_origen(request)
+        provider_id = _identificador_filtro(request, "provider_id")
+        school_id = _identificador_filtro(request, "school_id")
+        receipt_id = _identificador_filtro(request, "receipt_id")
+        q = request.query_params.get("q", "").strip()
+        if len(q) > 100:
+            raise ValidationError({"q": "La búsqueda es demasiado larga."})
+        qs = self._lotes_en_ubicacion(location_id)
+        if provider_id:
+            qs = qs.filter(product__provider_id=provider_id)
+        if school_id:
+            qs = qs.filter(receipt_line__order_item__order__school_id=school_id)
+        if receipt_id:
+            qs = qs.filter(receipt_line__receipt_id=receipt_id)
         if q:
             qs = qs.filter(
                 Q(product__name__icontains=q)
@@ -227,6 +284,9 @@ class StockTransferViewSet(viewsets.ViewSet):
                 "editorial": e.product.provider.name,
                 "guide": e.receipt_line.receipt.document_number,
                 "receipt_id": e.receipt_line.receipt_id,
+                "document_type": e.receipt_line.receipt.document_type,
+                "provider_id": e.product.provider_id,
+                "school_id": e.receipt_line.order_item.order.school_id,
                 "school": e.receipt_line.order_item.order.school_name_snapshot,
                 "available": balances[(e.pk, location_id)],
                 "unit_cost": (str(e.unit_cost_snapshot)
