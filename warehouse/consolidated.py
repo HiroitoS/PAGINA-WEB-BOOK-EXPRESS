@@ -18,7 +18,7 @@ from warehouse.transfers import posiciones_lotes
 GROUPS = {"editorial", "colegio", "almacen"}
 
 
-def consultar_consolidado(*, grupo="editorial", query="", page=1, provider_id=None):
+def consultar_consolidado(*, grupo="editorial", query="", page=1, provider_id=None, school_id=None):
     if grupo not in GROUPS:
         raise ValidationError({"grupo": "Selecciona editorial, colegio o almacén."})
     if not isinstance(page, int) or page < 1:
@@ -32,6 +32,8 @@ def consultar_consolidado(*, grupo="editorial", query="", page=1, provider_id=No
     ).order_by("pk")
     if provider_id is not None:
         qs = qs.filter(product__provider_id=provider_id)
+    if school_id is not None:
+        qs = qs.filter(receipt_line__order_item__order__school_id=school_id)
     if query:
         qs = qs.filter(
             Q(product__name__icontains=query)
