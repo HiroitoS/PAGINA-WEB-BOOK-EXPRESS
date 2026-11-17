@@ -154,6 +154,18 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+# Avisos por correo opcionales; por defecto solo notificaciones dentro del panel.
+ERP_WAREHOUSE_EMAIL_ALERTS_ENABLED = get_bool_env("ERP_WAREHOUSE_EMAIL_ALERTS_ENABLED", False)
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "")
+EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "")
+EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = get_bool_env("EMAIL_USE_TLS", True)
+EMAIL_TIMEOUT = 15
+
+
 
 CORS_ALLOWED_ORIGINS = get_list_env(
     "CORS_ALLOWED_ORIGINS",
