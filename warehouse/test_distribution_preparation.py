@@ -57,14 +57,14 @@ class DistributionPreparationTests(TestCase):
             validar_recepcion(actor=self.user, receipt_id=receipt.pk)
         self.entries = list(StockEntry.objects.order_by("pk"))
 
-    def client(self, actor=None):
+    def api_client(self, actor=None):
         client = APIClient()
         client.force_authenticate(user=actor or self.user)
         return client
 
     def plan(self, quantities=(5, 5)):
         products = list(self.adopcion.items.order_by("pk"))
-        response = self.client().post(
+        response = self.api_client().post(
             "/api/admin/erp/almacen/operaciones-distribucion/",
             {
                 "idempotency_key": str(uuid4()),
@@ -89,7 +89,7 @@ class DistributionPreparationTests(TestCase):
 
     def test_reserva_no_traslada_y_reintento_no_duplica(self):
         op_id = self.plan()
-        client = self.client()
+        client = self.api_client()
         preview = client.get(self.endpoint(op_id, "preparacion"))
         self.assertEqual(preview.status_code, 200, preview.data)
         self.assertTrue(preview.data["can_reserve"])
@@ -107,7 +107,7 @@ class DistributionPreparationTests(TestCase):
         self.assertEqual(StockEntry.objects.count(), 2)
         self.assertEqual(StockTransfer.objects.count(), 0)
         self.assertEqual(
-            self.client().patch(self.endpoint(op_id, "").rstrip("/") + "/", {
+            self.api_client().patch(self.endpoint(op_id, "").rstrip("/") + "/", {
                 "notes": "Cambiar ahora", "reason": "Ya se reservó",
             }, format="json").status_code, 400,
         )
@@ -115,7 +115,7 @@ class DistributionPreparationTests(TestCase):
     def test_reserva_bloquea_traslado_y_cortesia_sobre_cantidad_libre(self):
         op_id = self.plan()
         self.assertEqual(
-            self.client().post(self.endpoint(op_id, "reservar"), {}, format="json").status_code,
+            self.api_client().post(self.endpoint(op_id, "reservar"), {}, format="json").status_code,
             201,
         )
         reserved = DistributionStockReservation.objects.first()
@@ -139,7 +139,7 @@ class DistributionPreparationTests(TestCase):
 
     def test_confirmar_conteo_real_y_anulacion_libera_reservas(self):
         op_id = self.plan()
-        client = self.client()
+        client = self.api_client()
         saved = client.post(self.endpoint(op_id, "reservar"), {}, format="json")
         self.assertEqual(saved.status_code, 201, saved.data)
         rows = saved.data["reservations"]
@@ -184,17 +184,17 @@ class DistributionPreparationTests(TestCase):
             quantity=entry.quantity_available, idempotency_key=uuid4(),
             entrega_confirmada=True,
         )
-        preview = self.client().get(self.endpoint(op_id, "preparacion"))
+        preview = self.api_client().get(self.endpoint(op_id, "preparacion"))
         self.assertEqual(preview.status_code, 200, preview.data)
         self.assertFalse(preview.data["can_reserve"])
-        response = self.client().post(self.endpoint(op_id, "reservar"), {}, format="json")
+        response = self.api_client().post(self.endpoint(op_id, "reservar"), {}, format="json")
         self.assertEqual(response.status_code, 400, response.data)
         self.assertFalse(DistributionStockReservation.objects.exists())
         self.assertEqual(DistributionOperation.objects.get(pk=op_id).status, "planned")
 
     def test_documento_transporte_es_borrador_no_gre_aceptada(self):
         op_id = self.plan()
-        client = self.client()
+        client = self.api_client()
         url = self.endpoint(op_id, "documento-traslado")
         initial = client.get(url)
         self.assertEqual(initial.status_code, 200, initial.data)
@@ -221,5 +221,5 @@ class DistributionPreparationTests(TestCase):
         self.assertFalse(save.data["sunat_accepted"])
         self.assertEqual(DistributionTransportDraft.objects.count(), 1)
         self.assertEqual(
-            self.client(self.employee).get(url).status_code, 403,
+            self.api_client(self.employee).get(url).status_code, 403,
         )
