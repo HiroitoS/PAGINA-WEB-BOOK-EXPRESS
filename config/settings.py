@@ -156,6 +156,7 @@ MEDIA_ROOT = BASE_DIR / "media"
 
 # Avisos por correo opcionales; por defecto solo notificaciones dentro del panel.
 ERP_WAREHOUSE_EMAIL_ALERTS_ENABLED = get_bool_env("ERP_WAREHOUSE_EMAIL_ALERTS_ENABLED", False)
+ERP_WAREHOUSE_SUPPLIER_EMAIL_ENABLED = get_bool_env("ERP_WAREHOUSE_SUPPLIER_EMAIL_ENABLED", False)
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "")
 EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
 EMAIL_HOST = os.environ.get("EMAIL_HOST", "")
