@@ -117,7 +117,7 @@ class PhysicalCountInput(serializers.Serializer):
 
 class TransportDraftInput(serializers.Serializer):
     issuer_ruc = serializers.RegexField(
-        regex=r"^$|^\\d{11}$", required=False, allow_blank=True, max_length=11,
+        regex=r"^$|^\d{11}$", required=False, allow_blank=True, max_length=11,
     )
     departure_address = serializers.CharField(required=False, allow_blank=True, max_length=300)
     destination_address = serializers.CharField(required=False, allow_blank=True, max_length=300)
@@ -134,7 +134,7 @@ class TransportDraftInput(serializers.Serializer):
     driver_document = serializers.CharField(required=False, allow_blank=True, max_length=20)
     driver_license = serializers.CharField(required=False, allow_blank=True, max_length=30)
     carrier_ruc = serializers.RegexField(
-        regex=r"^$|^\\d{11}$", required=False, allow_blank=True, max_length=11,
+        regex=r"^$|^\d{11}$", required=False, allow_blank=True, max_length=11,
     )
     gross_weight_kg = serializers.DecimalField(
         required=False, allow_null=True, max_digits=12, decimal_places=3,
