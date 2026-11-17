@@ -3,7 +3,8 @@ from django.http import Http404
 from django.db import IntegrityError
 from django.db.models import Q, Sum
 from django.db.models.functions import Coalesce
-from rest_framework import status, viewsets
+from rest_framework import status, viewsets, serializers
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
@@ -12,6 +13,10 @@ from accounts.permissions import usuario_tiene_permiso
 from catalog.models import Provider
 from purchasing.models import PurchaseOrder, PurchaseOrderItem
 from warehouse.api_serializers import CreateReceiptSerializer, GoodsReceiptSerializer
+from warehouse.receiving_claims import (
+    construir_reporte, enviar_reporte_editorial, evidence_dict, evidence_list,
+    guardar_evidencia, protected_download,
+)
 from warehouse.models import GoodsReceipt, ReceivingIncident
 from warehouse.receiving import (
     actualizar_borrador_recepcion, anular_borrador_recepcion, crear_borrador_recepcion,
@@ -191,6 +196,41 @@ class GoodsReceiptViewSet(viewsets.ReadOnlyModelViewSet):
         except DjangoValidationError as exc:
             raise ValidationError({"detail": exc.messages}) from exc
         return Response(GoodsReceiptSerializer(receipt).data)
+
+    @action(
+        detail=True, methods=["get", "post"], url_path="evidencias",
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def evidences(self, request, pk=None):
+        receipt = self.get_object()
+        if request.method == "GET":
+            return Response(evidence_list(receipt))
+        if not usuario_tiene_permiso(request.user, "warehouse.manage_receiving"):
+            raise PermissionDenied("No tienes permiso para registrar evidencias.")
+        item = guardar_evidencia(receipt=receipt, actor=request.user, data=request.data)
+        return Response(evidence_dict(item), status=status.HTTP_201_CREATED)
+
+    @action(
+        detail=True, methods=["get"],
+        url_path=r"evidencias/(?P<evidence_id>\d+)/archivo",
+    )
+    def evidence_download(self, request, pk=None, evidence_id=None):
+        return protected_download(receipt=self.get_object(), evidence_id=evidence_id)
+
+    @action(detail=True, methods=["get", "post"], url_path="reporte-editorial")
+    def supplier_report(self, request, pk=None):
+        receipt = self.get_object()
+        if request.method == "GET":
+            return Response(construir_reporte(receipt))
+        if not usuario_tiene_permiso(request.user, "warehouse.validate_receiving"):
+            raise PermissionDenied("El envío formal requiere autorización de jefatura.")
+        # Validación explícita: no inferir ni inventar correo del proveedor.
+        email = serializers.EmailField().run_validation(request.data.get("recipient"))
+        key = serializers.UUIDField().run_validation(request.data.get("dispatch_key"))
+        return Response(enviar_reporte_editorial(
+            receipt_id=receipt.pk, actor=request.user,
+            recipient=email, dispatch_key=key,
+        ))
 
     @action(detail=True, methods=["get"], url_path="seguimiento")
     def tracking(self, request, pk=None):
