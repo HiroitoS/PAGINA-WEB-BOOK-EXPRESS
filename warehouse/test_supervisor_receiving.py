@@ -7,6 +7,7 @@ from rest_framework.test import APIClient
 
 from purchasing.order_creation import create_orders_from_adoption
 from purchasing.test_integration import GeneracionPedidosAdopcionTests
+from notifications.models import Notification
 from warehouse.models import GoodsReceipt, ReceivingEvidence, StockEntry, WarehouseLocation
 from warehouse.receiving import crear_borrador_recepcion
 
@@ -125,6 +126,80 @@ class WarehouseSupervisorFlowTests(TestCase):
             {}, format="json",
         )
         self.assertEqual(rejected.status_code, 400, rejected.data)
+
+    def test_atribucion_bandeja_y_enlaces_de_notificaciones(self):
+        base = "/api/admin/erp/almacen/recepciones/pendientes-aprobacion/"
+        before = self.api(self.boss).get(base)
+        self.assertEqual(before.status_code, 200)
+        self.assertEqual(before.data["total"], 0)
+        self.assertEqual(self.api(self.clerk).get(base).status_code, 403)
+
+        submit = self.api(self.clerk).post(self.url("solicitar-aprobacion"), {}, format="json")
+        self.assertEqual(submit.status_code, 200, submit.data)
+
+        pending = self.api(self.boss).get(base)
+        self.assertEqual(pending.status_code, 200, pending.data)
+        self.assertEqual(pending.data["total"], 1)
+        self.assertEqual(pending.data["recepciones"][0]["id"], self.receipt.pk)
+
+        notice = Notification.objects.get(
+            recipient=self.boss,
+            event_type="warehouse.receipt_approval_requested",
+            source_id=str(self.receipt.pk),
+        )
+        destination = f"/admin/erp/almacen/recepciones?recepcion={self.receipt.pk}"
+        self.assertEqual(notice.link, destination)
+
+        approved = self.api(self.boss).post(self.url("validar"), {}, format="json")
+        self.assertEqual(approved.status_code, 200, approved.data)
+        self.assertEqual(self.api(self.boss).get(base).data["total"], 0)
+
+        notice.refresh_from_db()
+        self.assertTrue(notice.is_resolved)
+        self.assertTrue(notice.is_read)
+
+        clerk_notice = Notification.objects.get(
+            recipient=self.clerk,
+            event_type="warehouse.receipt_validated",
+            source_id=str(self.receipt.pk),
+        )
+        self.assertEqual(clerk_notice.link, destination)
+
+    def test_devolucion_notifica_al_registrador_y_reenvio_no_duplica(self):
+        destination = f"/admin/erp/almacen/recepciones?recepcion={self.receipt.pk}"
+        self.assertEqual(
+            self.api(self.clerk).post(self.url("solicitar-aprobacion"), {}, format="json").status_code,
+            200,
+        )
+        back = self.api(self.boss).post(self.url("devolver"), {
+            "reason": "Rectificar los cinco ejemplares observados.",
+        }, format="json")
+        self.assertEqual(back.status_code, 200, back.data)
+        returned = Notification.objects.get(
+            recipient=self.clerk,
+            event_type="warehouse.receipt_returned",
+            source_id=str(self.receipt.pk),
+        )
+        self.assertEqual(returned.link, destination)
+        self.assertIn("Rectificar", returned.message)
+        self.assertTrue(Notification.objects.get(
+            recipient=self.boss, event_type="warehouse.receipt_approval_requested",
+            source_id=str(self.receipt.pk),
+        ).is_resolved)
+
+        # Una nueva revisión debe generar un aviso nuevo, no reutilizar el anterior.
+        second = self.api(self.clerk).post(
+            self.url("solicitar-aprobacion"), {}, format="json",
+        )
+        self.assertEqual(second.status_code, 200, second.data)
+        self.assertEqual(Notification.objects.filter(
+            recipient=self.boss,
+            event_type="warehouse.receipt_approval_requested",
+            source_id=str(self.receipt.pk),
+        ).count(), 2)
+        self.assertEqual(self.api(self.boss).get(
+            "/api/admin/erp/almacen/recepciones/pendientes-aprobacion/"
+        ).data["total"], 1)
 
     def test_evidencia_privada_y_reporte_sin_envio_automatico(self):
         client = self.api(self.clerk)
