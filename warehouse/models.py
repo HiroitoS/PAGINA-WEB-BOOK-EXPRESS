@@ -7,6 +7,9 @@ disponible ni pagos a proveedores.
 import uuid
 
 from django.conf import settings
+from pathlib import Path
+from django.core.files.storage import FileSystemStorage
+
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models
@@ -211,6 +214,45 @@ class ReceivingIncident(TimeStampedModel):
             models.UniqueConstraint(fields=["receipt_line", "kind"], name="wh_incident_line_kind_unique"),
             models.CheckConstraint(condition=Q(quantity__gte=1), name="wh_incident_positive"),
         ]
+
+
+def private_receiving_storage():
+    """Los archivos de reclamación nunca se publican por MEDIA_URL."""
+    return FileSystemStorage(location=Path(settings.BASE_DIR) / "private_receiving")
+
+
+def receiving_evidence_path(instance, filename):
+    suffix = Path(filename).suffix.lower()
+    if suffix not in (".jpg", ".jpeg", ".png", ".webp", ".pdf"):
+        suffix = ".bin"
+    return f"receipt_{instance.receipt_line.receipt_id}/{uuid.uuid4().hex}{suffix}"
+
+
+class ReceivingEvidence(TimeStampedModel):
+    """Foto o PDF de una diferencia física, custodiado fuera del MEDIA_ROOT público."""
+
+    class Kind(models.TextChoices):
+        DAMAGED = "damaged", "Dañado o deteriorado"
+        INCORRECT = "incorrect", "Libro incorrecto"
+        SHORTAGE = "shortage", "Faltante frente a la guía"
+        OTHER = "other", "Otra observación"
+
+    receipt_line = models.ForeignKey(
+        GoodsReceiptLine, on_delete=models.PROTECT, related_name="evidences",
+    )
+    kind = models.CharField(max_length=15, choices=Kind.choices)
+    description = models.CharField(max_length=500)
+    file = models.FileField(
+        upload_to=receiving_evidence_path, storage=private_receiving_storage,
+    )
+    original_name = models.CharField(max_length=220)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="receiving_evidences_created",
+    )
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
 
 
 class StockEntry(TimeStampedModel):
