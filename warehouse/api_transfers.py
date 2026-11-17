@@ -2,7 +2,7 @@
 from datetime import date
 
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db.models import Q
+from django.db.models import Q, Sum
 from django.core.paginator import Paginator, EmptyPage
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
@@ -10,9 +10,22 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 
 from accounts.permissions import usuario_tiene_permiso
-from warehouse.models import GoodsReceipt, StockEntry, StockTransfer, WarehouseLocation
+from warehouse.models import (
+    DistributionStockReservation, GoodsReceipt, StockEntry, StockTransfer, WarehouseLocation,
+)
 from warehouse.transfers import posiciones_lotes, registrar_traslado
 from warehouse.bulk_transfers import registrar_traslado_por_guia
+
+
+def _reservado_por_lote(entries, source_id):
+    ids = [entry.pk for entry in entries]
+    if not ids:
+        return {}
+    records = DistributionStockReservation.objects.filter(
+        stock_entry_id__in=ids, source_id=source_id,
+        status=DistributionStockReservation.Status.ACTIVE,
+    ).values("stock_entry_id").annotate(total=Sum("quantity"))
+    return {row["stock_entry_id"]: row["total"] for row in records}
 
 
 class TransferInputSerializer(serializers.Serializer):
@@ -212,9 +225,10 @@ class StockTransferViewSet(viewsets.ViewSet):
         location_id = self._ubicacion_origen(request)
         entries = list(self._lotes_en_ubicacion(location_id))
         balances = posiciones_lotes(entries)
+        reserved = _reservado_por_lote(entries, location_id)
         providers, schools, documents = {}, {}, {}
         for entry in entries:
-            if balances.get((entry.pk, location_id), 0) <= 0:
+            if balances.get((entry.pk, location_id), 0) - reserved.get(entry.pk, 0) <= 0:
                 continue
             order = entry.receipt_line.order_item.order
             receipt = entry.receipt_line.receipt
@@ -266,9 +280,10 @@ class StockTransferViewSet(viewsets.ViewSet):
             )
         entries = list(qs)
         balances = posiciones_lotes(entries)
+        reserved = _reservado_por_lote(entries, location_id)
         available = [
             entry for entry in entries
-            if balances.get((entry.pk, location_id), 0) > 0
+            if balances.get((entry.pk, location_id), 0) - reserved.get(entry.pk, 0) > 0
         ]
         pages = Paginator(available, 25)
         try:
@@ -288,11 +303,15 @@ class StockTransferViewSet(viewsets.ViewSet):
                 "provider_id": e.product.provider_id,
                 "school_id": e.receipt_line.order_item.order.school_id,
                 "school": e.receipt_line.order_item.order.school_name_snapshot,
-                "available": balances[(e.pk, location_id)],
+                "available": balances[(e.pk, location_id)] - reserved.get(e.pk, 0),
+                "physical": balances[(e.pk, location_id)],
+                "reserved": reserved.get(e.pk, 0),
                 "unit_cost": (str(e.unit_cost_snapshot)
                               if e.unit_cost_snapshot is not None else None),
                 "value_reference": (
-                    str(e.unit_cost_snapshot * balances[(e.pk, location_id)])
+                    str(e.unit_cost_snapshot * (
+                        balances[(e.pk, location_id)] - reserved.get(e.pk, 0)
+                    ))
                     if e.unit_cost_snapshot is not None else None
                 ),
             } for e in current],
@@ -327,20 +346,25 @@ class StockTransferViewSet(viewsets.ViewSet):
             | Q(transfers__destination_id=source_id)
         ).distinct().order_by("product__name", "pk"))
         balances = posiciones_lotes(entries)
+        reserved = _reservado_por_lote(entries, source_id)
         rows = [{
             "id": entry.pk, "product": entry.product.name,
             "editorial": entry.product.provider.name,
             "school": entry.receipt_line.order_item.order.school_name_snapshot,
-            "available": balances.get((entry.pk, source_id), 0),
+            "available": max(0, balances.get((entry.pk, source_id), 0) - reserved.get(entry.pk, 0)),
+            "physical": balances.get((entry.pk, source_id), 0),
+            "reserved": reserved.get(entry.pk, 0),
             "unit_cost": (
                 str(entry.unit_cost_snapshot)
                 if entry.unit_cost_snapshot is not None else None
             ),
             "value_reference": (
-                str(entry.unit_cost_snapshot * balances[(entry.pk, source_id)])
+                str(entry.unit_cost_snapshot * max(
+                    0, balances.get((entry.pk, source_id), 0) - reserved.get(entry.pk, 0),
+                ))
                 if entry.unit_cost_snapshot is not None else None
             ),
-        } for entry in entries if balances.get((entry.pk, source_id), 0) > 0]
+        } for entry in entries if balances.get((entry.pk, source_id), 0) - reserved.get(entry.pk, 0) > 0]
         if len(rows) > 200:
             raise ValidationError({
                 "detail": (
