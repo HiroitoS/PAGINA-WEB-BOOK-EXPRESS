@@ -158,6 +158,27 @@ FUNCTIONAL_PERMISSIONS = (
         "requires": ["crm.view_crm"],
     },
     {
+        "code": "warehouse.view_receiving",
+        "category": "Almacén",
+        "label": "Consultar recepciones e inventario",
+        "description": "Permite consultar recepciones, incidencias y existencias.",
+        "requires": [],
+    },
+    {
+        "code": "warehouse.manage_receiving",
+        "category": "Almacén",
+        "label": "Registrar recepción física",
+        "description": "Permite registrar borradores y solicitar aprobación al jefe de almacén.",
+        "requires": ["warehouse.view_receiving"],
+    },
+    {
+        "code": "warehouse.validate_receiving",
+        "category": "Almacén",
+        "label": "Aprobar recepción e ingresar existencias",
+        "description": "Permite aprobar recepciones verificadas por otro trabajador.",
+        "requires": ["warehouse.view_receiving"],
+    },
+    {
         "code": "warehouse.view_distribution_operations",
         "category": "Almacén",
         "label": "Consultar distribuciones",
