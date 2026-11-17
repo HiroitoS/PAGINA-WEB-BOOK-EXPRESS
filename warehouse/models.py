@@ -53,6 +53,7 @@ class GoodsReceipt(TimeStampedModel):
     class Status(models.TextChoices):
         DRAFT = "draft", "Borrador"
         VALIDATED = "validated", "Validada"
+        CANCELLED = "cancelled", "Anulada"
 
     class DocumentType(models.TextChoices):
         GUIDE = "guide", "Guía de remisión"
@@ -95,14 +96,14 @@ class GoodsReceipt(TimeStampedModel):
         constraints = [
             models.UniqueConstraint(
                 fields=["provider", "document_type", "document_number"],
-                condition=Q(document_type="guide") & ~Q(document_number=""),
+                condition=Q(document_type="guide") & ~Q(document_number="") & ~Q(status="cancelled"),
                 name="wh_unique_supplier_guide",
             ),
             # Refuerza el índice anterior: la serie/número no distingue mayúsculas
             # y minúsculas ni espacios sobrantes al principio o al final.
             models.UniqueConstraint(
                 Upper(Trim("document_number")), "provider", "document_type",
-                condition=Q(document_type="guide") & ~Q(document_number=""),
+                condition=Q(document_type="guide") & ~Q(document_number="") & ~Q(status="cancelled"),
                 name="wh_unique_supplier_guide_ci",
             ),
         ]
