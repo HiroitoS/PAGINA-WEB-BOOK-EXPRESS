@@ -464,7 +464,7 @@ class DistributionOperationViewSet(viewsets.ViewSet):
             )
             if record.status != DistributionOperation.Status.PLANNED:
                 raise ValidationError({
-                    "detail": "Esta operación ya fue anulada. No puedes modificarla.",
+                    "detail": "La entrega ya inició su preparación o fue anulada. No se puede editar.",
                 })
             previous = _state(record)
             planned = (
@@ -510,6 +510,71 @@ class DistributionOperationViewSet(viewsets.ViewSet):
             )
         return Response(_output(get_object_or_404(_queryset(), pk=record.pk)))
 
+    @action(detail=True, methods=["get"], url_path="preparacion")
+    def preparation(self, request, pk=None):
+        self._authorize(request)
+        operation = get_object_or_404(_queryset(), pk=pk)
+        return Response(resumen_preparacion(operation))
+
+    @action(detail=True, methods=["post"], url_path="reservar")
+    def reserve(self, request, pk=None):
+        self._authorize(request, write=True)
+        try:
+            operation, created = reservar_operacion(pk, request.user)
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
+        return Response(resumen_preparacion(operation), status=(
+            status.HTTP_201_CREATED if created else status.HTTP_200_OK
+        ))
+
+    @action(detail=True, methods=["post"], url_path="confirmar-preparacion")
+    def confirm_preparation(self, request, pk=None):
+        self._authorize(request, write=True)
+        form = serializers.ListSerializer(
+            child=PhysicalCountInput(), allow_empty=False,
+            data=request.data.get("counts"),
+        )
+        form.is_valid(raise_exception=True)
+        try:
+            operation = confirmar_preparacion(pk, request.user, form.validated_data)
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
+        return Response(resumen_preparacion(operation))
+
+    @action(detail=True, methods=["get", "put"], url_path="documento-traslado")
+    def transport_document(self, request, pk=None):
+        self._authorize(request, write=request.method == "PUT")
+        if request.method == "GET":
+            return Response(_transport_output(get_object_or_404(_queryset(), pk=pk)))
+        form = TransportDraftInput(data=request.data)
+        form.is_valid(raise_exception=True)
+        with transaction.atomic():
+            operation = get_object_or_404(
+                DistributionOperation.objects.select_for_update(), pk=pk,
+            )
+            if operation.status == DistributionOperation.Status.CANCELLED:
+                raise ValidationError({
+                    "detail": "No puedes modificar documentos de una entrega anulada.",
+                })
+            draft, _ = DistributionTransportDraft.objects.get_or_create(
+                operation=operation,
+                defaults={"updated_by": request.user},
+            )
+            changes = []
+            for field, value in form.validated_data.items():
+                if getattr(draft, field) != value:
+                    setattr(draft, field, value)
+                    changes.append(field)
+            if changes:
+                draft.updated_by = request.user
+                draft.save(update_fields=[*changes, "updated_by", "updated_at"])
+                DistributionOperationEvent.objects.create(
+                    operation=operation, actor=request.user,
+                    action="transport_draft_updated",
+                    current={"updated_fields": changes, "sunat_issued": False},
+                )
+        return Response(_transport_output(operation))
+
     @action(detail=True, methods=["post"], url_path="anular")
     def cancel(self, request, pk=None):
         self._authorize(request, write=True)
@@ -526,9 +591,10 @@ class DistributionOperationViewSet(viewsets.ViewSet):
             record = get_object_or_404(
                 DistributionOperation.objects.select_for_update(), pk=pk,
             )
-            if record.status != DistributionOperation.Status.PLANNED:
+            if record.status == DistributionOperation.Status.CANCELLED:
                 raise ValidationError({"detail": "Esta operación ya fue anulada."})
             previous = _state(record)
+            liberar_reservas_operacion(record)
             record.status = DistributionOperation.Status.CANCELLED
             record.save(update_fields=["status", "updated_at"])
             DistributionOperationEvent.objects.create(
