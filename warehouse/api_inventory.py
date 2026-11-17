@@ -1,4 +1,6 @@
 """API de Inventario y movimientos; separada de Recepción sin cambiar rutas."""
+from datetime import timedelta
+from django.utils import timezone
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -269,6 +271,46 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
             provider_id=int(provider) if provider else None,
             school_id=int(school) if school else None,
         ))
+
+    @action(detail=False, methods=["get"], url_path="avisos-recepcion")
+    def receiving_alerts(self, request):
+        """Actividad reciente, sin envíos ni cambios de inventario."""
+        self.get_queryset()
+        window = timezone.now() - timedelta(days=7)
+        recent = GoodsReceipt.objects.filter(
+            status=GoodsReceipt.Status.VALIDATED,
+            validated_at__gte=window,
+        ).select_related("provider", "validated_by").prefetch_related(
+            "lines__order_item__order",
+        ).order_by("-validated_at", "-pk")[:8]
+        rows = []
+        for item in recent:
+            observed = sum(line.quantity_observed for line in item.lines.all())
+            shortage = sum(
+                max(0, (line.quantity_documented or 0) - line.quantity_arrived)
+                for line in item.lines.all()
+            )
+            rows.append({
+                "id": item.pk, "editorial": item.provider.name,
+                "documento": item.document_number,
+                "fecha": item.validated_at,
+                "aceptadas": sum(
+                    line.quantity_accepted + line.quantity_extra
+                    for line in item.lines.all()
+                ),
+                "observadas": observed, "faltantes_guia": shortage,
+                "colegios": sorted({
+                    line.order_item.order.school_name_snapshot
+                    for line in item.lines.all()
+                    if line.order_item.order.school_name_snapshot
+                }),
+            })
+        pending = (
+            GoodsReceipt.objects.filter(status=GoodsReceipt.Status.SUBMITTED).count()
+            if usuario_tiene_permiso(request.user, "warehouse.validate_receiving")
+            else 0
+        )
+        return Response({"recientes": rows, "pendientes_aprobacion": pending})
 
     @action(detail=False, methods=["get"], url_path="consolidado-filtros")
     def consolidated_filters(self, request):
