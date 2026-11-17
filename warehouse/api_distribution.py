@@ -593,6 +593,14 @@ class DistributionOperationViewSet(viewsets.ViewSet):
             )
             if record.status == DistributionOperation.Status.CANCELLED:
                 raise ValidationError({"detail": "Esta operación ya fue anulada."})
+            if record.status == DistributionOperation.Status.PREPARED:
+                raise ValidationError({
+                    "detail": (
+                        "Esta mercadería ya está preparada físicamente. "
+                        "Solicita primero una reversión supervisada con recuento; "
+                        "no puede liberarse automáticamente."
+                    ),
+                })
             previous = _state(record)
             liberar_reservas_operacion(record)
             record.status = DistributionOperation.Status.CANCELLED
