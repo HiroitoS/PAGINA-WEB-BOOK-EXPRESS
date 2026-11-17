@@ -12,7 +12,9 @@ from django.db import transaction
 from django.db.models import Q, Sum
 
 from accounts.permissions import usuario_tiene_permiso
-from warehouse.models import StockEntry, StockMovement, StockTransfer, WarehouseLocation
+from warehouse.models import (
+    DistributionStockReservation, StockEntry, StockMovement, StockTransfer, WarehouseLocation,
+)
 
 
 def posiciones_lotes(entries):
@@ -112,9 +114,15 @@ def registrar_traslado(
         raise ValidationError("Selecciona dos ubicaciones activas y válidas.")
 
     saldo = saldo_en_ubicacion(entry, source_id)
-    if saldo < quantity:
+    reservado = DistributionStockReservation.objects.filter(
+        stock_entry=entry, source_id=source_id,
+        status=DistributionStockReservation.Status.ACTIVE,
+    ).aggregate(total=Sum("quantity"))["total"] or 0
+    libre = max(0, saldo - reservado)
+    if libre < quantity:
         raise ValidationError(
-            f"Solo hay {max(saldo, 0)} unidades conformes en el almacén de origen."
+            f"Solo hay {libre} unidades libres en el origen. "
+            f"Hay {reservado} unidades reservadas para entregas en preparación."
         )
     move = StockTransfer.objects.create(
         stock_entry=entry,
