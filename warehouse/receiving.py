@@ -244,6 +244,8 @@ def solicitar_aprobacion_recepcion(*, actor, receipt_id):
         receipt=receipt, actor=actor, action="submitted",
         notes="Recepción presentada para revisión de jefatura.",
     )
+    from warehouse.receipt_notifications import avisar_solicitud_aprobacion
+    avisar_solicitud_aprobacion(receipt, actor)
     return receipt
 
 
@@ -400,6 +402,8 @@ def validar_recepcion(*, actor, receipt_id):
     # Misma transacción de validación: ninguna guía validada queda sin stock.
     from warehouse.inventory import registrar_entrada_recepcion
     registrar_entrada_recepcion(actor=actor, receipt_id=receipt.pk)
+    from warehouse.receipt_notifications import avisar_recepcion_validada
+    avisar_recepcion_validada(receipt, actor)
     return receipt
 
 
