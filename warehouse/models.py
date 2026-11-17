@@ -512,6 +512,8 @@ class DistributionOperation(TimeStampedModel):
 
     class Status(models.TextChoices):
         PLANNED = "planned", "Por preparar"
+        RESERVED = "reserved", "Existencias reservadas"
+        PREPARED = "prepared", "Preparada"
         CANCELLED = "cancelled", "Anulada"
 
     reference = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
@@ -602,3 +604,94 @@ class DistributionOperationEvent(TimeStampedModel):
 
     class Meta:
         ordering = ["created_at", "pk"]
+
+
+class DistributionStockReservation(TimeStampedModel):
+    """Separación de unidades físicas por lote y operación; NO es despacho."""
+
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Reservada"
+        RELEASED = "released", "Liberada"
+
+    operation = models.ForeignKey(
+        DistributionOperation, on_delete=models.PROTECT,
+        related_name="stock_reservations",
+    )
+    stock_entry = models.ForeignKey(
+        StockEntry, on_delete=models.PROTECT, related_name="distribution_reservations",
+    )
+    source = models.ForeignKey(
+        WarehouseLocation, on_delete=models.PROTECT, related_name="distribution_reservations",
+    )
+    quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    status = models.CharField(
+        max_length=10, choices=Status.choices, default=Status.ACTIVE, db_index=True,
+    )
+    reserved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="warehouse_reservations_created",
+    )
+    counted_quantity = models.PositiveIntegerField(null=True, blank=True)
+    counted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        null=True, blank=True, related_name="warehouse_reservations_counted",
+    )
+    counted_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["stock_entry_id", "pk"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["operation", "stock_entry"], name="wh_prep_unique_entry",
+            ),
+            models.CheckConstraint(
+                condition=Q(quantity__gte=1), name="wh_prep_positive_quantity",
+            ),
+        ]
+
+
+class DistributionTransportDraft(TimeStampedModel):
+    """Datos PRELIMINARES para sustento del traslado; no es una GRE emitida.
+
+    La emisión, CDR y consulta SUNAT deben ocurrir en un servicio oficial
+    separado, antes del despacho efectivo. Nunca marcar como aceptada aquí.
+    """
+
+    class Mode(models.TextChoices):
+        PRIVATE = "private", "Transporte privado"
+        PUBLIC = "public", "Transporte público"
+
+    class Reason(models.TextChoices):
+        CONSIGNMENT = "consignment", "Consignación"
+        COMPANY_TRANSFER = "company_transfer", "Entre establecimientos"
+        SALE = "sale", "Venta"
+        OTHER = "other", "Otro motivo (verificar)"
+
+    operation = models.OneToOneField(
+        DistributionOperation, on_delete=models.PROTECT,
+        related_name="transport_draft",
+    )
+    issuer_ruc = models.CharField(max_length=11, blank=True)
+    departure_address = models.CharField(max_length=300, blank=True)
+    destination_address = models.CharField(max_length=300, blank=True)
+    destination_id_number = models.CharField(max_length=20, blank=True)
+    destination_name = models.CharField(max_length=180, blank=True)
+    transport_mode = models.CharField(max_length=10, choices=Mode.choices, blank=True)
+    transfer_reason = models.CharField(max_length=30, choices=Reason.choices, blank=True)
+    departure_on = models.DateField(null=True, blank=True)
+    license_plate = models.CharField(max_length=15, blank=True)
+    driver_document = models.CharField(max_length=20, blank=True)
+    driver_license = models.CharField(max_length=30, blank=True)
+    carrier_ruc = models.CharField(max_length=11, blank=True)
+    gross_weight_kg = models.DecimalField(
+        max_digits=12, decimal_places=3, null=True, blank=True,
+        validators=[MinValueValidator(0.001)],
+    )
+    notes = models.CharField(max_length=500, blank=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="warehouse_transport_drafts_updated",
+    )
+
+    class Meta:
+        ordering = ["-updated_at"]
