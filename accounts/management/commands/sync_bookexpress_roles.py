@@ -108,6 +108,12 @@ class Command(BaseCommand):
         "sin eliminar permisos existentes."
     )
 
+    def add_arguments(self, parser):
+        parser.add_argument(
+            "--reset-permisos", action="store_true",
+            help="Reemplaza intencionadamente permisos funcionales de los roles por los valores base.",
+        )
+
     def handle(self, *args, **options):
         for role_name, permission_names in ROLE_PERMISSIONS.items():
             group, created = Group.objects.get_or_create(name=role_name)
@@ -147,15 +153,17 @@ class Command(BaseCommand):
                 .exclude(id__in=managed_permission_ids)
             )
 
-            group.permissions.set([
-                *preserved_permissions,
-                *permissions,
-            ])
+            if created or options["reset_permisos"]:
+                group.permissions.set([
+                    *preserved_permissions,
+                    *permissions,
+                ])
+                result = f"{len(permissions)} permiso(s) funcional(es) inicializado(s)."
+            else:
+                result = "permisos personalizados preservados (usar --reset-permisos para restaurar base)."
 
             self.stdout.write(
-                self.style.SUCCESS(
-                    f"{role_name}: {len(permissions)} permiso(s) funcional(es) sincronizado(s)."
-                )
+                self.style.SUCCESS(f"{role_name}: {result}")
             )
 
         self.stdout.write(
