@@ -9,6 +9,7 @@ from accounts.permissions import (
     ROL_ATENCION,
     ROL_CATALOGO,
     ROL_JEFE_COMERCIAL,
+    ROL_JEFE_ALMACEN,
 )
 
 
@@ -73,8 +74,18 @@ ROLE_PERMISSIONS = {
         "crm.export_crm_reports",
     ],
     ROL_ALMACEN: [
+        "warehouse.view_receiving",
+        "warehouse.manage_receiving",
         "warehouse.view_internal_stock_requests",
         "warehouse.manage_internal_stock_requests",
+        "warehouse.view_distribution_operations",
+        "warehouse.manage_distribution_operations",
+    ],
+    ROL_JEFE_ALMACEN: [
+        "warehouse.view_receiving",
+        "warehouse.validate_receiving",
+        "warehouse.view_internal_stock_requests",
+        "warehouse.approve_internal_stock_requests",
         "warehouse.view_distribution_operations",
         "warehouse.manage_distribution_operations",
     ],
