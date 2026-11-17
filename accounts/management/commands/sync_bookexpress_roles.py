@@ -76,6 +76,10 @@ ROLE_PERMISSIONS = {
     ROL_ALMACEN: [
         "warehouse.view_receiving",
         "warehouse.manage_receiving",
+        "warehouse.view_warehouse_locations",
+        "warehouse.view_stock_transfers",
+        "warehouse.manage_stock_transfers",
+        "warehouse.view_stock_movements",
         "warehouse.view_internal_stock_requests",
         "warehouse.manage_internal_stock_requests",
         "warehouse.view_distribution_operations",
@@ -84,6 +88,12 @@ ROLE_PERMISSIONS = {
     ROL_JEFE_ALMACEN: [
         "warehouse.view_receiving",
         "warehouse.validate_receiving",
+        "warehouse.view_warehouse_locations",
+        "warehouse.manage_warehouse_locations",
+        "warehouse.view_stock_transfers",
+        "warehouse.manage_stock_transfers",
+        "warehouse.view_stock_movements",
+        "warehouse.manage_stock_courtesies",
         "warehouse.view_internal_stock_requests",
         "warehouse.approve_internal_stock_requests",
         "warehouse.view_distribution_operations",
