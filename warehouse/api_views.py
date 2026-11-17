@@ -15,7 +15,8 @@ from warehouse.api_serializers import CreateReceiptSerializer, GoodsReceiptSeria
 from warehouse.models import GoodsReceipt, ReceivingIncident
 from warehouse.receiving import (
     actualizar_borrador_recepcion, anular_borrador_recepcion, crear_borrador_recepcion,
-    saldos_pedido, seguimiento_recepcion, validar_recepcion,
+    saldos_pedido, seguimiento_recepcion, solicitar_aprobacion_recepcion,
+    devolver_recepcion, validar_recepcion,
 )
 
 
@@ -137,6 +138,27 @@ class GoodsReceiptViewSet(viewsets.ReadOnlyModelViewSet):
             raise ValidationError({"detail": exc.messages}) from exc
         except IntegrityError as exc:
             raise ValidationError({"detail": "El documento ya fue registrado para esta editorial o sus datos están duplicados."}) from exc
+        return Response(GoodsReceiptSerializer(receipt).data)
+
+    @action(detail=True, methods=["post"], url_path="solicitar-aprobacion")
+    def submit_approval(self, request, pk=None):
+        self.get_object()
+        try:
+            receipt = solicitar_aprobacion_recepcion(actor=request.user, receipt_id=pk)
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
+        return Response(GoodsReceiptSerializer(receipt).data)
+
+    @action(detail=True, methods=["post"], url_path="devolver")
+    def return_for_correction(self, request, pk=None):
+        self.get_object()
+        try:
+            receipt = devolver_recepcion(
+                actor=request.user, receipt_id=pk,
+                reason=request.data.get("reason", ""),
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
         return Response(GoodsReceiptSerializer(receipt).data)
 
     @action(detail=True, methods=["post"], url_path="validar")
