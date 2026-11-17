@@ -14,7 +14,7 @@ from purchasing.models import PurchaseOrder, PurchaseOrderItem
 from warehouse.api_serializers import CreateReceiptSerializer, GoodsReceiptSerializer
 from warehouse.models import GoodsReceipt, ReceivingIncident
 from warehouse.receiving import (
-    actualizar_borrador_recepcion, crear_borrador_recepcion,
+    actualizar_borrador_recepcion, anular_borrador_recepcion, crear_borrador_recepcion,
     saldos_pedido, seguimiento_recepcion, validar_recepcion,
 )
 
@@ -150,6 +150,24 @@ class GoodsReceiptViewSet(viewsets.ReadOnlyModelViewSet):
             raise ValidationError({"detail": exc.messages}) from exc
         except IntegrityError as exc:
             raise ValidationError({"detail": "El documento ya fue registrado para esta editorial o sus datos están duplicados."}) from exc
+        return Response(GoodsReceiptSerializer(receipt).data)
+
+    @action(detail=True, methods=["post"], url_path="anular-borrador")
+    def cancel_draft(self, request, pk=None):
+        if not usuario_tiene_permiso(request.user, "warehouse.manage_receiving"):
+            raise PermissionDenied("No tienes permiso para anular borradores.")
+        self.get_object()
+        reason = request.data.get("reason", "")
+        if not isinstance(reason, str) or not 8 <= len(reason.strip()) <= 500:
+            raise ValidationError({
+                "reason": "Explica el motivo de anulación (8 a 500 caracteres).",
+            })
+        try:
+            receipt = anular_borrador_recepcion(
+                actor=request.user, receipt_id=pk, reason=reason,
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
         return Response(GoodsReceiptSerializer(receipt).data)
 
     @action(detail=True, methods=["get"], url_path="seguimiento")
