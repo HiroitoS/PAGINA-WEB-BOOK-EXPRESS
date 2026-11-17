@@ -29,7 +29,11 @@ def allocation_summary(adoption, operation=None):
     products = _adoption_products(adoption)
     plans = DistributionOperationLine.objects.filter(
         operation__adoption_id=adoption.pk,
-        operation__status=DistributionOperation.Status.PLANNED,
+        operation__status__in=[
+            DistributionOperation.Status.PLANNED,
+            DistributionOperation.Status.RESERVED,
+            DistributionOperation.Status.PREPARED,
+        ],
     )
     if operation is not None:
         plans = plans.exclude(operation_id=operation.pk)
