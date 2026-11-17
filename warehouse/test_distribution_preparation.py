@@ -137,7 +137,7 @@ class DistributionPreparationTests(TestCase):
         record = DistributionOperation.objects.get(pk=op_id)
         self.assertEqual(record.status, "reserved")
 
-    def test_confirmar_conteo_real_y_anulacion_libera_reservas(self):
+    def test_confirmar_conteo_real_no_permite_anulacion_sin_reversion(self):
         op_id = self.plan()
         client = self.api_client()
         saved = client.post(self.endpoint(op_id, "reservar"), {}, format="json")
@@ -165,15 +165,28 @@ class DistributionPreparationTests(TestCase):
         cancelled = client.post(self.endpoint(op_id, "anular"), {
             "reason": "Operación de prueba cancelada antes de despacho.",
         }, format="json")
-        self.assertEqual(cancelled.status_code, 200, cancelled.data)
-        self.assertEqual(cancelled.data["status"], "cancelled")
-        self.assertFalse(DistributionStockReservation.objects.filter(status="active").exists())
+        self.assertEqual(cancelled.status_code, 400, cancelled.data)
+        self.assertEqual(DistributionOperation.objects.get(pk=op_id).status, "prepared")
+        self.assertEqual(DistributionStockReservation.objects.filter(status="active").count(), 2)
         self.assertEqual(StockTransfer.objects.count(), 0)
         self.assertEqual(
             DistributionOperation.objects.get(pk=op_id).events.filter(
                 action__in=["stock_reserved", "prepared", "cancelled"],
-            ).count(), 3,
+            ).count(), 2,
         )
+
+    def test_anulacion_de_entrega_solo_reservada_libera_lotes(self):
+        op_id = self.plan()
+        client = self.api_client()
+        saved = client.post(self.endpoint(op_id, "reservar"), {}, format="json")
+        self.assertEqual(saved.status_code, 201, saved.data)
+        canceled = client.post(self.endpoint(op_id, "anular"), {
+            "reason": "La feria fue reprogramada y se libera la reserva.",
+        }, format="json")
+        self.assertEqual(canceled.status_code, 200, canceled.data)
+        self.assertEqual(canceled.data["status"], "cancelled")
+        self.assertFalse(DistributionStockReservation.objects.filter(status="active").exists())
+        self.assertEqual(StockTransfer.objects.count(), 0)
 
     def test_faltante_despues_de_traslado_impide_reservar_sin_efectos(self):
         op_id = self.plan()
