@@ -266,6 +266,8 @@ def devolver_recepcion(*, actor, receipt_id, reason):
     GoodsReceiptEvent.objects.create(
         receipt=receipt, actor=actor, action="returned", notes=reason.strip(),
     )
+    from warehouse.receipt_notifications import avisar_devolucion_recepcion
+    avisar_devolucion_recepcion(receipt, actor, reason.strip())
     return receipt
 
 
