@@ -255,6 +255,9 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
         self.get_queryset()
         raw_page = request.query_params.get("pagina", "1")
         provider = request.query_params.get("editorial_id", "")
+        school = request.query_params.get("colegio_id", "")
+        if school and (not school.isdecimal() or int(school) < 1):
+            raise ValidationError({"colegio_id": "Selecciona un colegio válido."})
         if not raw_page.isdecimal() or int(raw_page) < 1:
             raise ValidationError({"pagina": "Selecciona una página válida."})
         if provider and (not provider.isdecimal() or int(provider) < 1):
@@ -264,7 +267,30 @@ class InventoryEntryViewSet(viewsets.ReadOnlyModelViewSet):
             query=request.query_params.get("buscar", "").strip(),
             page=int(raw_page),
             provider_id=int(provider) if provider else None,
+            school_id=int(school) if school else None,
         ))
+
+    @action(detail=False, methods=["get"], url_path="consolidado-filtros")
+    def consolidated_filters(self, request):
+        """Opciones completas basadas en ingresos reales, sin límite de paginación."""
+        self.get_queryset()
+        qs = StockEntry.objects.select_related(
+            "product__provider", "receipt_line__order_item__order__school",
+        )
+        providers, schools = {}, {}
+        for item in qs.iterator(chunk_size=1000):
+            editorial = item.product.provider
+            providers[editorial.pk] = {"id": editorial.pk, "name": editorial.name}
+            order = item.receipt_line.order_item.order
+            if order.school_id:
+                schools[order.school_id] = {
+                    "id": order.school_id,
+                    "name": order.school_name_snapshot or order.school.name,
+                }
+        return Response({
+            "editoriales": sorted(providers.values(), key=lambda v: (v["name"].casefold(), v["id"])),
+            "colegios": sorted(schools.values(), key=lambda v: (v["name"].casefold(), v["id"])),
+        })
 
     @action(detail=False, methods=["get"], url_path="resumen-por-editorial")
     def summary_by_editorial(self, request):
