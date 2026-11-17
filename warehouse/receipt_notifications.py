@@ -30,7 +30,10 @@ def _close_approval_notice(receipt):
         source_id=str(receipt.pk),
         event_type="warehouse.receipt_approval_requested",
         is_resolved=False,
-    ).update(is_resolved=True, resolved_at=timezone.now())
+    ).update(
+        is_resolved=True, resolved_at=timezone.now(),
+        is_read=True, read_at=timezone.now(),
+    )
 
 
 def avisar_devolucion_recepcion(receipt, actor, reason):
