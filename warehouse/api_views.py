@@ -41,6 +41,31 @@ class GoodsReceiptViewSet(viewsets.ReadOnlyModelViewSet):
             queryset = queryset.filter(provider_id=int(raw))
         return queryset
 
+    @action(detail=False, methods=["get"], url_path="pendientes-aprobacion")
+    def pending_approvals(self, request):
+        if not usuario_tiene_permiso(request.user, "warehouse.validate_receiving"):
+            raise PermissionDenied("No tienes permiso para aprobar recepciones.")
+        records = GoodsReceipt.objects.filter(
+            status=GoodsReceipt.Status.SUBMITTED,
+        ).select_related("provider", "created_by")
+        # La separación de funciones también se aplica al acceso directo.
+        if not request.user.is_superuser:
+            records = records.exclude(created_by=request.user)
+        records = records.order_by("-updated_at", "-pk")
+        return Response({
+            "total": records.count(),
+            "recepciones": [
+                {
+                    "id": receipt.pk,
+                    "editorial": receipt.provider.name,
+                    "documento": receipt.document_number,
+                    "registrado_por": receipt.created_by.get_full_name().strip()
+                        or receipt.created_by.get_username(),
+                }
+                for receipt in records[:5]
+            ],
+        })
+
     @action(detail=False, methods=["get"], url_path="pedidos-pendientes")
     def pending_orders(self, request):
         if not usuario_tiene_permiso(request.user, "warehouse.view_receiving"):
