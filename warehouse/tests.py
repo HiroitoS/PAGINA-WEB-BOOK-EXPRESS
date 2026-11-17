@@ -10,10 +10,10 @@ from catalog.models import Grade, Level, Product, Provider
 from crm.models import Campaign
 from purchasing.models import PurchaseOrder, PurchaseOrderItem
 from warehouse.api_serializers import GoodsReceiptSerializer
-from warehouse.models import GoodsReceipt, GoodsReceiptEvent, ReceivingIncident, StockEntry
+from warehouse.models import GoodsReceipt, GoodsReceiptEvent, GoodsReceiptLine, ReceivingIncident, StockEntry
 from warehouse.inventory import registrar_entrada_recepcion
 from warehouse.receiving import (
-    actualizar_borrador_recepcion, crear_borrador_recepcion,
+    actualizar_borrador_recepcion, anular_borrador_recepcion, crear_borrador_recepcion,
     saldos_pedido, validar_recepcion,
 )
 
@@ -459,6 +459,88 @@ class RecepcionMercaderiaTests(TestCase):
                 lines=[{"order_item_id": self.item.pk, "quantity_arrived": 20,
                         "quantity_accepted": 20, "quantity_observed": 0}],
             )
+
+    def test_otra_referencia_no_permite_repetir_recepcion_activa(self):
+        primera = crear_borrador_recepcion(
+            actor=self.actor, provider_id=self.editorial.pk,
+            document_type="other", document_number="PRUEBA-REC-001",
+            received_on=timezone.localdate(),
+            lines=[{
+                "order_item_id": self.item.pk, "quantity_arrived": 40,
+                "quantity_accepted": 40, "quantity_observed": 0,
+            }],
+        )
+        with self.assertRaisesMessage(ValidationError, "Ya existe una recepción activa"):
+            crear_borrador_recepcion(
+                actor=self.actor, provider_id=self.editorial.pk,
+                document_type="other", document_number=" prueba-rec-001 ",
+                received_on=timezone.localdate(),
+                lines=[{
+                    "order_item_id": self.item.pk, "quantity_arrived": 40,
+                    "quantity_accepted": 40, "quantity_observed": 0,
+                }],
+            )
+        self.assertEqual(GoodsReceipt.objects.count(), 1)
+        self.assertEqual(primera.status, GoodsReceipt.Status.DRAFT)
+
+    def test_anular_borrador_con_motivo_libera_documento_sin_tocar_inventario(self):
+        primera = self.borrador(40, documento="G-ANULAR-01")
+        client = APIClient()
+        client.force_authenticate(user=self.actor)
+        url = f"/api/admin/erp/almacen/recepciones/{primera.pk}/anular-borrador/"
+        invalida = client.post(url, {"reason": "no"}, format="json")
+        self.assertEqual(invalida.status_code, 400, invalida.data)
+        cancelada = client.post(url, {
+            "reason": "Duplicada antes de validar.",
+        }, format="json")
+        self.assertEqual(cancelada.status_code, 200, cancelada.data)
+        self.assertEqual(cancelada.data["status"], GoodsReceipt.Status.CANCELLED)
+        primera.refresh_from_db()
+        self.assertEqual(primera.status, GoodsReceipt.Status.CANCELLED)
+        self.assertEqual(primera.lines.count(), 1)
+        self.assertEqual(primera.events.filter(action="cancelled").count(), 1)
+        self.assertEqual(primera.events.get(action="cancelled").notes, "Duplicada antes de validar.")
+        self.assertFalse(StockEntry.objects.exists())
+        self.assertEqual(saldos_pedido(actor=self.actor, order_id=self.pedido.pk)["productos"][0]["cantidad_pendiente"], 100)
+        nueva = self.borrador(40, documento="g-anular-01")
+        self.assertNotEqual(nueva.pk, primera.pk)
+        self.assertEqual(client.post(url, {
+            "reason": "No se debe volver a anular.",
+        }, format="json").status_code, 400)
+        with self.assertRaises(ValidationError):
+            validar_recepcion(actor=self.actor, receipt_id=primera.pk)
+
+    def test_borrador_duplicado_heredado_no_valida_tras_otra_recepcion(self):
+        # Casos antiguos con tipo 'other' sin protección de duplicidad.
+        original = crear_borrador_recepcion(
+            actor=self.actor, provider_id=self.editorial.pk,
+            document_type="other", document_number="PRUEBA-REC-LEGADO",
+            received_on=timezone.localdate(),
+            lines=[{
+                "order_item_id": self.item.pk, "quantity_arrived": 40,
+                "quantity_accepted": 40, "quantity_observed": 0,
+            }],
+        )
+        copia = GoodsReceipt.objects.create(
+            provider=self.editorial, document_type="other",
+            document_number="PRUEBA-REC-LEGADO",
+            received_on=timezone.localdate(), created_by=self.actor,
+        )
+        GoodsReceiptLine.objects.create(
+            receipt=copia, order_item=self.item,
+            quantity_arrived=40, quantity_accepted=40, quantity_observed=0,
+        )
+        validar_recepcion(actor=self.actor, receipt_id=original.pk)
+        with self.assertRaisesMessage(ValidationError, "Ya existe una recepción activa"):
+            validar_recepcion(actor=self.actor, receipt_id=copia.pk)
+        anular_borrador_recepcion(
+            actor=self.actor, receipt_id=copia.pk,
+            reason="Borrador duplicado del documento validado.",
+        )
+        self.assertEqual(StockEntry.objects.count(), 1)
+        self.assertEqual(
+            saldos_pedido(actor=self.actor, order_id=self.pedido.pk)["productos"][0]["cantidad_pendiente"], 60,
+        )
 
     def test_pedidos_pendientes_no_exponen_costos(self):
         inicial, _ = Level.objects.get_or_create(name="Inicial")
