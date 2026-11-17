@@ -256,7 +256,7 @@ class WarehouseSupervisorFlowTests(TestCase):
 
         image = SimpleUploadedFile(
             "observacion.png",
-            b"\\x89PNG\\r\\n\\x1a\\n" + b"evidencia-test-despues-de-aprobacion",
+            b"\x89PNG\r\n\x1a\n" + b"evidencia-test-despues-de-aprobacion",
             content_type="image/png",
         )
         result = self.api(self.clerk).post(self.url("evidencias"), {
