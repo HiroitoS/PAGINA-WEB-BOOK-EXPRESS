@@ -69,6 +69,56 @@ class StockTransferTests(TestCase):
         client.force_authenticate(user=actor)
         return client
 
+    def test_filtros_lotes_traslado_por_editorial_colegio_documento(self):
+        client = self.client_as(self.actor)
+        endpoint = "/api/admin/erp/almacen/traslados/lotes/"
+        filters_url = "/api/admin/erp/almacen/traslados/lotes-filtros/"
+        available = client.get(filters_url, {"source_id": self.main.pk})
+        self.assertEqual(available.status_code, 200, available.data)
+        self.assertEqual(
+            available.data["providers"],
+            [{"id": self.provider.pk, "name": self.provider.name}],
+        )
+        self.assertEqual(
+            available.data["schools"],
+            [{"id": self.school.pk, "name": self.school.name}],
+        )
+        self.assertEqual(len(available.data["documents"]), 1)
+        self.assertEqual(available.data["documents"][0]["type"], "guide")
+        receipt_id = available.data["documents"][0]["id"]
+        selected = client.get(endpoint, {
+            "source_id": self.main.pk, "provider_id": self.provider.pk,
+            "school_id": self.school.pk, "receipt_id": receipt_id,
+            "q": "Libro para traslado", "page": 1,
+        })
+        self.assertEqual(selected.status_code, 200, selected.data)
+        self.assertEqual(selected.data["count"], 1)
+        self.assertEqual(selected.data["results"][0]["document_type"], "guide")
+        self.assertEqual(selected.data["results"][0]["provider_id"], self.provider.pk)
+        self.assertEqual(selected.data["results"][0]["school_id"], self.school.pk)
+        self.assertEqual(selected.data["results"][0]["available"], 12)
+        no_matches = client.get(endpoint, {
+            "source_id": self.main.pk, "school_id": self.school.pk + 1000,
+        })
+        self.assertEqual(no_matches.status_code, 200, no_matches.data)
+        self.assertEqual(no_matches.data["count"], 0)
+        invalid = client.get(endpoint, {"source_id": self.main.pk, "receipt_id": "foo"})
+        self.assertEqual(invalid.status_code, 400, invalid.data)
+        self.assertEqual(
+            self.client_as(self.employee).get(filters_url, {"source_id": self.main.pk}).status_code,
+            403,
+        )
+        # Las opciones nunca deben incluir lotes sin saldo en ese origen.
+        registrar_traslado(
+            actor=self.actor, stock_entry_id=self.entry.pk,
+            source_id=self.main.pk, destination_id=self.store.pk,
+            quantity=12, idempotency_key=uuid4(), entrega_confirmada=True,
+        )
+        main_options = client.get(filters_url, {"source_id": self.main.pk})
+        store_options = client.get(filters_url, {"source_id": self.store.pk})
+        self.assertEqual(main_options.data["providers"], [])
+        self.assertEqual(len(store_options.data["providers"]), 1)
+
     def test_traslado_no_modifica_global_ni_reingresa_lote(self):
         url = "/api/admin/erp/almacen/traslados/"
         payload = {
