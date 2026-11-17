@@ -30,22 +30,38 @@ def _normalizar_documento(document_type, document_number):
     return numero
 
 
-def _validar_guia_no_duplicada(*, provider_id, document_type, document_number, excluir_id=None):
-    if document_type != GoodsReceipt.DocumentType.GUIDE:
+def _validar_documento_no_duplicado(
+    *, provider_id, document_type, document_number, excluir_id=None,
+    solo_validadas=False,
+):
+    """Evita dos recepciones físicas del mismo documento del proveedor.
+
+    Al validar una guía legada duplicada en borrador, solo impedimos duplicar
+    una ya VALIDADA: las otras copias pueden anularse, conservando auditoría.
+    """
+    if not document_number:
         return
+    estados = (
+        [GoodsReceipt.Status.VALIDATED]
+        if solo_validadas
+        else [GoodsReceipt.Status.DRAFT, GoodsReceipt.Status.VALIDATED]
+    )
     existentes = (
         GoodsReceipt.objects.filter(
             provider_id=provider_id,
-            document_type=GoodsReceipt.DocumentType.GUIDE,
+            document_type=document_type,
+            status__in=estados,
         ).annotate(numero_normalizado=Upper(Trim("document_number")))
         .filter(numero_normalizado=document_number)
     )
     if excluir_id:
         existentes = existentes.exclude(pk=excluir_id)
-    if existentes.exists():
+    existente = existentes.only("id").first()
+    if existente:
         raise ValidationError(
-            "Esta guía de remisión ya está registrada para esta editorial. "
-            "Abre la recepción existente en lugar de crear otra."
+            "Ya existe una recepción activa con este documento de la editorial "
+            f"(N.º {existente.pk}). Ábrela para continuar o anular el borrador "
+            "duplicado; no registres de nuevo el mismo ingreso."
         )
 
 
@@ -60,7 +76,8 @@ def crear_borrador_recepcion(
     ids = [line["order_item_id"] for line in lines]
     if len(set(ids)) != len(ids):
         raise ValidationError("No puedes repetir una línea del pedido en una recepción.")
-    provider = Provider.objects.get(pk=provider_id)
+    # Serializa el alta por editorial para evitar documentos repetidos en paralelo.
+    provider = Provider.objects.select_for_update().get(pk=provider_id)
     detalles = {
         item.pk: item for item in PurchaseOrderItem.objects.select_related("order")
         .filter(pk__in=ids)
@@ -79,7 +96,7 @@ def crear_borrador_recepcion(
         if row["quantity_arrived"] != row["quantity_accepted"] + row["quantity_observed"] + row.get("quantity_extra", 0):
             raise ValidationError("Cantidad llegada debe ser igual a aceptada más observada.")
     documento = _normalizar_documento(document_type, document_number)
-    _validar_guia_no_duplicada(
+    _validar_documento_no_duplicado(
         provider_id=provider.pk, document_type=document_type,
         document_number=documento,
     )
@@ -119,6 +136,7 @@ def actualizar_borrador_recepcion(
     document_number, received_on, lines, notes="",
 ):
     _autorizar(actor, "warehouse.manage_receiving")
+    Provider.objects.select_for_update().get(pk=provider_id)
     recepcion = GoodsReceipt.objects.select_for_update().get(pk=receipt_id)
     if recepcion.status != GoodsReceipt.Status.DRAFT:
         raise ValidationError("Solo se puede modificar una recepción en borrador.")
@@ -148,7 +166,7 @@ def actualizar_borrador_recepcion(
             raise ValidationError("La cantidad llegada no coincide con aceptada más observada.")
 
     documento = _normalizar_documento(document_type, document_number)
-    _validar_guia_no_duplicada(
+    _validar_documento_no_duplicado(
         provider_id=recepcion.provider_id, document_type=document_type,
         document_number=documento, excluir_id=recepcion.pk,
     )
@@ -212,11 +230,20 @@ def actualizar_borrador_recepcion(
 @transaction.atomic
 def validar_recepcion(*, actor, receipt_id):
     _autorizar(actor, "warehouse.validate_receiving")
+    # Bloquear primero la editorial mantiene el orden de bloqueos del alta.
+    provider_id = GoodsReceipt.objects.only("provider_id").get(pk=receipt_id).provider_id
+    Provider.objects.select_for_update().get(pk=provider_id)
     receipt = GoodsReceipt.objects.select_for_update().get(pk=receipt_id)
     if receipt.status != GoodsReceipt.Status.DRAFT:
-        raise ValidationError("Esta recepción ya fue validada.")
+        raise ValidationError("Solo se puede validar una recepción en borrador.")
     if not receipt.document_number.strip():
         raise ValidationError("Registra el número del documento del proveedor.")
+    _validar_documento_no_duplicado(
+        provider_id=receipt.provider_id, document_type=receipt.document_type,
+        document_number=_normalizar_documento(
+            receipt.document_type, receipt.document_number,
+        ), excluir_id=receipt.pk, solo_validadas=True,
+    )
 
     filas = list(
         GoodsReceiptLine.objects.select_related("order_item__order")
@@ -332,6 +359,30 @@ def validar_recepcion(*, actor, receipt_id):
     # Misma transacción de validación: ninguna guía validada queda sin stock.
     from warehouse.inventory import registrar_entrada_recepcion
     registrar_entrada_recepcion(actor=actor, receipt_id=receipt.pk)
+    return receipt
+
+
+
+@transaction.atomic
+def anular_borrador_recepcion(*, actor, receipt_id, reason):
+    """Retira un borrador duplicado sin eliminar líneas/eventos ni crear stock."""
+    _autorizar(actor, "warehouse.manage_receiving")
+    reason = str(reason or "").strip()
+    if len(reason) < 8 or len(reason) > 500:
+        raise ValidationError("Indica un motivo de anulación de 8 a 500 caracteres.")
+    receipt = GoodsReceipt.objects.select_for_update().get(pk=receipt_id)
+    if receipt.status != GoodsReceipt.Status.DRAFT:
+        raise ValidationError("Solo puedes anular recepciones en borrador.")
+    receipt.status = GoodsReceipt.Status.CANCELLED
+    receipt.save(update_fields=["status", "updated_at"])
+    GoodsReceiptEvent.objects.create(
+        receipt=receipt, actor=actor, action="cancelled", notes=reason,
+        details={
+            "document_number": receipt.document_number,
+            "items": receipt.lines.count(),
+            "reason": reason,
+        },
+    )
     return receipt
 
 
