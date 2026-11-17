@@ -3,7 +3,10 @@
 Una operación de esta API nunca reserva ni mueve existencias. La entrega
 física requerirá otro servicio con libro de movimientos y constancia.
 """
+from decimal import Decimal
+
 from django.core.paginator import EmptyPage, Paginator
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
@@ -17,9 +20,13 @@ from crm.models import Adoption
 from warehouse.distribution_allocation import (
     allocation_summary, replace_operation_lines, validate_requested_allocation,
 )
+from warehouse.distribution_preparation import (
+    confirmar_preparacion, liberar_reservas_operacion,
+    reservar_operacion, resumen_preparacion,
+)
 from warehouse.models import (
     DistributionOperation, DistributionOperationEvent, DistributionOperationLine,
-    WarehouseLocation,
+    DistributionTransportDraft, WarehouseLocation,
 )
 
 
@@ -101,6 +108,76 @@ class OperationUpdate(serializers.Serializer):
                     field: "Este dato no puede quedar vacío.",
                 })
         return data
+
+
+class PhysicalCountInput(serializers.Serializer):
+    reservation_id = serializers.IntegerField(min_value=1)
+    counted = serializers.IntegerField(min_value=0)
+
+
+class TransportDraftInput(serializers.Serializer):
+    issuer_ruc = serializers.RegexField(
+        regex=r"^$|^\\d{11}$", required=False, allow_blank=True, max_length=11,
+    )
+    departure_address = serializers.CharField(required=False, allow_blank=True, max_length=300)
+    destination_address = serializers.CharField(required=False, allow_blank=True, max_length=300)
+    destination_id_number = serializers.CharField(required=False, allow_blank=True, max_length=20)
+    destination_name = serializers.CharField(required=False, allow_blank=True, max_length=180)
+    transport_mode = serializers.ChoiceField(
+        required=False, allow_blank=True, choices=[("", "No definido"), *DistributionTransportDraft.Mode.choices],
+    )
+    transfer_reason = serializers.ChoiceField(
+        required=False, allow_blank=True, choices=[("", "No definido"), *DistributionTransportDraft.Reason.choices],
+    )
+    departure_on = serializers.DateField(required=False, allow_null=True)
+    license_plate = serializers.CharField(required=False, allow_blank=True, max_length=15)
+    driver_document = serializers.CharField(required=False, allow_blank=True, max_length=20)
+    driver_license = serializers.CharField(required=False, allow_blank=True, max_length=30)
+    carrier_ruc = serializers.RegexField(
+        regex=r"^$|^\\d{11}$", required=False, allow_blank=True, max_length=11,
+    )
+    gross_weight_kg = serializers.DecimalField(
+        required=False, allow_null=True, max_digits=12, decimal_places=3,
+        min_value=Decimal("0.001"),
+    )
+    notes = serializers.CharField(required=False, allow_blank=True, max_length=500)
+
+
+TRANSPORT_FIELDS = tuple(TransportDraftInput().fields)
+
+
+def _transport_output(operation):
+    record = DistributionTransportDraft.objects.filter(operation=operation).first()
+    values = {key: getattr(record, key) if record else None for key in TRANSPORT_FIELDS}
+    if not record:
+        values.update({
+            key: "" for key in TRANSPORT_FIELDS
+            if key not in ("departure_on", "gross_weight_kg")
+        })
+    # Prechequeo interno: SUNAT valida datos adicionales según el caso.
+    mandatory = [
+        "issuer_ruc", "departure_address", "destination_address",
+        "destination_name", "destination_id_number", "transport_mode",
+        "transfer_reason", "departure_on", "gross_weight_kg",
+    ]
+    if values["transport_mode"] == "private":
+        mandatory.extend(["license_plate", "driver_document", "driver_license"])
+    elif values["transport_mode"] == "public":
+        mandatory.append("carrier_ruc")
+    missing = [field for field in mandatory if not values[field]]
+    return {
+        "operation_id": operation.pk,
+        "draft": values,
+        "missing_fields": missing,
+        "data_complete_for_review": not missing,
+        "sunat_issued": False,
+        "sunat_accepted": False,
+        "notice": (
+            "Datos preparatorios únicamente. Esto NO es una GRE, no consulta SUNAT "
+            "ni autoriza el transporte. La GRE y su CDR aceptada deben verificarse "
+            "antes del inicio del traslado, cuando corresponda."
+        ),
+    }
 
 
 def _state(obj):
