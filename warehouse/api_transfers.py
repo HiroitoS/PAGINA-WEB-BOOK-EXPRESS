@@ -195,7 +195,7 @@ class StockTransferViewSet(viewsets.ViewSet):
     def _lotes_en_ubicacion(location_id):
         return StockEntry.objects.select_related(
             "initial_location", "product__provider",
-            "receipt_line__receipt", "receipt_line__order_item__order",
+            "receipt_line__receipt", "receipt_line__order_item__order__school",
         ).filter(
             Q(initial_location__location_id=location_id)
             | Q(transfers__destination_id=location_id)
