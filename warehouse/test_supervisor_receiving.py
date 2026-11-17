@@ -241,6 +241,44 @@ class WarehouseSupervisorFlowTests(TestCase):
         self.assertEqual(sent.status_code, 400, sent.data)
         self.assertFalse(self.receipt.events.filter(action="supplier_report_sent").exists())
 
+    def test_evidencia_despues_de_aprobacion_no_reingresa_inventario(self):
+        """Fotografías complementan recepción validada sin duplicar entradas."""
+        submit = self.api(self.clerk).post(
+            self.url("solicitar-aprobacion"), {}, format="json",
+        )
+        self.assertEqual(submit.status_code, 200, submit.data)
+        approved = self.api(self.boss).post(
+            self.url("validar"), {}, format="json",
+        )
+        self.assertEqual(approved.status_code, 200, approved.data)
+        self.assertEqual(StockEntry.objects.count(), 1)
+        stock_before = list(StockEntry.objects.values_list("pk", flat=True))
+
+        image = SimpleUploadedFile(
+            "observacion.png",
+            b"\\x89PNG\\r\\n\\x1a\\n" + b"evidencia-test-despues-de-aprobacion",
+            content_type="image/png",
+        )
+        result = self.api(self.clerk).post(self.url("evidencias"), {
+            "receipt_line_id": self.receipt.lines.get().pk,
+            "kind": "damaged",
+            "description": "Dos ejemplares con cubierta deteriorada",
+            "file": image,
+        }, format="multipart")
+        self.assertEqual(result.status_code, 201, result.data)
+        evidence = ReceivingEvidence.objects.get(pk=result.data["id"])
+        self.addCleanup(evidence.file.delete, False)
+        self.assertEqual(
+            list(StockEntry.objects.values_list("pk", flat=True)),
+            stock_before,
+        )
+        report = self.api(self.boss).get(self.url("reporte-editorial"))
+        self.assertEqual(report.status_code, 200, report.data)
+        self.assertTrue(report.data["requires_attention"])
+        self.assertTrue(report.data["validated"])
+        self.assertIn("Dos ejemplares con cubierta deteriorada", report.data["body"])
+        self.assertFalse(self.receipt.events.filter(action="supplier_report_sent").exists())
+
     def test_filtros_inventario_por_editorial_y_colegio(self):
         submit = self.api(self.clerk).post(self.url("solicitar-aprobacion"), {}, format="json")
         self.assertEqual(submit.status_code, 200, submit.data)
