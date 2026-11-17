@@ -7,6 +7,9 @@ import logging
 from django.conf import settings
 from django.core.mail import send_mail
 from django.db import transaction
+from django.utils import timezone
+
+from notifications.models import Notification
 
 from notifications.services import (
     create_notifications_for_users, get_active_users_with_permission,
@@ -14,6 +17,38 @@ from notifications.services import (
 
 logger = logging.getLogger(__name__)
 RECEIPT_URL = "/admin/erp/almacen/recepciones"
+
+
+def _receipt_link(receipt):
+    return f"{RECEIPT_URL}?recepcion={receipt.pk}"
+
+
+def _close_approval_notice(receipt):
+    # Una notificación ya atendida se conserva, pero no queda como tarea pendiente.
+    Notification.objects.filter(
+        source_app="warehouse", source_model="GoodsReceipt",
+        source_id=str(receipt.pk),
+        event_type="warehouse.receipt_approval_requested",
+        is_resolved=False,
+    ).update(is_resolved=True, resolved_at=timezone.now())
+
+
+def avisar_devolucion_recepcion(receipt, actor, reason):
+    _close_approval_notice(receipt)
+    create_notifications_for_users(
+        recipients=[receipt.created_by],
+        title="Recepción devuelta para corrección",
+        event_type="warehouse.receipt_returned", module="warehouse",
+        message=(
+            f"{receipt.provider.name}, documento {receipt.document_number}: "
+            f"la jefatura solicita una corrección. Motivo: {reason}"
+        ),
+        actor=actor, severity="warning", link=_receipt_link(receipt),
+        source_app="warehouse", source_model="GoodsReceipt", source_id=receipt.pk,
+        dedup_key_prefix=f"wh:receipt:{receipt.pk}:returned:{receipt.events.filter(action='returned').count()}",
+        exclude_user=actor,
+    )
+
 
 
 def _destinatarios_administracion():
@@ -74,9 +109,9 @@ def avisar_solicitud_aprobacion(receipt, actor):
         recipients=users, title="Recepción pendiente de aprobación",
         event_type="warehouse.receipt_approval_requested", module="warehouse",
         message=f"{receipt.provider.name}: documento {receipt.document_number} pendiente de revisión.",
-        actor=actor, severity="info", link=RECEIPT_URL,
+        actor=actor, severity="info", link=_receipt_link(receipt),
         source_app="warehouse", source_model="GoodsReceipt",
-        source_id=receipt.pk, dedup_key_prefix=f"wh:receipt:{receipt.pk}:submitted",
+        source_id=receipt.pk, dedup_key_prefix=f"wh:receipt:{receipt.pk}:submitted:{receipt.events.filter(action='submitted').count()}",
         exclude_user=actor,
     )
     _programar_correo(
@@ -87,6 +122,7 @@ def avisar_solicitud_aprobacion(receipt, actor):
 
 
 def avisar_recepcion_validada(receipt, actor):
+    _close_approval_notice(receipt)
     admin = _destinatarios_administracion()
     advisors = _asesores_de_pedidos(receipt)
     rows = list(receipt.lines.select_related("order_item__order"))
@@ -101,7 +137,7 @@ def avisar_recepcion_validada(receipt, actor):
     create_notifications_for_users(
         recipients=[*admin, *advisors], title="Nueva mercadería ingresada a Inventario",
         event_type="warehouse.receipt_validated", module="warehouse",
-        message=message, actor=actor, severity="success", link=RECEIPT_URL,
+        message=message, actor=actor, severity="success", link=_receipt_link(receipt),
         source_app="warehouse", source_model="GoodsReceipt", source_id=receipt.pk,
         dedup_key_prefix=f"wh:receipt:{receipt.pk}:validated",
     )
@@ -110,7 +146,7 @@ def avisar_recepcion_validada(receipt, actor):
             recipients=[*admin, *advisors],
             title="Diferencia de mercadería: requiere seguimiento",
             event_type="warehouse.receipt_difference", module="warehouse",
-            message=message, actor=actor, severity="warning", link=RECEIPT_URL,
+            message=message, actor=actor, severity="warning", link=_receipt_link(receipt),
             source_app="warehouse", source_model="GoodsReceipt", source_id=receipt.pk,
             dedup_key_prefix=f"wh:receipt:{receipt.pk}:difference",
         )
