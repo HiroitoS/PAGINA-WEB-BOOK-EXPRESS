@@ -461,8 +461,8 @@ class RecepcionMercaderiaTests(TestCase):
             )
 
     def test_pedidos_pendientes_no_exponen_costos(self):
-        inicial = Level.objects.create(name="Inicial")
-        tres_anios = Grade.objects.create(name="3 AÑOS")
+        inicial, _ = Level.objects.get_or_create(name="Inicial")
+        tres_anios, _ = Grade.objects.get_or_create(name="3 AÑOS")
         self.producto.level = inicial
         self.producto.grade = tres_anios
         self.producto.save(update_fields=["level", "grade", "updated_at"])
