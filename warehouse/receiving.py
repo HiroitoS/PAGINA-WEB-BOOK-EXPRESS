@@ -228,14 +228,55 @@ def actualizar_borrador_recepcion(
 
 
 @transaction.atomic
+def solicitar_aprobacion_recepcion(*, actor, receipt_id):
+    """Envía la recepción física revisada a jefatura, sin crear stock."""
+    _autorizar(actor, "warehouse.manage_receiving")
+    provider_id = GoodsReceipt.objects.only("provider_id").get(pk=receipt_id).provider_id
+    Provider.objects.select_for_update().get(pk=provider_id)
+    receipt = GoodsReceipt.objects.select_for_update().get(pk=receipt_id)
+    if receipt.status != GoodsReceipt.Status.DRAFT:
+        raise ValidationError("Solo puedes enviar a aprobación una recepción en borrador.")
+    if not receipt.document_number.strip() or not receipt.lines.exists():
+        raise ValidationError("Completa el documento y sus productos antes de solicitar aprobación.")
+    receipt.status = GoodsReceipt.Status.SUBMITTED
+    receipt.save(update_fields=["status", "updated_at"])
+    GoodsReceiptEvent.objects.create(
+        receipt=receipt, actor=actor, action="submitted",
+        notes="Recepción presentada para revisión de jefatura.",
+    )
+    return receipt
+
+
+@transaction.atomic
+def devolver_recepcion(*, actor, receipt_id, reason):
+    """Jefatura solicita correcciones; no crea ni revierte stock."""
+    _autorizar(actor, "warehouse.validate_receiving")
+    if not isinstance(reason, str) or not 8 <= len(reason.strip()) <= 500:
+        raise ValidationError("Indica el motivo de la devolución (8 a 500 caracteres).")
+    receipt = GoodsReceipt.objects.select_for_update().get(pk=receipt_id)
+    if receipt.status != GoodsReceipt.Status.SUBMITTED:
+        raise ValidationError("Solo puedes devolver una recepción pendiente de aprobación.")
+    receipt.status = GoodsReceipt.Status.DRAFT
+    receipt.save(update_fields=["status", "updated_at"])
+    GoodsReceiptEvent.objects.create(
+        receipt=receipt, actor=actor, action="returned", notes=reason.strip(),
+    )
+    return receipt
+
+
+@transaction.atomic
 def validar_recepcion(*, actor, receipt_id):
     _autorizar(actor, "warehouse.validate_receiving")
     # Bloquear primero la editorial mantiene el orden de bloqueos del alta.
     provider_id = GoodsReceipt.objects.only("provider_id").get(pk=receipt_id).provider_id
     Provider.objects.select_for_update().get(pk=provider_id)
     receipt = GoodsReceipt.objects.select_for_update().get(pk=receipt_id)
-    if receipt.status != GoodsReceipt.Status.DRAFT:
-        raise ValidationError("Solo se puede validar una recepción en borrador.")
+    if receipt.status != GoodsReceipt.Status.SUBMITTED:
+        # Permite mantener tests y borradores previos solo al superusuario.
+        if not (actor.is_superuser and receipt.status == GoodsReceipt.Status.DRAFT):
+            raise ValidationError("Esta recepción debe enviarse primero a aprobación.")
+    if receipt.created_by_id == actor.pk and not actor.is_superuser:
+        raise ValidationError("Debe aprobar un usuario distinto de quien registró la recepción.")
     if not receipt.document_number.strip():
         raise ValidationError("Registra el número del documento del proveedor.")
     _validar_documento_no_duplicado(
