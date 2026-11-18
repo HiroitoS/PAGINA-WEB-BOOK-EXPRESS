@@ -377,7 +377,9 @@ def dividir_entrega_por_disponibilidad(operation_id, actor, idempotency_key):
         },
     )
     # La misma reserva existente protege saldos y concurrentes por StockEntry.
-    reservar_operacion(operation.pk, actor)
+    # Retornar la instancia realmente actualizada: el objeto bloqueado conserva
+    # status PLANNED en memoria si se ignora el resultado de reservar_operacion.
+    operation, _ = reservar_operacion(operation.pk, actor)
     return operation, pending, True
 
 
