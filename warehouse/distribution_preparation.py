@@ -4,6 +4,7 @@ Reserva física != despacho, venta, GRE emitida ni transferencia de stock.
 Cada reserva y cada traslado directo bloquean la misma StockEntry.
 """
 from collections import defaultdict
+from uuid import uuid4
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
@@ -12,9 +13,10 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
 from warehouse.models import (
-    DistributionOperation, DistributionOperationEvent,
+    DistributionOperation, DistributionOperationEvent, DistributionOperationLine,
     DistributionStockReservation, StockEntry, StockTransfer,
 )
+from crm.models import Adoption
 from warehouse.transfers import posiciones_lotes
 
 
@@ -232,6 +234,152 @@ def reservar_operacion(operation_id, actor, lots=None):
         },
     )
     return operation, True
+
+
+@transaction.atomic
+def dividir_entrega_por_disponibilidad(operation_id, actor, idempotency_key):
+    """Reserva la parte conforme y conserva el saldo en otra entrega planificada.
+
+    La adopción mantiene su total comercial. No crea stock, traslado ni despacho.
+    Operación atómica; dos solicitudes concurrentes no generan dos pendientes.
+    """
+    from warehouse.distribution_allocation import allocation_summary
+
+    source_record = get_object_or_404(
+        DistributionOperation.objects.only("adoption_id"), pk=operation_id,
+    )
+    adoption = Adoption.objects.select_for_update().get(pk=source_record.adoption_id)
+    operation = get_object_or_404(
+        DistributionOperation.objects.select_for_update(), pk=operation_id,
+        adoption_id=adoption.pk,
+    )
+    existing = DistributionOperation.objects.filter(
+        idempotency_key=idempotency_key,
+    ).first()
+    if existing:
+        # Reintento de la misma solicitud: solo es válido para el mismo origen.
+        if (
+            existing.adoption_id == adoption.pk
+            and operation.events.filter(
+                action="split_by_stock",
+                current__pending_operation_id=existing.pk,
+            ).exists()
+        ):
+            return operation, existing, False
+        raise DjangoValidationError(
+            "Esta referencia ya corresponde a otra entrega. Actualiza la lista."
+        )
+    if operation.status != DistributionOperation.Status.PLANNED:
+        raise DjangoValidationError(
+            "Solo puedes dividir una entrega que aún está Por preparar."
+        )
+    if not adoption.is_current:
+        raise DjangoValidationError("La adopción ya cambió. Actualiza la planificación.")
+    if not operation.source.is_active or not operation.destination.is_active:
+        raise DjangoValidationError("El almacén de origen y destino deben estar activos.")
+    if operation.stock_reservations.exists():
+        raise DjangoValidationError("Esta entrega ya cuenta con reservas.")
+    # La adopción se bloquea antes de modificar líneas (igual que crear/editar).
+    allocations = allocation_summary(adoption, operation)
+    if any(row["overallocated"] > 0 for row in allocations["items"]):
+        raise DjangoValidationError(
+            "Las cantidades comerciales cambiaron. Revisa la adopción antes de dividir."
+        )
+    entries = _entries(operation, lock=True)
+    positions = posiciones_lotes(entries)
+    reserved = _reservados(entries, operation.source_id)
+    free_by_product = defaultdict(int)
+    for entry in entries:
+        free_by_product[entry.product_id] += max(
+            0, positions.get((entry.pk, operation.source_id), 0)
+            - reserved.get(entry.pk, 0),
+        )
+    lines = list(operation.items.all().order_by("pk"))
+    now_items = []
+    pending_items = []
+    for line in lines:
+        available = free_by_product.get(line.product_id, 0)
+        ready = min(line.quantity_planned, available)
+        remaining = line.quantity_planned - ready
+        if ready:
+            now_items.append((line, ready))
+        if remaining:
+            pending_items.append((line, remaining))
+    if not now_items:
+        raise DjangoValidationError(
+            "No hay unidades conformes libres para separar. Revisa Inventario."
+        )
+    if not pending_items:
+        raise DjangoValidationError(
+            "Toda la entrega está disponible. Utiliza Reservar existencias."
+        )
+    original_snapshot = {
+        "items": [
+            {"product_id": line.product_id, "quantity": line.quantity_planned}
+            for line in lines
+        ],
+        "status": operation.status,
+    }
+    pending = DistributionOperation.objects.create(
+        idempotency_key=idempotency_key,
+        adoption=adoption,
+        school=operation.school,
+        original_mode=operation.original_mode,
+        mode=operation.mode, source=operation.source, destination=operation.destination,
+        operation_name=(operation.operation_name[:150] + " · Saldo pendiente")[:180],
+        responsible_name=operation.responsible_name,
+        scheduled_on=None, scheduled_until=None,
+        notes="Entrega pendiente por falta de unidades conformes disponibles.",
+        created_by=actor,
+    )
+    DistributionOperationLine.objects.bulk_create([
+        DistributionOperationLine(
+            operation=pending, product_id=line.product_id,
+            product_name_snapshot=line.product_name_snapshot,
+            quantity_planned=qty,
+        )
+        for line, qty in pending_items
+    ])
+    now_ids = {line.pk for line, _ in now_items}
+    for line in lines:
+        if line.pk in now_ids:
+            qty = next(quantity for current, quantity in now_items if current.pk == line.pk)
+            if qty != line.quantity_planned:
+                line.quantity_planned = qty
+                line.save(update_fields=["quantity_planned", "updated_at"])
+        else:
+            line.delete()
+    # Registra el vínculo para que un reintento sea idempotente.
+    DistributionOperationEvent.objects.create(
+        operation=operation, actor=actor, action="split_by_stock",
+        reason="Separación de una entrega por stock conforme disponible.",
+        previous=original_snapshot,
+        current={
+            "pending_operation_id": pending.pk,
+            "reserved_now": [
+                {"product_id": line.product_id, "quantity": qty}
+                for line, qty in now_items
+            ],
+            "pending": [
+                {"product_id": line.product_id, "quantity": qty}
+                for line, qty in pending_items
+            ],
+        },
+    )
+    DistributionOperationEvent.objects.create(
+        operation=pending, actor=actor, action="created",
+        reason=f"Saldo pendiente de la entrega original {operation.pk}.",
+        current={
+            "origin_operation_id": operation.pk,
+            "items": [
+                {"product_id": line.product_id, "quantity": qty}
+                for line, qty in pending_items
+            ],
+        },
+    )
+    # La misma reserva existente protege saldos y concurrentes por StockEntry.
+    reservar_operacion(operation.pk, actor)
+    return operation, pending, True
 
 
 @transaction.atomic
