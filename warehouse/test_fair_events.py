@@ -88,6 +88,25 @@ class WarehouseFairEventTests(TestCase):
         self.assertEqual(WarehouseLocation.objects.count(), 0)
         self.assertEqual(WarehouseFairEvent.objects.count(), 0)
 
+    def test_ubicacion_de_evento_no_se_modifica_desde_formulario_generico(self):
+        client = self.client_as(self.admin)
+        response = client.post(
+            "/api/admin/erp/almacen/ferias/", self.payload(), format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        location_id = response.data["location_id"]
+        url = f"/api/admin/erp/almacen/ubicaciones/{location_id}/"
+        got = client.get(url)
+        self.assertEqual(got.status_code, 200, got.data)
+        self.assertEqual(got.data["fair_event_id"], response.data["id"])
+        changed = client.patch(url, {
+            "kind": "store", "name": "Intento de tienda",
+        }, format="json")
+        self.assertEqual(changed.status_code, 400, changed.data)
+        location = WarehouseLocation.objects.get(pk=location_id)
+        self.assertEqual(location.kind, WarehouseLocation.Kind.FAIR)
+        self.assertEqual(location.name, response.data["name"])
+
     def test_ferias_separadas_no_comparten_ubicacion(self):
         client = self.client_as(self.admin)
         first = client.post(
