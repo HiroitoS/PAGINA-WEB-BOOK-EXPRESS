@@ -78,3 +78,26 @@ En pantalla: `Movimientos → Entregas → Detalle → Preparación de esta entr
 5. Probar manualmente una reserva de otra entrega que compita por el mismo lote: debe impedir usar lo ya reservado. Verificar confirmación del conteo correcto, que no se genera GRE ni despacho ni venta.
 
 **Pendiente:** una evidencia del usuario en entorno local para cerrar la prueba de la recepción Santillana N.° 6; registrar discrepancias reales de picking con corrección auditada y responsable, bultos/etiquetas, packs y despacho B4. No aplicar en producción ni considerar el flujo logístico cerrado por esta mejora.
+
+## 8. Mejora B3.1b — stock menor que la planificación: separación en dos entregas (17/11/2026)
+
+**Problema real de prueba:** ANDINO / LECTOPOLIS 4 tiene **20 planificados**, y el inventario por almacén confirma **15 conformes libres en Principal, 5 observados no vendibles**. La reserva original era íntegra: `can_reserve=false` si faltaba siquiera un libro. Era correcto no reservar 20 sin 20 disponibles, pero la UX era confusa al bloquear también la posibilidad de aprovechar los 15.
+
+**Solución de negocio:** no crear stock ni forzar una reserva de 20. El usuario autorizado puede ejecutar **«Reservar 15 y dejar 5 pendientes»**, con confirmación de impacto. El backend bloquea la adopción, la planificación y los lotes; recalcula saldos reales; divide la entrega de 20 en **una entrega A de 15 (reservada, pendiente de conteo físico)** y **una entrega B de 5 (por preparar, sin fecha programada)**. Las cantidades comerciales por adopción siguen sumando 20. Se conserva el colegio, editorial, producto, origen/destino, trazabilidad de guía, responsable e historial de separación. **No hay movimiento de inventario, GRE emitida, venta ni despacho**. Las cinco observadas permanecen separadas.
+
+**Reglas importantes:** la operación solo permite dividir si existe algún stock conforme disponible **y** un faltante real. Si no hay stock, se espera reposición; si está todo disponible, se usa la reserva normal. La reserva de A usa FIFO y queda protegida contra uso duplicado en otra entrega. Jefatura/Almacén debe realizar conteo real antes de declararla `prepared`. El resto puede planificarse al llegar mercadería nueva. Operación transaccional con `idempotency_key`: un reintento no crea múltiples pendientes. La interfaz explica que se crearán dos entregas antes de confirmar.
+
+**Flujo ilustrado para jefatura:**
+```
+Adopción 20 libros → Recepción: 15 conformes + 5 observados
+   → Planificación inicial: 20 a Feria
+   → Reserva total bloqueada (no hay 20 conformes)
+   → Separación aprobada por operador: Entrega A 15 + Entrega B 5 pendiente
+   → Reserva A 15 (sigue en Principal) → Conteo A 15 → Preparación A
+   → B4 futuro: documentación, despacho, tránsito y recepción real en Feria
+   → B pendiente se atiende después de subsanar faltante y recibir stock conforme
+```
+
+**Pruebas:** `warehouse/test_distribution_preparation.py` cubre split por disponibilidad, conservación de cantidad total, cero movimientos nuevos, rechazo cuando no hay faltante o no hay stock, bloqueo de edición tras reserva, e idempotencia de reintentos. Falta verificación de CI y prueba local antes de considerarlo aprobado para demo. No hay nueva migración en esta mejora.
+
+**Alcance que NO debe perderse:** B3.2 Feria con identidad física/subalmacén propio, B3.3 packs termosellados por colegio (sin SKU ni stock adicional), B4 GRE/despacho y B5 devoluciones diferenciadas. **No llevar a main ni Tecnoweb todavía.**
