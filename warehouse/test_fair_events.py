@@ -124,6 +124,24 @@ class WarehouseFairEventTests(TestCase):
         self.assertNotEqual(first.data["location_id"], second.data["location_id"])
         self.assertEqual(StockEntry.objects.count(), 0)
 
+    def test_feria_esta_disponible_como_destino_identificable(self):
+        client = self.client_as(self.admin)
+        created = client.post(
+            "/api/admin/erp/almacen/ferias/", self.payload(), format="json",
+        )
+        self.assertEqual(created.status_code, 201, created.data)
+        choices = client.get(
+            "/api/admin/erp/almacen/operaciones-distribucion/opciones/"
+        )
+        self.assertEqual(choices.status_code, 200, choices.data)
+        match = [
+            location for location in choices.data["locations"]
+            if location["id"] == created.data["location_id"]
+        ]
+        self.assertEqual(len(match), 1)
+        self.assertEqual(match[0]["kind"], "fair")
+        self.assertEqual(match[0]["fair_event_id"], created.data["id"])
+
     def test_permisos_y_sin_eliminar_ferias(self):
         unauth = self.client_as(self.employee)
         admin = self.client_as(self.admin)
