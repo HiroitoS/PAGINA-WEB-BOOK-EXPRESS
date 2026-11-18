@@ -61,3 +61,20 @@ En pantalla: `Movimientos → Entregas → Detalle → Preparación de esta entr
 - Revisión contable/tributaria real por asesor, condiciones SUNAT y datos de Book Express antes de integrar un emisor definitivo.
 
 **Política:** el traslado manual existente solo debe usarse para movimientos físicos ya consumados y documentados correctamente. Preparar o reservar nunca cambia ubicación ni acredita envío.
+
+## 7. Avance B3.1 (17/11/2026): elección de lotes/guías para reservar
+
+**Alcance en rama de pruebas:** el encargado puede mantener la reserva automática FIFO (comportamiento anterior) o elegir manualmente la guía de recepción y la cantidad de cada libro. El nuevo campo opcional de `POST /operaciones-distribucion/{id}/reservar/` es `lots: [{stock_entry_id, quantity}]`. Si no se envía `lots`, la reserva sigue siendo automática. No se cambian rutas, permisos ni estructura de base de datos.
+
+**Validaciones del servidor, aun si se elude la interfaz:** los lotes deben pertenecer al **mismo colegio y producto de la entrega**, estar disponibles en el almacén de salida y tener saldo conforme libre tras restar traslados/cortesías/reservas activas. Se rechazan IDs duplicados, cantidades no positivas, sobreasignación, selección parcial del producto y lotes ajenos. La reserva ocurre dentro de una transacción con bloqueo; cualquier error revierte todos los cambios. Reintentar una operación ya reservada no duplica líneas de inventario ni reservas.
+
+**Interfaz:** en «Preparación de esta entrega», seleccionar «Automáticamente, por orden de recepción» o «Elegir guía y cantidades». En modo manual aparece un campo numérico por lote disponible y el contador «Seleccionadas X de Y» por producto. El botón de reserva solo se habilita con sumas exactas. La confirmación del conteo físico continúa siendo obligatoria y separada.
+
+**Prueba guiada sin modificar recepciones históricas:**
+1. En rama `feature/erp-p08-traslados-por-guia` actualizar backend/frontend, respaldar BD local, revisar migraciones y pasar CI/local.
+2. Crear una planificación **nueva de prueba** con adopción confirmada y unidades libres verificadas en inventario. Abrir «Preparación de esta entrega».
+3. Alternar modo FIFO/manual; seleccionar guía(s) y cantidades que sumen exactamente lo planificado. Comprobar que cantidades insuficientes bloquean reserva en interfaz **y API**.
+4. Reservar; verificar las guías en las líneas de reserva, que la cantidad disponible baja sin alterar saldo físico/global ni crear `StockTransfer`. Repetir la petición: sin duplicados.
+5. Probar manualmente una reserva de otra entrega que compita por el mismo lote: debe impedir usar lo ya reservado. Verificar confirmación del conteo correcto, que no se genera GRE ni despacho ni venta.
+
+**Pendiente:** una evidencia del usuario en entorno local para cerrar la prueba de la recepción Santillana N.° 6; registrar discrepancias reales de picking con corrección auditada y responsable, bultos/etiquetas, packs y despacho B4. No aplicar en producción ni considerar el flujo logístico cerrado por esta mejora.
