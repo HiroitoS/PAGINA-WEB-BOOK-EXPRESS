@@ -339,7 +339,9 @@ class DistributionOperationViewSet(viewsets.ViewSet):
             selected = pages.page(int(raw_page))
         except EmptyPage:
             raise ValidationError({"page": "No existen adopciones en esa página."})
-        locations = WarehouseLocation.objects.filter(is_active=True).order_by("name")
+        locations = WarehouseLocation.objects.filter(is_active=True).select_related(
+            "fair_event",
+        ).order_by("name")
         return Response({
             "adoptions": [
                 {
@@ -362,7 +364,12 @@ class DistributionOperationViewSet(viewsets.ViewSet):
             },
             "campaign_years": years,
             "locations": [
-                {"id": loc.pk, "name": loc.name, "kind": loc.kind}
+                {
+                    "id": loc.pk, "name": loc.name, "kind": loc.kind,
+                    "fair_event_id": (
+                        loc.fair_event.pk if getattr(loc, "fair_event", None) else None
+                    ),
+                }
                 for loc in locations
             ],
             "modes": [
