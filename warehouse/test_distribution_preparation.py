@@ -274,6 +274,100 @@ class DistributionPreparationTests(TestCase):
         self.assertEqual(rejected.status_code, 400, rejected.data)
         self.assertFalse(DistributionStockReservation.objects.exists())
 
+    def test_dividir_entrega_reserva_disponibles_y_deja_saldo_pendiente(self):
+        """Separar parcialmente no pierde compromisos ni mueve mercadería."""
+        operation_id = self.plan()
+        entry = self.entries[0]
+        registrar_traslado(
+            actor=self.user, stock_entry_id=entry.pk,
+            source_id=self.main.pk, destination_id=self.fair.pk,
+            quantity=entry.quantity_available - 2, idempotency_key=uuid4(),
+            entrega_confirmada=True,
+        )
+        client = self.api_client()
+        original = client.get(self.endpoint(operation_id, "preparacion"))
+        self.assertEqual(original.status_code, 200, original.data)
+        self.assertFalse(original.data["can_reserve"])
+        self.assertEqual(original.data["items"][0]["free_at_origin"], 2)
+        before_transfers = StockTransfer.objects.count()
+        before_entries = StockEntry.objects.count()
+        key = str(uuid4())
+        split = client.post(
+            self.endpoint(operation_id, "separar-disponibles"),
+            {"idempotency_key": key}, format="json",
+        )
+        self.assertEqual(split.status_code, 201, split.data)
+        self.assertEqual(split.data["reserved"]["status"], "reserved")
+        self.assertEqual(
+            sum(row["quantity"] for row in split.data["reserved"]["reservations"]), 7,
+        )
+        pending_id = split.data["pending_operation_id"]
+        self.assertEqual(len(split.data["pending"]), 1)
+        self.assertEqual(split.data["pending"][0]["quantity"], 3)
+        self.assertEqual(
+            dict(DistributionOperation.objects.get(
+                pk=operation_id,
+            ).items.values_list("product_id", "quantity_planned")),
+            {
+                original.data["items"][0]["product_id"]: 2,
+                original.data["items"][1]["product_id"]: 5,
+            },
+        )
+        self.assertEqual(
+            list(DistributionOperation.objects.get(
+                pk=pending_id,
+            ).items.values_list("quantity_planned", flat=True)), [3],
+        )
+        self.assertEqual(
+            DistributionOperation.objects.get(pk=pending_id).status, "planned",
+        )
+        self.assertIsNone(DistributionOperation.objects.get(pk=pending_id).scheduled_on)
+        self.assertEqual(StockEntry.objects.count(), before_entries)
+        self.assertEqual(StockTransfer.objects.count(), before_transfers)
+        self.assertEqual(
+            self.api_client().patch(self.endpoint(operation_id, "").rstrip("/") + "/", {
+                "notes": "Intento de cambio", "reason": "Separación ya iniciada",
+            }, format="json").status_code, 400,
+        )
+        retried = client.post(
+            self.endpoint(operation_id, "separar-disponibles"),
+            {"idempotency_key": key}, format="json",
+        )
+        self.assertEqual(retried.status_code, 200, retried.data)
+        self.assertFalse(retried.data["created"])
+        self.assertEqual(retried.data["pending_operation_id"], pending_id)
+        self.assertEqual(DistributionOperation.objects.count(), 2)
+        self.assertEqual(
+            DistributionOperation.objects.get(pk=operation_id).events.filter(
+                action="split_by_stock",
+            ).count(), 1,
+        )
+
+    def test_division_no_admite_sin_stock_o_sin_faltante(self):
+        operation_id = self.plan()
+        client = self.api_client()
+        all_ready = client.post(
+            self.endpoint(operation_id, "separar-disponibles"),
+            {"idempotency_key": str(uuid4())}, format="json",
+        )
+        self.assertEqual(all_ready.status_code, 400, all_ready.data)
+        self.assertFalse(DistributionStockReservation.objects.exists())
+        self.assertEqual(DistributionOperation.objects.count(), 1)
+        for entry in self.entries:
+            registrar_traslado(
+                actor=self.user, stock_entry_id=entry.pk,
+                source_id=self.main.pk, destination_id=self.fair.pk,
+                quantity=entry.quantity_available, idempotency_key=uuid4(),
+                entrega_confirmada=True,
+            )
+        without_stock = client.post(
+            self.endpoint(operation_id, "separar-disponibles"),
+            {"idempotency_key": str(uuid4())}, format="json",
+        )
+        self.assertEqual(without_stock.status_code, 400, without_stock.data)
+        self.assertFalse(DistributionStockReservation.objects.exists())
+        self.assertEqual(DistributionOperation.objects.count(), 1)
+
     def test_motivo_itinerante_es_borrador_y_no_habilita_salida(self):
         """Una feria permite estudiar el motivo, no autoriza despacho ni SUNAT."""
         op_id = self.plan()
