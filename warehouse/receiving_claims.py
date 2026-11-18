@@ -111,54 +111,78 @@ def protected_download(*, receipt, evidence_id):
 
 
 def construir_reporte(receipt):
+    """Correo breve sobre incidencias registradas, no sobre todo el pedido.
+
+    Los saldos pendientes de un pedido no son faltantes frente a una guía.
+    El daño o el tipo de observación se describe solo cuando fue documentado.
+    """
     lines = list(receipt.lines.select_related(
         "order_item__order", "order_item__product",
     ).order_by("pk"))
     evidences = evidence_list(receipt)
+    by_line = {}
+    for evidence in evidences:
+        by_line.setdefault(evidence["receipt_line_id"], []).append(evidence)
+
     details = []
     affected = set()
     for row in lines:
-        guide_shortage = max(0, (row.quantity_documented or 0) - row.quantity_arrived)
-        if guide_shortage or row.quantity_observed:
-            affected.add(row.pk)
+        shortage = (
+            max(0, row.quantity_documented - row.quantity_arrived)
+            if row.quantity_documented is not None else 0
+        )
+        observed = row.quantity_observed
+        attachments = by_line.get(row.pk, [])
+        if not (shortage or observed or attachments):
+            continue
+        affected.add(row.pk)
+        school = row.order_item.order.school_name_snapshot or "Sin colegio identificado"
+        details.append(
+            f"- {row.order_item.product_name_snapshot} "
+            f"(colegio: {school}; pedido: BE-OC-{row.order_item.order_id:06d}):"
+        )
+        if shortage:
             details.append(
-                f"- {row.order_item.product_name_snapshot} "
-                f"(pedido BE-OC-{row.order_item.order_id:06d}, "
-                f"colegio {row.order_item.order.school_name_snapshot or 'Sin colegio'}): "
-                f"guía {row.quantity_documented if row.quantity_documented is not None else 'No consignado'}, "
-                f"físico {row.quantity_arrived}, observados {row.quantity_observed}, "
-                f"faltantes frente a guía {guide_shortage}."
+                f"  * Faltante frente a la guía: {shortage} unidad(es). "
+                f"La guía indica {row.quantity_documented}; se recibieron {row.quantity_arrived}."
             )
-    extra_lines = [
-        f"- {e['product']}: {e['kind_label']} — {e['description']} (archivo {e['original_name']})"
-        for e in evidences
-    ]
-    # Pendiente respecto del pedido no equivale a faltante físico respecto de esta guía.
+        if observed:
+            details.append(
+                f"  * {observed} unidad(es) observada(s) durante la revisión física."
+            )
+        for evidence in attachments:
+            details.append(
+                f"  * {evidence['kind_label']}: {evidence['description']} "
+                f"(sustento: {evidence['original_name']})."
+            )
+
+    # Si la guía no tiene ninguna incidencia, no inventar reclamos ni
+    # presentar como faltantes los libros aún pendientes de otro envío.
     if not details:
-        details.append("No se detectaron diferencias frente al documento en esta recepción.")
+        details.append("No se registraron incidencias en esta recepción.")
+
     subject = (
-        f"Book Express | Reporte de recepción {receipt.document_number} "
+        f"Book Express | Incidencias de recepción {receipt.document_number} "
         f"| {receipt.provider.name}"
     )
     body = "\n".join([
         "Estimados señores:",
         "",
-        f"Compartimos las observaciones de la recepción de {receipt.provider.name}, "
-        f"documento {receipt.document_number}, fecha {receipt.received_on}.",
+        f"Durante la recepción de su documento {receipt.document_number}, "
+        f"de fecha {receipt.received_on}, registramos lo siguiente:",
         "",
-        "Diferencias físicas verificadas:",
         *details,
         "",
-        "Evidencias documentales:",
-        *(extra_lines or ["No se adjuntaron evidencias."]),
+        "Agradeceremos revisar las incidencias indicadas y comunicarnos "
+        "cómo proceder con las unidades observadas o faltantes, según corresponda.",
         "",
-        "Agradeceremos su revisión y respuesta indicando el tratamiento de las diferencias.",
-        "",
+        "Atentamente,",
+        "Área de Logística",
         "Distribuidora y Comercializadora Book Express S.A.C.",
     ])
     return {
         "receipt_id": receipt.pk, "subject": subject, "body": body,
-        "evidences": evidences, "requires_attention": bool(affected or evidences),
+        "evidences": evidences, "requires_attention": bool(affected),
         "validated": receipt.status == GoodsReceipt.Status.VALIDATED,
         "sending_enabled": bool(
             getattr(settings, "ERP_WAREHOUSE_SUPPLIER_EMAIL_ENABLED", False)
@@ -166,8 +190,9 @@ def construir_reporte(receipt):
             and getattr(settings, "EMAIL_HOST", "")
         ),
         "notice": (
-            "Un pedido con saldo pendiente no es necesariamente un faltante frente a la guía. "
-            "El reporte requiere revisión antes de enviarlo."
+            "Este texto incluye únicamente incidencias de la recepción. "
+            "El saldo pendiente del pedido no es un faltante de la guía. "
+            "Revisa el documento y sus archivos antes de enviarlo."
         ),
     }
 
