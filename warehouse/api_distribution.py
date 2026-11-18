@@ -21,8 +21,8 @@ from warehouse.distribution_allocation import (
     allocation_summary, replace_operation_lines, validate_requested_allocation,
 )
 from warehouse.distribution_preparation import (
-    confirmar_preparacion, liberar_reservas_operacion,
-    reservar_operacion, resumen_preparacion,
+    confirmar_preparacion, dividir_entrega_por_disponibilidad,
+    liberar_reservas_operacion, reservar_operacion, resumen_preparacion,
 )
 from warehouse.models import (
     DistributionOperation, DistributionOperationEvent, DistributionOperationLine,
@@ -108,6 +108,10 @@ class OperationUpdate(serializers.Serializer):
                     field: "Este dato no puede quedar vacío.",
                 })
         return data
+
+
+class SplitByStockInput(serializers.Serializer):
+    idempotency_key = serializers.UUIDField()
 
 
 class ReserveLotInput(serializers.Serializer):
@@ -540,6 +544,37 @@ class DistributionOperationViewSet(viewsets.ViewSet):
         return Response(resumen_preparacion(operation), status=(
             status.HTTP_201_CREATED if created else status.HTTP_200_OK
         ))
+
+    @action(detail=True, methods=["post"], url_path="separar-disponibles")
+    def split_available(self, request, pk=None):
+        """Una entrega disponible ahora, otra pendiente; ninguna salida física."""
+        self._authorize(request, write=True)
+        form = SplitByStockInput(data=request.data)
+        form.is_valid(raise_exception=True)
+        try:
+            operation, pending, created = dividir_entrega_por_disponibilidad(
+                pk, request.user, form.validated_data["idempotency_key"],
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
+        return Response({
+            "reserved": resumen_preparacion(operation),
+            "pending_operation_id": pending.pk,
+            "pending": [
+                {
+                    "product_id": row.product_id,
+                    "product": row.product_name_snapshot,
+                    "quantity": row.quantity_planned,
+                }
+                for row in pending.items.all()
+            ],
+            "created": created,
+            "notice": (
+                "Se reservó únicamente el stock conforme disponible. "
+                "El saldo quedó planificado para otra entrega. "
+                "No se despacharon ni trasladaron libros."
+            ),
+        }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"], url_path="confirmar-preparacion")
     def confirm_preparation(self, request, pk=None):
