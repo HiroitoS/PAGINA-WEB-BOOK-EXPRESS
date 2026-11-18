@@ -124,8 +124,8 @@ def resumen_preparacion(operation):
 
 
 @transaction.atomic
-def reservar_operacion(operation_id, actor):
-    """Reserva íntegra de la planificación por FIFO dentro del mismo colegio."""
+def reservar_operacion(operation_id, actor, lots=None):
+    """Reserva por lotes elegidos o por FIFO, siempre dentro del mismo colegio."""
     operation = get_object_or_404(
         DistributionOperation.objects.select_for_update(), pk=operation_id,
     )
@@ -153,23 +153,67 @@ def reservar_operacion(operation_id, actor):
             by_product[entry.product_id].append((entry, available))
 
     chosen = []
-    for line in operation.items.all().order_by("product_id"):
-        missing = line.quantity_planned
-        for entry, quantity in by_product.get(line.product_id, []):
-            taken = min(missing, quantity)
-            if taken:
-                chosen.append(DistributionStockReservation(
-                    operation=operation, stock_entry=entry, source_id=operation.source_id,
-                    quantity=taken, reserved_by=actor,
-                ))
-                missing -= taken
-            if not missing:
-                break
-        if missing:
-            raise DjangoValidationError(
-                f"{line.product_name_snapshot}: faltan {missing} unidades conformes "
-                "no reservadas para completar la preparación en este almacén."
-            )
+    planned_lines = list(operation.items.all().order_by("product_id"))
+    if lots is not None:
+        # El usuario puede elegir guías/lotes reales; no puede cambiar el colegio,
+        # el almacén ni tomar cantidades reservadas por otra operación.
+        eligible = {
+            entry.pk: (entry, available)
+            for entries_for_product in by_product.values()
+            for entry, available in entries_for_product
+        }
+        chosen_ids = set()
+        selected_by_product = defaultdict(int)
+        for selection in lots:
+            entry_id = selection["stock_entry_id"]
+            quantity = selection["quantity"]
+            if entry_id in chosen_ids:
+                raise DjangoValidationError(
+                    "Un mismo lote no puede figurar dos veces en la reserva."
+                )
+            chosen_ids.add(entry_id)
+            found = eligible.get(entry_id)
+            if not found:
+                raise DjangoValidationError(
+                    "Un lote elegido no pertenece a esta entrega o no tiene saldo "
+                    "libre en el almacén indicado."
+                )
+            entry, available = found
+            if quantity > available:
+                raise DjangoValidationError(
+                    f"El lote {entry_id} dispone de {available} unidades libres; "
+                    f"no es posible reservar {quantity}."
+                )
+            selected_by_product[entry.product_id] += quantity
+            chosen.append(DistributionStockReservation(
+                operation=operation, stock_entry=entry, source_id=operation.source_id,
+                quantity=quantity, reserved_by=actor,
+            ))
+        for line in planned_lines:
+            if selected_by_product[line.product_id] != line.quantity_planned:
+                raise DjangoValidationError(
+                    f"{line.product_name_snapshot}: selecciona exactamente "
+                    f"{line.quantity_planned} unidades entre sus lotes disponibles."
+                )
+    else:
+        # Comportamiento anterior, conservado para compatibilidad.
+        for line in planned_lines:
+            missing = line.quantity_planned
+            for entry, quantity in by_product.get(line.product_id, []):
+                taken = min(missing, quantity)
+                if taken:
+                    chosen.append(DistributionStockReservation(
+                        operation=operation, stock_entry=entry, source_id=operation.source_id,
+                        quantity=taken, reserved_by=actor,
+                    ))
+                    missing -= taken
+                if not missing:
+                    break
+            if missing:
+                raise DjangoValidationError(
+                    f"{line.product_name_snapshot}: faltan {missing} unidades conformes "
+                    "no reservadas para completar la preparación en este almacén."
+                )
     if not chosen:
         raise DjangoValidationError("La entrega no tiene libros para reservar.")
 
