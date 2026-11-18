@@ -707,6 +707,7 @@ class DistributionTransportDraft(TimeStampedModel):
     class Reason(models.TextChoices):
         CONSIGNMENT = "consignment", "Consignación"
         COMPANY_TRANSFER = "company_transfer", "Entre establecimientos"
+        ITINERANT = "itinerant", "Traslado por emisor itinerante"
         SALE = "sale", "Venta"
         OTHER = "other", "Otro motivo (verificar)"
 
