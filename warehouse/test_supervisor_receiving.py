@@ -228,9 +228,10 @@ class WarehouseSupervisorFlowTests(TestCase):
             self.url(f"evidencias/{e.pk}/archivo"),
         )
         self.assertEqual(downloaded.status_code, 200)
-        self.assertTrue(b"".join(downloaded.streaming_content).startswith(b"\x89PNG"))
-        # No llamar a HttpResponse.close(): emite request_finished, que
-        # cerraría la conexión de PostgreSQL dentro de Django TestCase.
+        self.assertIn("attachment", downloaded["Content-Disposition"])
+        # No consumir el iterador de respuesta en TestCase: el cliente de
+        # pruebas lo cierra al agotarse y emite request_finished, cerrando
+        # la conexión PostgreSQL dentro de la transacción de prueba.
         downloaded.file_to_stream.close()
         self.assertEqual(
             self.api(get_user_model().objects.create_user(
