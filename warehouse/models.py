@@ -52,6 +52,43 @@ class WarehouseLocation(TimeStampedModel):
         return self.name
 
 
+class WarehouseFairEvent(TimeStampedModel):
+    """Feria individual con custodia propia; no implica traslado ni apertura SUNAT.
+
+    Cada feria se asocia a UNA ubicación interna única de tipo FAIR. El saldo
+    no se crea aquí: solo podrá llegar mediante despacho/recepción registrados.
+    """
+
+    reference = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    idempotency_key = models.UUIDField(unique=True, editable=False)
+    location = models.OneToOneField(
+        WarehouseLocation, on_delete=models.PROTECT, related_name="fair_event",
+    )
+    name = models.CharField(max_length=150)
+    venue_name = models.CharField(max_length=180)
+    venue_address = models.CharField(max_length=255)
+    starts_on = models.DateField()
+    ends_on = models.DateField()
+    responsible_name = models.CharField(max_length=180)
+    notes = models.CharField(max_length=500, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="warehouse_fair_events_created",
+    )
+
+    class Meta:
+        ordering = ["-starts_on", "-pk"]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(ends_on__gte=F("starts_on")),
+                name="wh_fair_dates_valid",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
 class GoodsReceipt(TimeStampedModel):
     class Status(models.TextChoices):
         DRAFT = "draft", "Borrador"
