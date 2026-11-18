@@ -1,20 +1,22 @@
 # Book Express — B3/B4: subalmacenes, ferias y documentación de traslado
 
-**Fecha de revisión:** 17/11/2026. **Estado:** diseño objetivo + ajustes de formulario B3 en rama de desarrollo. **NO es emisión SUNAT ni autorización de despacho.**
+**Revisión:** 18/11/2026. **Estado:** B3.2 alta y consulta de feria específica implementadas en rama de desarrollo, pendientes de prueba local. **NO es emisión SUNAT ni autorización de despacho.**
 
 ## 1. Punto exacto del flujo
 
 `Adopción → Pedido editorial → Recepción validada → Stock por lote y ubicación → Planificación (B2) → Reserva de existencias (B3) → Conteo/preparación (B3) → Despacho y GRE cuando corresponda (B4) → En tránsito → Recepción destino → Venta / liquidación / retorno`.
 
-- La planificación de Feria del colegio `[PRUEBA ERP] ANDINO · 2027` tiene **20 LECTOPOLIS 4** asignados comercialmente a la operación, con destino interno `ALMACEN FERIA`. Guardarla **NO reserva**. En la guía Santillana `T001-12358` hay **15 conformes** y **5 observados**; no se puede afirmar que existan 20 unidades libres en Principal sin consultar otras guías, ubicaciones y reservas. El backend mantiene bloqueada la reserva mientras falte stock conforme y libre.
-- La pestaña **1. Existencias, reserva y conteo** es la única que reserva unidades del stock por colegio/lote/ubicación (botón «Reservar existencias»), luego exige conteo físico antes de marcar preparada. La pestaña **2. Datos para la guía de traslado** registra únicamente un borrador documental; no altera inventario.
+- En la prueba local, la entrega Feria del colegio `[PRUEBA ERP] ANDINO · 2027` pasó de 20 LECTOPOLIS 4 a **15 reservados y preparados** y **5 pendientes** mediante división auditada. La guía Santillana `T001-12358` conserva **15 conformes y 5 observados**. Preparación NO equivale a despacho: todavía no salió inventario de Principal. La planificación anterior con destino genérico `ALMACEN FERIA` sigue como dato histórico y no se convierte automáticamente al nuevo evento.
+- La pestaña **1. Existencias, reserva y conteo** reserva unidades del stock por colegio/lote/ubicación y exige conteo físico antes de marcar preparada. La pestaña **2. Coordinación del traslado (opcional)** guarda datos conocidos, sin exigir vehículo ni transportista para preparar, y no altera inventario.
 - La selección de lotes B3 permite FIFO automático o elección manual de guía y cantidades sin inventar stocks.
 
 ## 2. Ubicaciones y subalmacenes: separación arquitectónica
 
 Un `WarehouseLocation` actual tiene nombre, tipo (principal/tienda/feria/consignación/otro), dirección opcional y estado. Es una **ubicación de custodia interna**. Su creación no incorpora libros y su descripción no prueba por sí misma el domicilio SUNAT.
 
-**Modelo objetivo para B3.2/B4 (NO implementado aún):**
+**B3.2 implementado en rama (sin prueba visual local ni despliegue):** `WarehouseFairEvent` representa una feria concreta con nombre, recinto, dirección, fechas y custodio. Cada evento crea en una única transacción su `WarehouseLocation(kind=fair)` individual, identificada por código interno. La API `GET/POST /api/admin/erp/almacen/ferias/` usa permisos existentes, validación de fechas, token idempotente y protección contra alteraciones desde el formulario genérico. La interfaz en Ubicaciones permite registrar, consultar y elegir luego esa feria como destino al planificar. **No crea stock, no asigna lotes ni genera movimientos.**
+
+**Modelo objetivo B3.3/B4 pendiente:**
 
 - **Almacén principal:** centro físico de resguardo; ingreso de libros conformes cuando la recepción está validada.
 - **Tienda/librería:** lugar fijo; su stock se origina solo en movimientos reales recibidos.
@@ -23,7 +25,7 @@ Un `WarehouseLocation` actual tiene nombre, tipo (principal/tienda/feria/consign
 - **Sububicación física (pasillo/anaquel):** futura capa opcional dentro de una ubicación de custodia; por sí misma no altera el stock ni es punto de llegada de una GRE.
 - **Valorización:** preservar costo histórico por `StockEntry`; movimientos internos origen -N / destino +N, global invariable; traslados en tránsito deben tener tratamiento explícito, nunca presumir recepción inmediata.
 
-**Requisitos pendientes:** registrar el evento concreto de feria y su ubicación de custodia, validar fechas/encargado, habilitar saldo por feria y conciliación de venta/retorno. No renombrar todas las ferias como «ALMACEN FERIA» esperando que represente distintos eventos.
+**Requisitos pendientes:** verificar visualmente la creación de evento y la planificación con destino nuevo; implementar apertura/cierre auditados, despacho y recepción por evento, saldo real por feria, arqueo y conciliación de ventas/retornos. No renombrar la ubicación histórica `ALMACEN FERIA` esperando que represente eventos distintos.
 
 ## 3. SUNAT: separación indispensable
 
@@ -60,7 +62,7 @@ Nunca usar nueva recepción de compra para reingresar mercancía retornada ni tr
 |---|---|---|
 | B2 Edición Feria `[PRUEBA ERP] ANDINO` | Confirmada visualmente guardada en estado «Por preparar» | No modificar esta planificación durante pruebas documentales |
 | B3.1 Guía/lotes, reserva y conteo | Implementado en rama, pruebas funcionales locales parciales | Ver stock real; si 20 planificados > libres, mantener botón bloqueado |
-| B3.2 Feria específica/subalmacén | Pendiente | Un evento, dirección y custodio propio; no mezcla entre ferias |
+| B3.2 Feria específica/subalmacén | Alta/consulta implementadas en rama | Probar evento real o DEMO identificado, ver subalmacén independiente con saldo 0; sin despacho |
 | B3.3 Packs/packing y discrepancias | Pendiente | Conteo, etiquetas y componentes sin doble stock |
 | B4 GRE + despacho + tránsito + recepción | Pendiente | Documento tributario cuando corresponda; movimiento físico único, sin doble entrada |
 | B5 Devoluciones y liquidaciones | Pendiente | Retorno por origen, inspección, aprobación y ajuste auditable |
