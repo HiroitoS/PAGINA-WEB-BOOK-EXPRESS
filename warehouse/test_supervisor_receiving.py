@@ -229,10 +229,9 @@ class WarehouseSupervisorFlowTests(TestCase):
         )
         self.assertEqual(downloaded.status_code, 200)
         self.assertIn("attachment", downloaded["Content-Disposition"])
-        # No consumir el iterador de respuesta en TestCase: el cliente de
-        # pruebas lo cierra al agotarse y emite request_finished, cerrando
-        # la conexión PostgreSQL dentro de la transacción de prueba.
-        downloaded.file_to_stream.close()
+        # No consumir ni cerrar FileResponse dentro de TestCase: el cierre
+        # de la respuesta puede emitir request_finished y cerrar PostgreSQL.
+        # La cabecera de descarga y el control de permisos se verifican aquí.
         self.assertEqual(
             self.api(get_user_model().objects.create_user(
                 username="sin-acceso-descarga",
