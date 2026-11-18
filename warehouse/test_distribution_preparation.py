@@ -274,6 +274,25 @@ class DistributionPreparationTests(TestCase):
         self.assertEqual(rejected.status_code, 400, rejected.data)
         self.assertFalse(DistributionStockReservation.objects.exists())
 
+    def test_motivo_itinerante_es_borrador_y_no_habilita_salida(self):
+        """Una feria permite estudiar el motivo, no autoriza despacho ni SUNAT."""
+        op_id = self.plan()
+        url = self.endpoint(op_id, "documento-traslado")
+        response = self.api_client().put(url, {
+            "transfer_reason": "itinerant",
+            "transport_mode": "private",
+            "notes": "Se revisara la aplicabilidad tributaria antes del traslado.",
+        }, format="json")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["draft"]["transfer_reason"], "itinerant")
+        self.assertFalse(response.data["sunat_issued"])
+        self.assertFalse(response.data["sunat_accepted"])
+        self.assertFalse(response.data["data_complete_for_review"])
+        self.assertEqual(StockTransfer.objects.count(), 0)
+        self.assertEqual(
+            DistributionOperation.objects.get(pk=op_id).status, "planned",
+        )
+
     def test_documento_transporte_es_borrador_no_gre_aceptada(self):
         op_id = self.plan()
         client = self.api_client()
