@@ -110,6 +110,16 @@ class OperationUpdate(serializers.Serializer):
         return data
 
 
+class ReserveLotInput(serializers.Serializer):
+    stock_entry_id = serializers.IntegerField(min_value=1)
+    quantity = serializers.IntegerField(min_value=1)
+
+
+class ReserveInput(serializers.Serializer):
+    # Ausente: reparto FIFO anterior. Presente: selección explícita de lotes.
+    lots = ReserveLotInput(many=True, required=False, allow_empty=False)
+
+
 class PhysicalCountInput(serializers.Serializer):
     reservation_id = serializers.IntegerField(min_value=1)
     counted = serializers.IntegerField(min_value=0)
@@ -519,8 +529,12 @@ class DistributionOperationViewSet(viewsets.ViewSet):
     @action(detail=True, methods=["post"], url_path="reservar")
     def reserve(self, request, pk=None):
         self._authorize(request, write=True)
+        form = ReserveInput(data=request.data)
+        form.is_valid(raise_exception=True)
         try:
-            operation, created = reservar_operacion(pk, request.user)
+            operation, created = reservar_operacion(
+                pk, request.user, lots=form.validated_data.get("lots"),
+            )
         except DjangoValidationError as exc:
             raise ValidationError({"detail": exc.messages}) from exc
         return Response(resumen_preparacion(operation), status=(
