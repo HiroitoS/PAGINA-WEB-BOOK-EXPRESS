@@ -232,7 +232,9 @@ class WarehouseSupervisorFlowTests(TestCase):
         self.assertEqual(report.status_code, 200, report.data)
         self.assertTrue(report.data["requires_attention"])
         self.assertFalse(report.data["sending_enabled"])
-        self.assertIn("faltantes frente a guía 2", report.data["body"])
+        self.assertIn("Faltante frente a la guía: 2 unidad(es)", report.data["body"])
+        self.assertIn("2 unidad(es) observada(s)", report.data["body"])
+        self.assertNotIn("Faltante frente a la guía: 0", report.data["body"])
         self.assertIn("Cubierta deteriorada", report.data["body"])
         sent = self.api(self.boss).post(self.url("reporte-editorial"), {
             "recipient": "editorial@example.test",
@@ -278,6 +280,36 @@ class WarehouseSupervisorFlowTests(TestCase):
         self.assertTrue(report.data["validated"])
         self.assertIn("Dos ejemplares con cubierta deteriorada", report.data["body"])
         self.assertFalse(self.receipt.events.filter(action="supplier_report_sent").exists())
+
+    def test_correo_solo_incluye_incidencias_y_no_pendientes_del_pedido(self):
+        """Guía completa con observados: no anunciar faltantes ficticios."""
+        line = self.receipt.lines.get()
+        line.quantity_documented = line.quantity_arrived
+        line.save(update_fields=["quantity_documented", "updated_at"])
+        response = self.api(self.boss).get(self.url("reporte-editorial"))
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertIn("Incidencias de recepción", response.data["subject"])
+        self.assertIn("2 unidad(es) observada(s)", response.data["body"])
+        self.assertNotIn("Faltante frente a la guía:", response.data["body"])
+        self.assertNotIn("observados 2, faltantes", response.data["body"])
+        self.assertNotIn("No se adjuntaron evidencias.", response.data["body"])
+        self.assertTrue(response.data["requires_attention"])
+
+    def test_sin_incidencias_no_inventa_reclamacion(self):
+        """Sin observados ni faltantes de guía no hay correo que enviar."""
+        line = self.receipt.lines.get()
+        line.quantity_documented = line.quantity_arrived
+        line.quantity_observed = 0
+        line.quantity_accepted = line.quantity_arrived
+        line.save(update_fields=[
+            "quantity_documented", "quantity_observed",
+            "quantity_accepted", "updated_at",
+        ])
+        response = self.api(self.boss).get(self.url("reporte-editorial"))
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertFalse(response.data["requires_attention"])
+        self.assertIn("No se registraron incidencias", response.data["body"])
+        self.assertNotIn("Faltante frente a la guía:", response.data["body"])
 
     def test_filtros_inventario_por_editorial_y_colegio(self):
         submit = self.api(self.clerk).post(self.url("solicitar-aprobacion"), {}, format="json")
