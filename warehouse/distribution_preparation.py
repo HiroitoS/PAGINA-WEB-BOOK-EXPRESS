@@ -4,7 +4,6 @@ Reserva física != despacho, venta, GRE emitida ni transferencia de stock.
 Cada reserva y cada traslado directo bloquean la misma StockEntry.
 """
 from collections import defaultdict
-from uuid import uuid4
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
