@@ -20,8 +20,8 @@ class Migration(migrations.Migration):
             name="WarehouseFairEvent",
             fields=[
                 ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
-                ("created_at", models.DateTimeField(auto_now_add=True)),
-                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("created_at", models.DateTimeField(auto_now_add=True, verbose_name="Fecha de creación")),
+                ("updated_at", models.DateTimeField(auto_now=True, verbose_name="Fecha de actualización")),
                 ("reference", models.UUIDField(default=uuid.uuid4, editable=False, unique=True)),
                 ("idempotency_key", models.UUIDField(editable=False, unique=True)),
                 ("name", models.CharField(max_length=150)),
