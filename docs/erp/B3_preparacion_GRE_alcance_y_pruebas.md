@@ -55,7 +55,7 @@ En pantalla: `Movimientos → Entregas → Detalle → Preparación de esta entr
 
 ## 6. Pendientes necesarios antes de cerrar Almacén
 
-- B3 ampliado: selección manual de lotes, discrepancias de picking y correcciones auditadas, responsable de preparación, bultos y etiquetado; pack específico sin doble stock; reserva por custodia de feria y por operación real, no solo por colegio.
+- B3 ampliado: pruebas locales de la selección manual de lotes ya implementada; discrepancias de picking y correcciones auditadas, responsable de preparación, bultos y etiquetado; pack específico sin doble stock; reserva por custodia de feria y por operación real, no solo por colegio.
 - B4: definición y aprobación de despacho, enlace uno-a-uno/por lote con reservas, documento tributario aceptado cuando corresponda, envío, tránsito, recepción en destino, diferencias y vínculo auditable a `StockTransfer`. Nunca volver a realizar manualmente el movimiento para una entrega que ya lo generó.
 - Consolidación de solicitudes internas existentes para que no creen una segunda planificación; destinos concretos por feria/consignación; retornos y liquidación por colegio.
 - Revisión contable/tributaria real por asesor, condiciones SUNAT y datos de Book Express antes de integrar un emisor definitivo.
