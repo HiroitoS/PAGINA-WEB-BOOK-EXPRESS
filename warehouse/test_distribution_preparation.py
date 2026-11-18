@@ -205,6 +205,75 @@ class DistributionPreparationTests(TestCase):
         self.assertFalse(DistributionStockReservation.objects.exists())
         self.assertEqual(DistributionOperation.objects.get(pk=op_id).status, "planned")
 
+    def test_seleccion_manual_por_guia_reserva_exacto_y_no_mueve_stock(self):
+        op_id = self.plan()
+        client = self.api_client()
+        preview = client.get(self.endpoint(op_id, "preparacion"))
+        self.assertEqual(preview.status_code, 200, preview.data)
+        chosen = [
+            {"stock_entry_id": item["lots"][0]["stock_entry_id"],
+             "quantity": item["planned"]}
+            for item in preview.data["items"]
+        ]
+        response = client.post(
+            self.endpoint(op_id, "reservar"), {"lots": chosen}, format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data["status"], "reserved")
+        self.assertEqual(DistributionStockReservation.objects.count(), 2)
+        self.assertEqual(
+            sorted(r["stock_entry_id"] for r in response.data["reservations"]),
+            sorted(row["stock_entry_id"] for row in chosen),
+        )
+        self.assertEqual(StockTransfer.objects.count(), 0)
+        self.assertEqual(StockEntry.objects.count(), 2)
+        repeat = client.post(
+            self.endpoint(op_id, "reservar"), {"lots": chosen}, format="json",
+        )
+        self.assertEqual(repeat.status_code, 200, repeat.data)
+        self.assertEqual(DistributionStockReservation.objects.count(), 2)
+
+    def test_seleccion_manual_invalida_no_deja_reservas_parciales(self):
+        op_id = self.plan()
+        client = self.api_client()
+        preview = client.get(self.endpoint(op_id, "preparacion"))
+        valid = [
+            {"stock_entry_id": item["lots"][0]["stock_entry_id"],
+             "quantity": item["planned"]}
+            for item in preview.data["items"]
+        ]
+        invalid_cases = [
+            {"lots": []},
+            {"lots": [valid[0], valid[0], valid[1]]},
+            {"lots": [valid[0]]},
+            {"lots": [{**valid[0], "quantity": 2147483647}, valid[1]]},
+            {"lots": [{**valid[0], "quantity": 0}, valid[1]]},
+            {"lots": [{**valid[0], "stock_entry_id": 9999999}, valid[1]]},
+        ]
+        for data in invalid_cases:
+            with self.subTest(data=data):
+                rejected = client.post(
+                    self.endpoint(op_id, "reservar"), data, format="json",
+                )
+                self.assertEqual(rejected.status_code, 400, rejected.data)
+                self.assertFalse(DistributionStockReservation.objects.exists())
+                self.assertEqual(
+                    DistributionOperation.objects.get(pk=op_id).status, "planned",
+                )
+        # Trasladar físicamente un lote y tratar de reservarlo en origen
+        # tampoco permite usar cantidades que ya no están disponibles.
+        registrar_traslado(
+            actor=self.user, stock_entry_id=valid[0]["stock_entry_id"],
+            source_id=self.main.pk, destination_id=self.fair.pk,
+            quantity=self.entries[0].quantity_available, idempotency_key=uuid4(),
+            entrega_confirmada=True,
+        )
+        rejected = client.post(
+            self.endpoint(op_id, "reservar"), {"lots": valid}, format="json",
+        )
+        self.assertEqual(rejected.status_code, 400, rejected.data)
+        self.assertFalse(DistributionStockReservation.objects.exists())
+
     def test_documento_transporte_es_borrador_no_gre_aceptada(self):
         op_id = self.plan()
         client = self.api_client()
