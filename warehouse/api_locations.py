@@ -16,7 +16,7 @@ from rest_framework import mixins, serializers, viewsets
 from rest_framework.permissions import BasePermission
 
 from accounts.permissions import usuario_tiene_permiso
-from warehouse.models import StockEntry, StockMovement, WarehouseLocation
+from warehouse.models import StockEntry, StockMovement, WarehouseFairEvent, WarehouseLocation
 from warehouse.location_assignment import conciliar_lotes
 
 
@@ -38,16 +38,36 @@ class WarehouseLocationAccess(BasePermission):
 
 
 class WarehouseLocationSerializer(serializers.ModelSerializer):
+    fair_event_id = serializers.SerializerMethodField()
+
+    def get_fair_event_id(self, obj):
+        event = getattr(obj, "fair_event", None)
+        return event.pk if event is not None else None
+
     class Meta:
         model = WarehouseLocation
-        fields = ("id", "code", "name", "kind", "address", "is_active", "notes")
-        read_only_fields = ("id", "code")
+        fields = ("id", "code", "name", "kind", "address", "is_active", "notes", "fair_event_id")
+        read_only_fields = ("id", "code", "fair_event_id")
 
     def validate(self, attrs):
         if self.instance is not None and "code" in self.initial_data:
             # Identificador inmutable para documentos e integraciones futuras.
             raise serializers.ValidationError({
                 "code": "El identificador interno no puede modificarse."
+            })
+        if (
+            self.instance is not None
+            and WarehouseFairEvent.objects.filter(location_id=self.instance.pk).exists()
+            and any(
+                field in attrs and attrs[field] != getattr(self.instance, field)
+                for field in ("name", "kind", "address", "is_active", "notes")
+            )
+        ):
+            raise serializers.ValidationError({
+                "detail": (
+                    "Esta ubicación pertenece a una feria específica. "
+                    "Sus datos se conservarán hasta contar con una corrección auditada."
+                ),
             })
         kind = attrs.get("kind", self.instance.kind if self.instance else None)
         is_active = attrs.get(
@@ -125,7 +145,7 @@ class WarehouseLocationViewSet(
     serializer_class = WarehouseLocationSerializer
     permission_classes = (WarehouseLocationAccess,)
     pagination_class = None
-    queryset = WarehouseLocation.objects.all().order_by("name", "pk")
+    queryset = WarehouseLocation.objects.select_related("fair_event").all().order_by("name", "pk")
 
     @action(detail=False, methods=["get"], url_path="pendientes-asignacion")
     def pending_assignments(self, request):
