@@ -223,6 +223,18 @@ class WarehouseSupervisorFlowTests(TestCase):
         self.assertEqual(list_result.status_code, 200, list_result.data)
         self.assertEqual(len(list_result.data), 1)
         self.assertNotIn("file", list_result.data[0])
+        self.assertEqual(list_result.data[0]["created_by"], self.clerk.get_username())
+        downloaded = self.api(self.boss).get(
+            self.url(f"evidencias/{e.pk}/archivo"),
+        )
+        self.assertEqual(downloaded.status_code, 200)
+        downloaded.close()
+        self.assertEqual(
+            self.api(get_user_model().objects.create_user(
+                username="sin-acceso-descarga",
+            )).get(self.url(f"evidencias/{e.pk}/archivo")).status_code,
+            403,
+        )
         self.assertEqual(
             self.api(get_user_model().objects.create_user(username="unauthorized")).get(
                 self.url("evidencias")
