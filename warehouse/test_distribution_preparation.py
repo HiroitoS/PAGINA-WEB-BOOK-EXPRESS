@@ -573,3 +573,132 @@ class DistributionPreparationTests(TestCase):
         self.assertEqual(limited.post(self.endpoint(operation_id, "documento-interno"), {
             "idempotency_key": str(uuid4()),
         }, format="json").status_code, 403)
+
+    def test_b5_diferencia_llegada_no_mueve_stock_y_reconteo_conforme_requiere_jefatura(self):
+        from warehouse.models import DistributionArrivalIncident
+        from warehouse.transfers import posiciones_lotes
+
+        operation_id = self.plan()
+        client = self.api_client()
+        reserve = client.post(self.endpoint(operation_id, "reservar"), {}, format="json")
+        self.assertEqual(reserve.status_code, 201, reserve.data)
+        preparation = client.post(
+            self.endpoint(operation_id, "confirmar-preparacion"),
+            {"counts": [
+                {"reservation_id": row["id"], "counted": row["quantity"]}
+                for row in reserve.data["reservations"]
+            ]}, format="json",
+        )
+        self.assertEqual(preparation.status_code, 200, preparation.data)
+        internal = client.post(
+            self.endpoint(operation_id, "documento-interno"),
+            {"idempotency_key": str(uuid4())}, format="json",
+        )
+        self.assertEqual(internal.status_code, 201, internal.data)
+        out = client.post(
+            self.endpoint(operation_id, "confirmar-salida"),
+            {
+                "evidence_kind": "external_guide",
+                "external_guide_reference": "GRE-ENSAYO-B5",
+                "physical_dispatch_confirmed": True,
+            }, format="json",
+        )
+        self.assertEqual(out.status_code, 201, out.data)
+        lines = out.data["lines"]
+        self.assertEqual(len(lines), 2)
+        transit_before = posiciones_lotes(self.entries)
+        count_before = StockEntry.objects.count()
+        difference_counts = [
+            {"line_id": line["id"], "counted": line["quantity"] - (1 if idx == 0 else 0)}
+            for idx, line in enumerate(lines)
+        ]
+        url = self.endpoint(operation_id, "registrar-diferencia-llegada")
+        incident = client.post(url, {
+            "receiver_name": "Encargado de la feria",
+            "observations": "En el primer lote se observa un libro faltante.",
+            "counts": difference_counts,
+        }, format="json")
+        self.assertEqual(incident.status_code, 201, incident.data)
+        self.assertEqual(incident.data["operation_status"], "in_transit")
+        self.assertTrue(incident.data["open_incident"])
+        self.assertEqual(len(incident.data["arrival_incidents"]), 1)
+        self.assertEqual(incident.data["arrival_incidents"][0]["counts"][0]["difference"], -1)
+        incident_id = incident.data["created_incident_id"]
+        self.assertEqual(DistributionArrivalIncident.objects.count(), 1)
+        self.assertEqual(posiciones_lotes(self.entries), transit_before)
+        self.assertEqual(StockEntry.objects.count(), count_before)
+
+        duplicate = client.post(url, {
+            "receiver_name": "Encargado de la feria",
+            "observations": "Diferencia duplicada por doble pulsación.",
+            "counts": difference_counts,
+        }, format="json")
+        self.assertEqual(duplicate.status_code, 400, duplicate.data)
+        self.assertEqual(DistributionArrivalIncident.objects.count(), 1)
+
+        correct = [
+            {"line_id": line["id"], "counted": line["quantity"]}
+            for line in lines
+        ]
+        blocked = client.post(self.endpoint(operation_id, "confirmar-llegada"), {
+            "receiver_name": "Encargado de la feria",
+            "arrival_confirmed": True, "counts": correct,
+        }, format="json")
+        self.assertEqual(blocked.status_code, 400, blocked.data)
+        self.assertEqual(posiciones_lotes(self.entries), transit_before)
+
+        bad_resolution = client.post(
+            self.endpoint(operation_id, "resolver-diferencia-llegada"),
+            {
+                "incident_id": incident_id,
+                "counts": difference_counts,
+                "resolution_note": "Recuento parcial, todavía no coincide.",
+            }, format="json",
+        )
+        self.assertEqual(bad_resolution.status_code, 400, bad_resolution.data)
+        self.assertEqual(DistributionArrivalIncident.objects.get(pk=incident_id).status, "open")
+        resolved = client.post(
+            self.endpoint(operation_id, "resolver-diferencia-llegada"),
+            {
+                "incident_id": incident_id, "counts": correct,
+                "resolution_note": "El encargado revisó y encontró físicamente el libro faltante.",
+            }, format="json",
+        )
+        self.assertEqual(resolved.status_code, 200, resolved.data)
+        self.assertFalse(resolved.data["open_incident"])
+        self.assertEqual(resolved.data["arrival_incidents"][0]["status"], "resolved")
+        self.assertEqual(posiciones_lotes(self.entries), transit_before)
+        self.assertEqual(
+            client.post(self.endpoint(operation_id, "resolver-diferencia-llegada"), {
+                "incident_id": incident_id, "counts": correct,
+                "resolution_note": "No se puede cerrar dos veces la misma incidencia.",
+            }, format="json").status_code, 400,
+        )
+        finished = client.post(self.endpoint(operation_id, "confirmar-llegada"), {
+            "receiver_name": "Encargado de la feria",
+            "arrival_confirmed": True, "counts": correct,
+        }, format="json")
+        self.assertEqual(finished.status_code, 200, finished.data)
+        self.assertEqual(finished.data["status"], "received")
+        self.assertEqual(finished.data["arrival_incidents"][0]["status"], "resolved")
+        self.assertEqual(StockEntry.objects.count(), count_before)
+        self.assertEqual(StockTransfer.objects.count(), 0)
+        self.assertNotEqual(posiciones_lotes(self.entries), transit_before)
+
+    def test_b5_requiere_permiso_para_registrar_y_cerrar_incidencias(self):
+        op_id = self.plan()
+        employee = self.api_client(self.employee)
+        self.assertEqual(employee.post(
+            self.endpoint(op_id, "registrar-diferencia-llegada"), {
+                "receiver_name": "Otro",
+                "observations": "Falta un libro de esta entrega",
+                "counts": [{"line_id": 1, "counted": 0}],
+            }, format="json",
+        ).status_code, 403)
+        self.assertEqual(employee.post(
+            self.endpoint(op_id, "resolver-diferencia-llegada"), {
+                "incident_id": 1,
+                "resolution_note": "Una validación no autorizada",
+                "counts": [{"line_id": 1, "counted": 0}],
+            }, format="json",
+        ).status_code, 403)
