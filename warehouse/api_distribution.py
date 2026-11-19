@@ -26,7 +26,7 @@ from warehouse.distribution_preparation import (
 )
 from warehouse.distribution_dispatch import (
     crear_documento_interno, confirmar_salida, confirmar_recepcion_destino,
-    output_dispatch,
+    output_dispatch, reportar_diferencia_llegada, resolver_diferencia_por_reconteo,
 )
 from warehouse.models import (
     DistributionDispatch, DistributionOperation, DistributionOperationEvent,
@@ -151,6 +151,18 @@ class InternalReceptionInput(serializers.Serializer):
         if value is not True:
             raise serializers.ValidationError("Confirma únicamente la llegada física real.")
         return value
+
+
+class ArrivalIncidentInput(serializers.Serializer):
+    receiver_name = serializers.CharField(max_length=180, trim_whitespace=True)
+    counts = InternalReceptionLine(many=True, allow_empty=False)
+    observations = serializers.CharField(min_length=10, max_length=1000, trim_whitespace=True)
+
+
+class ArrivalIncidentResolutionInput(serializers.Serializer):
+    incident_id = serializers.IntegerField(min_value=1)
+    counts = InternalReceptionLine(many=True, allow_empty=False)
+    resolution_note = serializers.CharField(min_length=15, max_length=1000, trim_whitespace=True)
 
 
 class SplitByStockInput(serializers.Serializer):
@@ -704,6 +716,46 @@ class DistributionOperationViewSet(viewsets.ViewSet):
         except DjangoValidationError as exc:
             raise ValidationError({"detail": exc.messages}) from exc
         return Response(output_dispatch(operation))
+
+    @action(detail=True, methods=["post"], url_path="registrar-diferencia-llegada")
+    def register_arrival_incident(self, request, pk=None):
+        """Registra incidencia sin sumar stock a destino ni cerrar tránsito."""
+        self._authorize(request, write=True)
+        if not usuario_tiene_permiso(request.user, "warehouse.manage_stock_transfers"):
+            raise PermissionDenied("No tienes autorización para registrar diferencias de llegada.")
+        form = ArrivalIncidentInput(data=request.data)
+        form.is_valid(raise_exception=True)
+        data = form.validated_data
+        try:
+            operation, incident = reportar_diferencia_llegada(
+                pk, request.user, receiver=data["receiver_name"],
+                counts=data["counts"], observations=data["observations"],
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
+        response = output_dispatch(operation)
+        response["created_incident_id"] = incident.pk
+        return Response(response, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"], url_path="resolver-diferencia-llegada")
+    def resolve_arrival_incident(self, request, pk=None):
+        """Solo jefatura, únicamente tras nuevo conteo físico conforme completo."""
+        self._authorize(request, write=True)
+        if not usuario_tiene_permiso(request.user, "warehouse.validate_receiving"):
+            raise PermissionDenied("Solo la jefatura autorizada puede resolver esta incidencia.")
+        form = ArrivalIncidentResolutionInput(data=request.data)
+        form.is_valid(raise_exception=True)
+        data = form.validated_data
+        try:
+            operation, incident = resolver_diferencia_por_reconteo(
+                pk, request.user, incident_id=data["incident_id"],
+                counts=data["counts"], resolution_note=data["resolution_note"],
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
+        response = output_dispatch(operation)
+        response["resolved_incident_id"] = incident.pk
+        return Response(response)
 
     @action(detail=True, methods=["get", "put"], url_path="documento-traslado")
     def transport_document(self, request, pk=None):
