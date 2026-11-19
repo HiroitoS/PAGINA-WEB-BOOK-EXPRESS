@@ -24,9 +24,13 @@ from warehouse.distribution_preparation import (
     confirmar_preparacion, dividir_entrega_por_disponibilidad,
     liberar_reservas_operacion, reservar_operacion, resumen_preparacion,
 )
+from warehouse.distribution_dispatch import (
+    crear_documento_interno, confirmar_salida, confirmar_recepcion_destino,
+    output_dispatch,
+)
 from warehouse.models import (
-    DistributionOperation, DistributionOperationEvent, DistributionOperationLine,
-    DistributionTransportDraft, WarehouseLocation,
+    DistributionDispatch, DistributionOperation, DistributionOperationEvent,
+    DistributionOperationLine, DistributionTransportDraft, WarehouseLocation,
 )
 
 
@@ -108,6 +112,45 @@ class OperationUpdate(serializers.Serializer):
                     field: "Este dato no puede quedar vacío.",
                 })
         return data
+
+
+class InternalDocumentInput(serializers.Serializer):
+    idempotency_key = serializers.UUIDField()
+
+
+class InternalDepartureInput(serializers.Serializer):
+    evidence_kind = serializers.ChoiceField(choices=DistributionDispatch.Evidence.choices)
+    external_guide_reference = serializers.CharField(
+        max_length=120, required=False, allow_blank=True,
+    )
+    exception_justification = serializers.CharField(
+        max_length=500, required=False, allow_blank=True,
+    )
+    notes = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    physical_dispatch_confirmed = serializers.BooleanField()
+
+    def validate_physical_dispatch_confirmed(self, value):
+        if value is not True:
+            raise serializers.ValidationError(
+                "Confirma la salida física solo cuando realmente vaya a efectuarse."
+            )
+        return value
+
+
+class InternalReceptionLine(serializers.Serializer):
+    line_id = serializers.IntegerField(min_value=1)
+    counted = serializers.IntegerField(min_value=0)
+
+
+class InternalReceptionInput(serializers.Serializer):
+    receiver_name = serializers.CharField(max_length=180, trim_whitespace=True)
+    counts = InternalReceptionLine(many=True, allow_empty=False)
+    arrival_confirmed = serializers.BooleanField()
+
+    def validate_arrival_confirmed(self, value):
+        if value is not True:
+            raise serializers.ValidationError("Confirma únicamente la llegada física real.")
+        return value
 
 
 class SplitByStockInput(serializers.Serializer):
@@ -596,6 +639,67 @@ class DistributionOperationViewSet(viewsets.ViewSet):
         except DjangoValidationError as exc:
             raise ValidationError({"detail": exc.messages}) from exc
         return Response(resumen_preparacion(operation))
+
+    @action(detail=True, methods=["get", "post"], url_path="documento-interno")
+    def internal_document(self, request, pk=None):
+        """Orden interna numerada: NO registra salida ni emisión SUNAT."""
+        self._authorize(request, write=request.method == "POST")
+        if request.method == "GET":
+            operation = get_object_or_404(_queryset(), pk=pk)
+            return Response(output_dispatch(operation))
+        form = InternalDocumentInput(data=request.data)
+        form.is_valid(raise_exception=True)
+        try:
+            operation, created = crear_documento_interno(
+                pk, request.user, form.validated_data["idempotency_key"],
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
+        return Response(
+            output_dispatch(operation),
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"], url_path="confirmar-salida")
+    def internal_departure(self, request, pk=None):
+        """Salida física separada; exige sustento documental verificado por humano."""
+        self._authorize(request, write=True)
+        if not usuario_tiene_permiso(request.user, "warehouse.manage_stock_transfers"):
+            raise PermissionDenied("No tienes autorización para confirmar salidas físicas.")
+        form = InternalDepartureInput(data=request.data)
+        form.is_valid(raise_exception=True)
+        data = form.validated_data
+        try:
+            operation, created = confirmar_salida(
+                pk, request.user, document_basis=data["evidence_kind"],
+                guide_ref=data.get("external_guide_reference", ""),
+                exemption=data.get("exception_justification", ""),
+                note=data.get("notes", ""),
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
+        return Response(
+            output_dispatch(operation),
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"], url_path="confirmar-llegada")
+    def internal_arrival(self, request, pk=None):
+        """Entrada de destino luego de cotejar todos los lotes, nunca implícita."""
+        self._authorize(request, write=True)
+        if not usuario_tiene_permiso(request.user, "warehouse.manage_stock_transfers"):
+            raise PermissionDenied("No tienes autorización para confirmar recepciones físicas.")
+        form = InternalReceptionInput(data=request.data)
+        form.is_valid(raise_exception=True)
+        try:
+            operation = confirmar_recepcion_destino(
+                pk, request.user,
+                receiver=form.validated_data["receiver_name"],
+                counts=form.validated_data["counts"],
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
+        return Response(output_dispatch(operation))
 
     @action(detail=True, methods=["get", "put"], url_path="documento-traslado")
     def transport_document(self, request, pk=None):
