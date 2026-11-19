@@ -634,8 +634,8 @@ class DistributionOperationViewSet(viewsets.ViewSet):
         reason = form.validated_data["reason"]
         with transaction.atomic():
             record = get_object_or_404(
-                DistributionOperation.objects.select_for_update().select_related(
-                    "destination", "destination__fair_event",
+                DistributionOperation.objects.select_for_update(of=("self",)).select_related(
+                    "destination",
                 ),
                 pk=pk,
             )
