@@ -77,6 +77,16 @@ class OperationInput(serializers.Serializer):
         return data
 
 
+class PreparedFairDestinationCorrection(serializers.Serializer):
+    """Corrección restringida de destinos genéricos, sin tocar lotes ni conteos."""
+    destination_id = serializers.PrimaryKeyRelatedField(
+        source="destination", queryset=WarehouseLocation.objects.filter(
+            is_active=True, kind=WarehouseLocation.Kind.FAIR,
+        ),
+    )
+    reason = serializers.CharField(min_length=12, max_length=500, trim_whitespace=True)
+
+
 class OperationUpdate(serializers.Serializer):
     mode = serializers.ChoiceField(
         choices=DistributionOperation.Mode.choices, required=False,
@@ -284,6 +294,10 @@ def _output(obj):
         "destination_id": obj.destination_id,
         "destination": obj.destination.name,
         "destination_kind": obj.destination.kind,
+        "destination_fair_event_id": (
+            obj.destination.fair_event.pk
+            if getattr(obj.destination, "fair_event", None) else None
+        ),
         "operation_name": obj.operation_name,
         "responsible_name": obj.responsible_name,
         "scheduled_on": obj.scheduled_on,
@@ -314,7 +328,8 @@ def _output(obj):
 
 def _queryset():
     return DistributionOperation.objects.select_related(
-        "adoption__campaign", "school", "source", "destination", "created_by",
+        "adoption__campaign", "school", "source", "destination",
+        "destination__fair_event", "created_by",
     ).prefetch_related("items", "events__actor")
 
 
@@ -587,6 +602,57 @@ class DistributionOperationViewSet(viewsets.ViewSet):
             DistributionOperationEvent.objects.create(
                 operation=record, actor=request.user, action="updated",
                 reason=reason, previous=previous, current=_state(record),
+            )
+        return Response(_output(get_object_or_404(_queryset(), pk=record.pk)))
+
+    @action(detail=True, methods=["post"], url_path="corregir-destino-feria")
+    def correct_prepared_fair_destination(self, request, pk=None):
+        """Solo Jefatura corrige feria genérica de una preparación sin orden emitida."""
+        self._authorize(request, write=True)
+        if not usuario_tiene_permiso(request.user, "warehouse.validate_receiving"):
+            raise PermissionDenied("La corrección del destino preparado requiere autorización de Jefatura.")
+        form = PreparedFairDestinationCorrection(data=request.data)
+        form.is_valid(raise_exception=True)
+        target = form.validated_data["destination"]
+        reason = form.validated_data["reason"]
+        with transaction.atomic():
+            record = get_object_or_404(
+                DistributionOperation.objects.select_for_update().select_related(
+                    "destination", "destination__fair_event",
+                ),
+                pk=pk,
+            )
+            if record.status != DistributionOperation.Status.PREPARED:
+                raise ValidationError({
+                    "detail": "Solo puedes corregir el destino de una preparación ya verificada."
+                })
+            if record.mode != DistributionOperation.Mode.FAIR:
+                raise ValidationError({"detail": "Esta corrección solo corresponde a ferias."})
+            if record.destination.kind != WarehouseLocation.Kind.FAIR or (
+                getattr(record.destination, "fair_event", None) is not None
+            ):
+                raise ValidationError({
+                    "detail": "El destino actual no es una feria genérica pendiente de asignación."
+                })
+            if DistributionDispatch.objects.filter(operation=record).exists():
+                raise ValidationError({
+                    "detail": "Ya existe una orden interna. Requiere una reversión formal, no edición."
+                })
+            if target.pk in (record.source_id, record.destination_id):
+                raise ValidationError({
+                    "destination_id": "Elige una feria específica diferente del lugar actual."
+                })
+            if not hasattr(target, "fair_event"):
+                raise ValidationError({
+                    "destination_id": "Selecciona una feria registrada como evento, no un almacén genérico."
+                })
+            previous = _state(record)
+            record.destination = target
+            record.save(update_fields=["destination", "updated_at"])
+            DistributionOperationEvent.objects.create(
+                operation=record, actor=request.user,
+                action="fair_destination_fixed", reason=reason,
+                previous=previous, current=_state(record),
             )
         return Response(_output(get_object_or_404(_queryset(), pk=record.pk)))
 
