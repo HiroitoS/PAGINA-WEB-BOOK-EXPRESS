@@ -11,8 +11,8 @@ from purchasing.order_creation import create_orders_from_adoption
 from purchasing.test_integration import GeneracionPedidosAdopcionTests
 from warehouse.models import (
     DistributionOperation, DistributionStockReservation,
-    DistributionTransportDraft, GoodsReceipt, StockEntry, StockTransfer,
-    WarehouseLocation,
+    DistributionDispatch, DistributionDispatchLine, DistributionTransportDraft,
+    GoodsReceipt, StockEntry, StockTransfer, WarehouseFairEvent, WarehouseLocation,
 )
 from warehouse.receiving import crear_borrador_recepcion, validar_recepcion
 from warehouse.transfers import registrar_traslado
@@ -27,6 +27,13 @@ class DistributionPreparationTests(TestCase):
         )
         cls.fair = WarehouseLocation.objects.create(
             code="B3-FAIR", name="Feria B3", kind=WarehouseLocation.Kind.FAIR,
+        )
+        WarehouseFairEvent.objects.create(
+            location=cls.fair, idempotency_key=uuid4(),
+            name="Feria técnica de pruebas", venue_name="Recinto DEMO",
+            venue_address="Dirección DEMO (no real)",
+            starts_on="2027-02-01", ends_on="2027-02-02",
+            responsible_name="Operador DEMO", created_by=cls.user,
         )
         cls.employee = get_user_model().objects.create_user(
             username="b3-restricted", password="dummy",
@@ -418,3 +425,133 @@ class DistributionPreparationTests(TestCase):
         self.assertEqual(
             self.api_client(self.employee).get(url).status_code, 403,
         )
+
+    def test_b4_documento_interno_no_mueve_libros_y_salida_recepcion_son_dos_etapas(self):
+        from warehouse.transfers import posiciones_lotes
+
+        operation_id = self.plan()
+        client = self.api_client()
+        url = self.endpoint(operation_id, "documento-interno")
+        self.assertEqual(client.get(url).data["exists"], False)
+        early = client.post(url, {"idempotency_key": str(uuid4())}, format="json")
+        self.assertEqual(early.status_code, 400, early.data)
+        reserved = client.post(self.endpoint(operation_id, "reservar"), {}, format="json")
+        self.assertEqual(reserved.status_code, 201, reserved.data)
+        counted = client.post(self.endpoint(operation_id, "confirmar-preparacion"), {
+            "counts": [{
+                "reservation_id": row["id"], "counted": row["quantity"],
+            } for row in reserved.data["reservations"]],
+        }, format="json")
+        self.assertEqual(counted.status_code, 200, counted.data)
+        before = posiciones_lotes(self.entries)
+        stock_before = StockEntry.objects.count()
+        doc = client.post(url, {"idempotency_key": str(uuid4())}, format="json")
+        self.assertEqual(doc.status_code, 201, doc.data)
+        self.assertEqual(doc.data["status"], "documented")
+        self.assertTrue(doc.data["document_number"].startswith("BE-SI-"))
+        self.assertEqual(posiciones_lotes(self.entries), before)
+        self.assertEqual(StockTransfer.objects.count(), 0)
+        retry = client.post(url, {"idempotency_key": str(uuid4())}, format="json")
+        self.assertEqual(retry.status_code, 200, retry.data)
+        self.assertEqual(retry.data["id"], doc.data["id"])
+        self.assertEqual(DistributionDispatch.objects.count(), 1)
+
+        invalid = client.post(self.endpoint(operation_id, "confirmar-salida"), {
+            "evidence_kind": "external_guide",
+            "external_guide_reference": "", "physical_dispatch_confirmed": True,
+        }, format="json")
+        self.assertEqual(invalid.status_code, 400, invalid.data)
+        self.assertEqual(posiciones_lotes(self.entries), before)
+
+        out = client.post(self.endpoint(operation_id, "confirmar-salida"), {
+            "evidence_kind": "external_guide",
+            "external_guide_reference": "GRE-PRUEBA-2027-01",
+            "physical_dispatch_confirmed": True,
+        }, format="json")
+        self.assertEqual(out.status_code, 201, out.data)
+        self.assertEqual(out.data["status"], "in_transit")
+        self.assertEqual(out.data["operation_status"], "in_transit")
+        self.assertEqual(StockEntry.objects.count(), stock_before)
+        self.assertEqual(StockTransfer.objects.count(), 0)
+        transit = posiciones_lotes(self.entries)
+        for line in out.data["lines"]:
+            entry_id = line["stock_entry_id"]
+            self.assertEqual(
+                transit[(entry_id, self.main.pk)],
+                before[(entry_id, self.main.pk)] - line["quantity"],
+            )
+            self.assertEqual(transit.get((entry_id, self.fair.pk), 0), 0)
+        self.assertEqual(sum(line["quantity"] for line in out.data["lines"]), 10)
+        self.assertEqual(
+            client.post(self.endpoint(operation_id, "confirmar-salida"), {
+                "evidence_kind": "external_guide",
+                "external_guide_reference": "GRE-PRUEBA-2027-01",
+                "physical_dispatch_confirmed": True,
+            }, format="json").status_code, 200,
+        )
+        self.assertEqual(DistributionDispatchLine.objects.count(), 2)
+
+        bad_arrival = client.post(self.endpoint(operation_id, "confirmar-llegada"), {
+            "receiver_name": "Responsable DEMO", "arrival_confirmed": True,
+            "counts": [
+                {"line_id": line["id"], "counted": line["quantity"] - 1}
+                for line in out.data["lines"]
+            ],
+        }, format="json")
+        self.assertEqual(bad_arrival.status_code, 400, bad_arrival.data)
+        self.assertEqual(posiciones_lotes(self.entries), transit)
+        good_arrival = client.post(self.endpoint(operation_id, "confirmar-llegada"), {
+            "receiver_name": "Responsable DEMO", "arrival_confirmed": True,
+            "counts": [
+                {"line_id": line["id"], "counted": line["quantity"]}
+                for line in out.data["lines"]
+            ],
+        }, format="json")
+        self.assertEqual(good_arrival.status_code, 200, good_arrival.data)
+        self.assertEqual(good_arrival.data["status"], "received")
+        self.assertEqual(good_arrival.data["operation_status"], "delivered")
+        final = posiciones_lotes(self.entries)
+        for line in good_arrival.data["lines"]:
+            entry_id = line["stock_entry_id"]
+            self.assertEqual(final[(entry_id, self.main.pk)], transit[(entry_id, self.main.pk)])
+            self.assertEqual(final[(entry_id, self.fair.pk)], line["quantity"])
+        self.assertEqual(StockEntry.objects.count(), stock_before)
+        self.assertEqual(StockTransfer.objects.count(), 0)
+        self.assertEqual(
+            client.post(self.endpoint(operation_id, "confirmar-llegada"), {
+                "receiver_name": "Responsable DEMO", "arrival_confirmed": True,
+                "counts": [{"line_id": row["id"], "counted": row["quantity"]}
+                           for row in good_arrival.data["lines"]],
+            }, format="json").status_code, 400,
+        )
+
+    def test_b4_feria_generica_no_puede_despacharse(self):
+        operation_id = self.plan()
+        op = DistributionOperation.objects.get(pk=operation_id)
+        other_fair = WarehouseLocation.objects.create(
+            code=f"OLD-F-{uuid4().hex[:8]}", name="ALMACEN FERIA HISTORICO",
+            kind=WarehouseLocation.Kind.FAIR,
+        )
+        op.destination = other_fair
+        op.save(update_fields=["destination", "updated_at"])
+        client = self.api_client()
+        reserved = client.post(self.endpoint(operation_id, "reservar"), {}, format="json")
+        self.assertEqual(reserved.status_code, 201, reserved.data)
+        counted = client.post(self.endpoint(operation_id, "confirmar-preparacion"), {
+            "counts": [{"reservation_id": row["id"], "counted": row["quantity"]}
+                       for row in reserved.data["reservations"]],
+        }, format="json")
+        self.assertEqual(counted.status_code, 200, counted.data)
+        doc = client.post(self.endpoint(operation_id, "documento-interno"), {
+            "idempotency_key": str(uuid4()),
+        }, format="json")
+        self.assertEqual(doc.status_code, 400, doc.data)
+        self.assertFalse(DistributionDispatch.objects.exists())
+
+    def test_b4_usuario_sin_permiso_no_puede_documentar_o_despachar(self):
+        operation_id = self.plan()
+        limited = self.api_client(self.employee)
+        self.assertEqual(limited.get(self.endpoint(operation_id, "documento-interno")).status_code, 403)
+        self.assertEqual(limited.post(self.endpoint(operation_id, "documento-interno"), {
+            "idempotency_key": str(uuid4()),
+        }, format="json").status_code, 403)
