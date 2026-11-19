@@ -12,8 +12,9 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
 from warehouse.models import (
-    DistributionDispatch, DistributionDispatchLine, DistributionOperation,
-    DistributionOperationEvent, DistributionStockReservation, StockEntry,
+    DistributionArrivalIncident, DistributionDispatch, DistributionDispatchLine,
+    DistributionOperation, DistributionOperationEvent, DistributionStockReservation,
+    StockEntry,
 )
 from warehouse.transfers import posiciones_lotes
 
@@ -43,6 +44,9 @@ def output_dispatch(operation):
         "reservation__stock_entry__product",
         "reservation__stock_entry__receipt_line__receipt",
     ))
+    incident_rows = list(dispatch.arrival_incidents.select_related(
+        "reported_by", "resolved_by",
+    ).order_by("-created_at", "-pk"))
     return {
         "exists": True, "id": dispatch.pk, "operation_id": operation.pk,
         "document_number": dispatch.document_number,
@@ -68,6 +72,23 @@ def output_dispatch(operation):
             "stock_entry_id": row.reservation.stock_entry_id,
         } for row in lines],
         "total": sum(line.quantity for line in lines),
+        "arrival_incidents": [
+            {
+                "id": item.pk, "status": item.status,
+                "receiver_name": item.receiver_name,
+                "observations": item.observations,
+                "counts": item.counts_snapshot,
+                "reported_at": item.created_at,
+                "reported_by": item.reported_by.get_username(),
+                "resolved_at": item.resolved_at,
+                "resolved_by": item.resolved_by.get_username()
+                if item.resolved_by_id else None,
+                "resolution_note": item.resolution_note,
+            }
+            for item in incident_rows
+        ],
+        "open_incident": any(item.status == DistributionArrivalIncident.Status.OPEN
+                             for item in incident_rows),
         "notice": (
             "Documento INTERNO de control de mercadería, no es una GRE ni prueba "
             "de emisión/aceptación SUNAT. La salida y la recepción son acciones separadas."
@@ -239,6 +260,13 @@ def confirmar_recepcion_destino(operation_id, actor, *, receiver, counts):
             "Existe una diferencia en la recepción. No se registrará ingreso conforme "
             "hasta documentar y resolver la incidencia con Jefatura."
         )
+    if dispatch.arrival_incidents.filter(
+        status=DistributionArrivalIncident.Status.OPEN,
+    ).exists():
+        raise BusinessError(
+            "Existe una incidencia de recepción abierta. Debe revisarse y "
+            "cerrarse mediante recuento conforme supervisado antes de confirmar la llegada."
+        )
     # Bloqueo compartido con movimientos directos y cortesías.
     stock_ids = sorted(set(
         row.reservation.stock_entry_id for row in lines
@@ -259,3 +287,103 @@ def confirmar_recepcion_destino(operation_id, actor, *, receiver, counts):
                  "quantity": sum(expected.values()), "recipient": receiver.strip()},
     )
     return operation
+
+
+def _validar_conteo_lineas(dispatch, counts):
+    """Valida identidad y unicidad de líneas contra despacho (nunca otra entrega)."""
+    lines = list(dispatch.lines.order_by("pk"))
+    expected = {line.pk: line.quantity for line in lines}
+    given = {item["line_id"]: item["counted"] for item in counts}
+    if not expected or len(given) != len(counts) or set(given) != set(expected):
+        raise BusinessError("Registra exactamente un conteo por lote de esta entrega.")
+    return expected, given
+
+
+@transaction.atomic
+def reportar_diferencia_llegada(operation_id, actor, *, receiver, counts, observations):
+    """Registra el desacuerdo físico sin mover stock ni alterar el estado en tránsito."""
+    operation = _operation_locked(operation_id)
+    dispatch = get_object_or_404(
+        DistributionDispatch.objects.select_for_update(), operation=operation,
+    )
+    if dispatch.status != DistributionDispatch.Status.IN_TRANSIT:
+        raise BusinessError("Solo puedes registrar diferencias de una entrega en tránsito.")
+    if operation.status != DistributionOperation.Status.IN_TRANSIT:
+        raise BusinessError("El estado de la entrega no corresponde a un despacho en tránsito.")
+    if dispatch.arrival_incidents.filter(status=DistributionArrivalIncident.Status.OPEN).exists():
+        raise BusinessError("Ya existe una incidencia pendiente de revisión para esta entrega.")
+    expected, given = _validar_conteo_lineas(dispatch, counts)
+    if all(given[key] == value for key, value in expected.items()):
+        raise BusinessError("El conteo coincide. Puedes confirmar la recepción normalmente.")
+    if len(observations.strip()) < 10 or not receiver.strip():
+        raise BusinessError("Identifica al receptor y explica la diferencia (mínimo 10 caracteres).")
+    snapshot = [
+        {
+            "line_id": key,
+            "expected": expected[key],
+            "counted": given[key],
+            "difference": given[key] - expected[key],
+        }
+        for key in sorted(expected)
+    ]
+    incident = DistributionArrivalIncident.objects.create(
+        dispatch=dispatch, receiver_name=receiver.strip(),
+        observations=observations.strip(), counts_snapshot=snapshot,
+        reported_by=actor,
+    )
+    DistributionOperationEvent.objects.create(
+        operation=operation, actor=actor, action="arrival_incident_opened",
+        current={"incident_id": incident.pk, "document_number": dispatch.document_number,
+                 "status": "open", "lines_with_difference": sum(
+                     row["difference"] != 0 for row in snapshot)},
+    )
+    return operation, incident
+
+
+@transaction.atomic
+def resolver_diferencia_por_reconteo(
+    operation_id, actor, *, incident_id, counts, resolution_note,
+):
+    """Solo jefatura: cierra incidencia si un recuento real es totalmente conforme.
+
+    No confirma recepción ni altera los saldos. Incidencias con diferencias
+    persistentes requieren el futuro flujo de resolución y recepción parcial.
+    """
+    operation = _operation_locked(operation_id)
+    dispatch = get_object_or_404(
+        DistributionDispatch.objects.select_for_update(), operation=operation,
+    )
+    if dispatch.status != DistributionDispatch.Status.IN_TRANSIT:
+        raise BusinessError("La entrega debe continuar en tránsito.")
+    incident = get_object_or_404(
+        DistributionArrivalIncident.objects.select_for_update(),
+        pk=incident_id, dispatch=dispatch,
+    )
+    if incident.status != DistributionArrivalIncident.Status.OPEN:
+        raise BusinessError("La incidencia ya está resuelta; no puede cerrarse nuevamente.")
+    expected, given = _validar_conteo_lineas(dispatch, counts)
+    if any(given[key] != expected[key] for key in expected):
+        raise BusinessError(
+            "El recuento todavía tiene diferencias. No puede cerrarse como conforme; "
+            "se necesita una resolución de faltantes o daños supervisada."
+        )
+    if len(resolution_note.strip()) < 15:
+        raise BusinessError("Explica la verificación realizada (mínimo 15 caracteres).")
+    incident.status = DistributionArrivalIncident.Status.RESOLVED
+    incident.resolved_by = actor
+    incident.resolution_note = resolution_note.strip()
+    incident.recount_snapshot = [
+        {"line_id": key, "expected": expected[key], "counted": given[key]}
+        for key in sorted(expected)
+    ]
+    incident.resolved_at = timezone.now()
+    incident.save(update_fields=[
+        "status", "resolved_by", "resolution_note", "recount_snapshot",
+        "resolved_at", "updated_at",
+    ])
+    DistributionOperationEvent.objects.create(
+        operation=operation, actor=actor, action="arrival_incident_resolved",
+        current={"incident_id": incident.pk, "document_number": dispatch.document_number,
+                 "status": "resolved", "resolution": "supervised_matching_recount"},
+    )
+    return operation, incident
