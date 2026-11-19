@@ -482,6 +482,14 @@ class DistributionPreparationTests(TestCase):
             )
             self.assertEqual(transit.get((entry_id, self.fair.pk), 0), 0)
         self.assertEqual(sum(line["quantity"] for line in out.data["lines"]), 10)
+        from warehouse.consolidated import consultar_consolidado
+        consolidated_out = consultar_consolidado(grupo="almacen")
+        self.assertEqual(consolidated_out["resumen"]["unidades_en_transito"], 10)
+        self.assertEqual(consolidated_out["resumen"]["unidades_sin_ubicacion"], 0)
+        self.assertIn(
+            "En tránsito (pendiente de recepción)",
+            [row["grupo_nombre"] for row in consolidated_out["resultados"]],
+        )
         self.assertEqual(
             client.post(self.endpoint(operation_id, "confirmar-salida"), {
                 "evidence_kind": "external_guide",
@@ -517,6 +525,16 @@ class DistributionPreparationTests(TestCase):
             self.assertEqual(final[(entry_id, self.fair.pk)], line["quantity"])
         self.assertEqual(StockEntry.objects.count(), stock_before)
         self.assertEqual(StockTransfer.objects.count(), 0)
+        consolidated_received = consultar_consolidado(grupo="almacen")
+        self.assertEqual(consolidated_received["resumen"]["unidades_en_transito"], 0)
+        self.assertEqual(consolidated_received["resumen"]["unidades_sin_ubicacion"], 0)
+        available_destination = client.get(
+            f"/api/admin/erp/almacen/traslados/lotes/?source_id={self.fair.pk}"
+        )
+        self.assertEqual(available_destination.status_code, 200, available_destination.data)
+        self.assertEqual(
+            sum(row["available"] for row in available_destination.data["results"]), 10,
+        )
         self.assertEqual(
             client.post(self.endpoint(operation_id, "confirmar-llegada"), {
                 "receiver_name": "Responsable DEMO", "arrival_confirmed": True,
