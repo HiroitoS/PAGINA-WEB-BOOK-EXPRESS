@@ -85,6 +85,14 @@ class PreparedFairDestinationCorrection(serializers.Serializer):
         ),
     )
     reason = serializers.CharField(min_length=12, max_length=500, trim_whitespace=True)
+    fair_verified_for_delivery = serializers.BooleanField()
+
+    def validate_fair_verified_for_delivery(self, value):
+        if value is not True:
+            raise serializers.ValidationError(
+                "Confirma que la feria corresponde a la entrega que estás corrigiendo."
+            )
+        return value
 
 
 class OperationUpdate(serializers.Serializer):
@@ -443,6 +451,15 @@ class DistributionOperationViewSet(viewsets.ViewSet):
                     "fair_event_id": (
                         loc.fair_event.pk if getattr(loc, "fair_event", None) else None
                     ),
+                    "fair_event_name": (
+                        loc.fair_event.name if getattr(loc, "fair_event", None) else None
+                    ),
+                    "fair_venue": (
+                        loc.fair_event.venue_name if getattr(loc, "fair_event", None) else None
+                    ),
+                    "fair_starts_on": (
+                        loc.fair_event.starts_on if getattr(loc, "fair_event", None) else None
+                    ),
                 }
                 for loc in locations
             ],
@@ -652,7 +669,8 @@ class DistributionOperationViewSet(viewsets.ViewSet):
             DistributionOperationEvent.objects.create(
                 operation=record, actor=request.user,
                 action="fair_destination_fixed", reason=reason,
-                previous=previous, current=_state(record),
+                previous=previous,
+                current={**_state(record), "fair_verified_for_delivery": True},
             )
         return Response(_output(get_object_or_404(_queryset(), pk=record.pk)))
 
