@@ -11,7 +11,10 @@ from django.core.paginator import EmptyPage, Paginator
 from django.db.models import Q, Sum
 from rest_framework.exceptions import ValidationError
 
-from warehouse.models import StockEntry, StockMovement, WarehouseLocation
+from warehouse.models import (
+    DistributionDispatch, DistributionDispatchLine,
+    StockEntry, StockMovement, WarehouseLocation,
+)
 from warehouse.transfers import posiciones_lotes
 
 
@@ -52,6 +55,15 @@ def consultar_consolidado(*, grupo="editorial", query="", page=1, provider_id=No
     }
     locations = {
         loc.pk: loc.name for loc in WarehouseLocation.objects.all()
+    }
+    # -1 es una agrupación virtual de consulta, no una ubicación física.
+    locations[-1] = "En tránsito (pendiente de recepción)"
+    transit_by_entry = {
+        row["reservation__stock_entry_id"]: row["total"]
+        for row in DistributionDispatchLine.objects.filter(
+            reservation__stock_entry_id__in=[entry.pk for entry in entries],
+            dispatch__status=DistributionDispatch.Status.IN_TRANSIT,
+        ).values("reservation__stock_entry_id").annotate(total=Sum("quantity"))
     }
     positions_by_entry = defaultdict(list)
     for (entry_id, location_id), amount in positions.items():
@@ -111,11 +123,15 @@ def consultar_consolidado(*, grupo="editorial", query="", page=1, provider_id=No
         placed_total = sum(amount for _, amount in placed)
         for location_id, amount in placed:
             add(entry, location_id=location_id, available=amount)
-        residual = net - placed_total
+        transit = transit_by_entry.get(entry.pk, 0)
+        residual = net - placed_total - transit
         if residual < 0:
             raise ValidationError({
-                "inventario": "Los saldos por ubicación superan el inventario total. Revisa este lote.",
+                "inventario": "Las ubicaciones y los despachos en tránsito exceden "
+                "el inventario. Revisa los movimientos del lote.",
             })
+        if transit:
+            add(entry, location_id=-1, available=transit)
         if residual:
             unreconciled += residual
             add(entry, location_id=None, available=residual)
@@ -181,11 +197,13 @@ def consultar_consolidado(*, grupo="editorial", query="", page=1, provider_id=No
                 row["unidades_sin_costo"] for row in rows.values()
             ),
             "unidades_sin_ubicacion": unreconciled,
+            "unidades_en_transito": sum(transit_by_entry.values()),
             "valorizacion_completa": complete,
         },
         "nota": (
             "Por colegio se muestra el origen del pedido, no una reserva vigente. "
             "Los traslados no aumentan el inventario general. "
+            "En tránsito es una categoría temporal, no una ubicación física ni una venta. "
             "Los valores corresponden al costo histórico y no son deuda de editorial."
         ),
     }
