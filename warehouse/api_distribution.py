@@ -716,9 +716,13 @@ class DistributionOperationViewSet(viewsets.ViewSet):
             operation = get_object_or_404(
                 DistributionOperation.objects.select_for_update(), pk=pk,
             )
-            if operation.status == DistributionOperation.Status.CANCELLED:
+            if operation.status in (
+                DistributionOperation.Status.CANCELLED,
+                DistributionOperation.Status.IN_TRANSIT,
+                DistributionOperation.Status.DELIVERED,
+            ):
                 raise ValidationError({
-                    "detail": "No puedes modificar documentos de una entrega anulada.",
+                    "detail": "Una entrega anulada o despachada conserva su documentación histórica.",
                 })
             draft, _ = DistributionTransportDraft.objects.get_or_create(
                 operation=operation,
