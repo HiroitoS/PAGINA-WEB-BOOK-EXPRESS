@@ -847,3 +847,50 @@ class DistributionDispatchLine(TimeStampedModel):
                 condition=Q(quantity__gte=1), name="wh_dispatch_line_positive",
             ),
         ]
+
+
+class DistributionArrivalIncident(TimeStampedModel):
+    """Diferencia física detectada al recibir una entrega en destino.
+
+    Documentar una diferencia NO cambia stock ni completa la recepción.
+    Solo se cierra tras un recuento conforme supervisado; la resolución de
+    faltantes/daños reales con ingreso parcial requiere un flujo separado.
+    """
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Pendiente de revisión"
+        RESOLVED = "resolved", "Recuento conforme supervisado"
+
+    dispatch = models.ForeignKey(
+        DistributionDispatch, on_delete=models.PROTECT,
+        related_name="arrival_incidents",
+    )
+    status = models.CharField(
+        max_length=10, choices=Status.choices, default=Status.OPEN,
+        db_index=True,
+    )
+    receiver_name = models.CharField(max_length=180)
+    observations = models.CharField(max_length=1000)
+    counts_snapshot = models.JSONField(default=list)
+    reported_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="warehouse_arrival_incidents_reported",
+    )
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="warehouse_arrival_incidents_resolved",
+        blank=True, null=True,
+    )
+    resolution_note = models.CharField(max_length=1000, blank=True)
+    recount_snapshot = models.JSONField(default=list)
+    resolved_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["dispatch"],
+                condition=Q(status="open"),
+                name="wh_one_open_arrival_incident",
+            ),
+        ]
