@@ -11,7 +11,8 @@ from rest_framework.response import Response
 
 from accounts.permissions import usuario_tiene_permiso
 from warehouse.models import (
-    DistributionStockReservation, GoodsReceipt, StockEntry, StockTransfer, WarehouseLocation,
+    DistributionDispatch, DistributionDispatchLine, DistributionStockReservation,
+    GoodsReceipt, StockEntry, StockTransfer, WarehouseLocation,
 )
 from warehouse.transfers import posiciones_lotes, registrar_traslado
 from warehouse.bulk_transfers import registrar_traslado_por_guia
@@ -206,12 +207,17 @@ class StockTransferViewSet(viewsets.ViewSet):
 
     @staticmethod
     def _lotes_en_ubicacion(location_id):
+        received_entries = DistributionDispatchLine.objects.filter(
+            dispatch__status=DistributionDispatch.Status.RECEIVED,
+            dispatch__operation__destination_id=location_id,
+        ).values("reservation__stock_entry_id")
         return StockEntry.objects.select_related(
             "initial_location", "product__provider",
             "receipt_line__receipt", "receipt_line__order_item__order__school",
         ).filter(
             Q(initial_location__location_id=location_id)
             | Q(transfers__destination_id=location_id)
+            | Q(pk__in=received_entries)
         ).distinct().order_by("product__name", "pk")
 
     @action(detail=False, methods=["get"], url_path="lotes-filtros")
