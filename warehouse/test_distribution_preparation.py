@@ -702,3 +702,97 @@ class DistributionPreparationTests(TestCase):
                 "counts": [{"line_id": 1, "counted": 0}],
             }, format="json",
         ).status_code, 403)
+
+    def test_supervisor_corrige_feria_generica_sin_mover_stock_ni_tocar_lotes(self):
+        from warehouse.transfers import posiciones_lotes
+
+        operation_id = self.plan()
+        generic = WarehouseLocation.objects.create(
+            code="B4-GENERIC-FAIR", name="ALMACEN FERIA HISTORICO",
+            kind=WarehouseLocation.Kind.FAIR,
+        )
+        op = DistributionOperation.objects.get(pk=operation_id)
+        op.destination = generic
+        op.save(update_fields=["destination", "updated_at"])
+        client = self.api_client()
+        reserved = client.post(
+            self.endpoint(operation_id, "reservar"), {}, format="json",
+        )
+        self.assertEqual(reserved.status_code, 201, reserved.data)
+        counted = client.post(
+            self.endpoint(operation_id, "confirmar-preparacion"),
+            {"counts": [{
+                "reservation_id": row["id"], "counted": row["quantity"],
+            } for row in reserved.data["reservations"]]}, format="json",
+        )
+        self.assertEqual(counted.status_code, 200, counted.data)
+        initial_stock = posiciones_lotes(self.entries)
+        initial_lots = list(
+            DistributionStockReservation.objects.filter(operation_id=operation_id)
+            .values_list("pk", "stock_entry_id", "quantity", "counted_quantity", "status"),
+        )
+        endpoint = self.endpoint(operation_id, "corregir-destino-feria")
+        payload = {
+            "destination_id": self.fair.pk,
+            "reason": "Se identificó el evento escolar real que recibirá los libros.",
+        }
+        denied = self.api_client(self.employee).post(endpoint, payload, format="json")
+        self.assertEqual(denied.status_code, 403, denied.data)
+        bad_generic = client.post(endpoint, {
+            "destination_id": generic.pk,
+            "reason": "Intento de conservar un destino de feria genérico.",
+        }, format="json")
+        self.assertEqual(bad_generic.status_code, 400, bad_generic.data)
+        short = client.post(endpoint, {
+            "destination_id": self.fair.pk, "reason": "cambio",
+        }, format="json")
+        self.assertEqual(short.status_code, 400, short.data)
+        updated = client.post(endpoint, payload, format="json")
+        self.assertEqual(updated.status_code, 200, updated.data)
+        self.assertEqual(updated.data["destination_id"], self.fair.pk)
+        self.assertIsNotNone(updated.data["destination_fair_event_id"])
+        self.assertEqual(updated.data["status"], "prepared")
+        self.assertEqual(DistributionOperation.objects.get(pk=operation_id).source_id, self.main.pk)
+        self.assertEqual(posiciones_lotes(self.entries), initial_stock)
+        self.assertEqual(list(
+            DistributionStockReservation.objects.filter(operation_id=operation_id)
+            .values_list("pk", "stock_entry_id", "quantity", "counted_quantity", "status"),
+        ), initial_lots)
+        event = DistributionOperation.objects.get(pk=operation_id).events.last()
+        self.assertEqual(event.action, "fair_destination_fixed")
+        self.assertEqual(event.previous["destination_id"], generic.pk)
+        self.assertEqual(event.current["destination_id"], self.fair.pk)
+        self.assertEqual(
+            client.post(endpoint, payload, format="json").status_code, 400,
+        )
+        doc = client.post(
+            self.endpoint(operation_id, "documento-interno"),
+            {"idempotency_key": str(uuid4())}, format="json",
+        )
+        self.assertEqual(doc.status_code, 201, doc.data)
+        self.assertEqual(doc.data["destination_id"], self.fair.pk)
+        self.assertEqual(
+            client.post(endpoint, payload, format="json").status_code, 400,
+        )
+        self.assertEqual(posiciones_lotes(self.entries), initial_stock)
+
+    def test_no_corrige_destino_generico_de_entrega_sin_preparar(self):
+        operation_id = self.plan()
+        generic = WarehouseLocation.objects.create(
+            code="B4-GEN-UNPREP", name="FERIA HISTORICA PREPARACION",
+            kind=WarehouseLocation.Kind.FAIR,
+        )
+        record = DistributionOperation.objects.get(pk=operation_id)
+        record.destination = generic
+        record.save(update_fields=["destination", "updated_at"])
+        response = self.api_client().post(
+            self.endpoint(operation_id, "corregir-destino-feria"), {
+                "destination_id": self.fair.pk,
+                "reason": "No debe aplicar una corrección supervisada a planificación.",
+            }, format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertEqual(
+            DistributionOperation.objects.get(pk=operation_id).destination_id,
+            generic.pk,
+        )
