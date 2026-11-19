@@ -13,7 +13,8 @@ from django.db.models import Q, Sum
 
 from accounts.permissions import usuario_tiene_permiso
 from warehouse.models import (
-    DistributionStockReservation, StockEntry, StockMovement, StockTransfer, WarehouseLocation,
+    DistributionDispatch, DistributionDispatchLine, DistributionStockReservation,
+    StockEntry, StockMovement, StockTransfer, WarehouseLocation,
 )
 
 
@@ -53,6 +54,27 @@ def posiciones_lotes(entries):
     ):
         saldos[(move["stock_entry_id"], move["source_id"])] -= move["total"]
         saldos[(move["stock_entry_id"], move["destination_id"])] += move["total"]
+
+    # El despacho B4 sale del origen al confirmar salida, pero NO entra en
+    # destino hasta que el responsable confirme físicamente la recepción.
+    # El inventario global de StockEntry no cambia: el saldo temporal se
+    # consulta como «en tránsito» y nunca se duplica en ambas ubicaciones.
+    for row in DistributionDispatchLine.objects.filter(
+        reservation__stock_entry_id__in=ids,
+        dispatch__status__in=[
+            DistributionDispatch.Status.IN_TRANSIT,
+            DistributionDispatch.Status.RECEIVED,
+        ],
+    ).values(
+        "reservation__stock_entry_id", "dispatch__operation__source_id",
+        "dispatch__operation__destination_id", "dispatch__status",
+    ).annotate(total=Sum("quantity")):
+        entry_id = row["reservation__stock_entry_id"]
+        origin_id = row["dispatch__operation__source_id"]
+        destination_id = row["dispatch__operation__destination_id"]
+        saldos[(entry_id, origin_id)] -= row["total"]
+        if row["dispatch__status"] == DistributionDispatch.Status.RECEIVED:
+            saldos[(entry_id, destination_id)] += row["total"]
     return dict(saldos)
 
 
