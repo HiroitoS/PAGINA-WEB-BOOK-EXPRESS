@@ -382,7 +382,7 @@ def resolver_diferencia_por_reconteo(
         "resolved_at", "updated_at",
     ])
     DistributionOperationEvent.objects.create(
-        operation=operation, actor=actor, action="arrival_incident_resolved",
+        operation=operation, actor=actor, action="arrival_incident_closed",
         current={"incident_id": incident.pk, "document_number": dispatch.document_number,
                  "status": "resolved", "resolution": "supervised_matching_recount"},
     )
