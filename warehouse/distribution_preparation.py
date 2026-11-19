@@ -12,8 +12,9 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
 from warehouse.models import (
-    DistributionOperation, DistributionOperationEvent, DistributionOperationLine,
-    DistributionStockReservation, StockEntry, StockTransfer,
+    DistributionDispatch, DistributionDispatchLine, DistributionOperation,
+    DistributionOperationEvent, DistributionOperationLine, DistributionStockReservation,
+    StockEntry, StockTransfer,
 )
 from crm.models import Adoption
 from warehouse.transfers import posiciones_lotes
@@ -24,12 +25,17 @@ def _entries(operation, *, lock=False):
     traveled = StockTransfer.objects.filter(
         destination_id=operation.source_id,
     ).values("stock_entry_id")
+    delivered = DistributionDispatchLine.objects.filter(
+        dispatch__status=DistributionDispatch.Status.RECEIVED,
+        dispatch__operation__destination_id=operation.source_id,
+    ).values("reservation__stock_entry_id")
     qs = StockEntry.objects.filter(
         product_id__in=product_ids,
         receipt_line__order_item__order__school_id=operation.school_id,
     ).filter(
         Q(initial_location__location_id=operation.source_id)
         | Q(pk__in=traveled)
+        | Q(pk__in=delivered)
     ).select_related(
         "initial_location", "product", "receipt_line__receipt",
     ).order_by("pk")
