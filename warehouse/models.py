@@ -594,6 +594,8 @@ class DistributionOperation(TimeStampedModel):
         PLANNED = "planned", "Por preparar"
         RESERVED = "reserved", "Existencias reservadas"
         PREPARED = "prepared", "Preparada"
+        IN_TRANSIT = "in_transit", "En tránsito"
+        DELIVERED = "delivered", "Recibida en destino"
         CANCELLED = "cancelled", "Anulada"
 
     reference = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
@@ -776,3 +778,72 @@ class DistributionTransportDraft(TimeStampedModel):
 
     class Meta:
         ordering = ["-updated_at"]
+
+
+
+class DistributionDispatch(TimeStampedModel):
+    """Salida interna de una entrega preparada, con recepción física separada.
+
+    El comprobante interno NO es GRE, ni certifica aceptación SUNAT.
+    """
+
+    class Status(models.TextChoices):
+        DOCUMENTED = "documented", "Orden interna preparada"
+        IN_TRANSIT = "in_transit", "Despachada, en tránsito"
+        RECEIVED = "received", "Recepción confirmada"
+
+    class Evidence(models.TextChoices):
+        EXTERNAL_GUIDE = "external_guide", "GRE emitida y verificada externamente"
+        EXCEPTION = "exception", "Excepción legal documentada"
+
+    operation = models.OneToOneField(
+        DistributionOperation, on_delete=models.PROTECT, related_name="dispatch",
+    )
+    idempotency_key = models.UUIDField(unique=True)
+    document_number = models.CharField(max_length=40, unique=True, blank=True)
+    status = models.CharField(
+        max_length=12, choices=Status.choices, default=Status.DOCUMENTED,
+    )
+    document_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="warehouse_dispatch_docs_created",
+    )
+    evidence_kind = models.CharField(max_length=20, choices=Evidence.choices, blank=True)
+    external_guide_reference = models.CharField(max_length=120, blank=True)
+    exception_justification = models.CharField(max_length=500, blank=True)
+    dispatched_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="warehouse_dispatches_confirmed", null=True, blank=True,
+    )
+    dispatched_at = models.DateTimeField(null=True, blank=True)
+    received_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="warehouse_dispatch_receipts_confirmed", null=True, blank=True,
+    )
+    recipient_name = models.CharField(max_length=180, blank=True)
+    received_at = models.DateTimeField(null=True, blank=True)
+    notes = models.CharField(max_length=500, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+
+
+class DistributionDispatchLine(TimeStampedModel):
+    """Lote y cantidad congelados para la salida interna; no duplica StockEntry."""
+
+    dispatch = models.ForeignKey(
+        DistributionDispatch, on_delete=models.PROTECT, related_name="lines",
+    )
+    reservation = models.OneToOneField(
+        DistributionStockReservation, on_delete=models.PROTECT,
+        related_name="dispatch_line",
+    )
+    quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+
+    class Meta:
+        ordering = ["pk"]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(quantity__gte=1), name="wh_dispatch_line_positive",
+            ),
+        ]
