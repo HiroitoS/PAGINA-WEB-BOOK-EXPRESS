@@ -735,18 +735,25 @@ class DistributionPreparationTests(TestCase):
         payload = {
             "destination_id": self.fair.pk,
             "reason": "Se identificó el evento escolar real que recibirá los libros.",
+            "fair_verified_for_delivery": True,
         }
         denied = self.api_client(self.employee).post(endpoint, payload, format="json")
         self.assertEqual(denied.status_code, 403, denied.data)
         bad_generic = client.post(endpoint, {
             "destination_id": generic.pk,
             "reason": "Intento de conservar un destino de feria genérico.",
+            "fair_verified_for_delivery": True,
         }, format="json")
         self.assertEqual(bad_generic.status_code, 400, bad_generic.data)
         short = client.post(endpoint, {
             "destination_id": self.fair.pk, "reason": "cambio",
+            "fair_verified_for_delivery": True,
         }, format="json")
         self.assertEqual(short.status_code, 400, short.data)
+        unchecked = client.post(endpoint, {
+            **payload, "fair_verified_for_delivery": False,
+        }, format="json")
+        self.assertEqual(unchecked.status_code, 400, unchecked.data)
         updated = client.post(endpoint, payload, format="json")
         self.assertEqual(updated.status_code, 200, updated.data)
         self.assertEqual(updated.data["destination_id"], self.fair.pk)
@@ -789,6 +796,7 @@ class DistributionPreparationTests(TestCase):
             self.endpoint(operation_id, "corregir-destino-feria"), {
                 "destination_id": self.fair.pk,
                 "reason": "No debe aplicar una corrección supervisada a planificación.",
+                "fair_verified_for_delivery": True,
             }, format="json",
         )
         self.assertEqual(response.status_code, 400, response.data)
