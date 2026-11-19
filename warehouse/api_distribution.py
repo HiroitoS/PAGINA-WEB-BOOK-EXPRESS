@@ -322,9 +322,13 @@ class DistributionOperationViewSet(viewsets.ViewSet):
         qs = _queryset()
         state = request.query_params.get("estado", "").strip()
         if state:
-            if state not in DistributionOperation.Status.values:
-                raise ValidationError({"estado": "Selecciona un estado válido."})
-            qs = qs.filter(status=state)
+            states = state.split(",")
+            if len(states) > 3 or any(
+                not code or code not in DistributionOperation.Status.values
+                for code in states
+            ):
+                raise ValidationError({"estado": "Selecciona estados válidos."})
+            qs = qs.filter(status__in=states)
         raw_page = request.query_params.get("page", "1")
         if not raw_page.isdecimal() or int(raw_page) < 1:
             raise ValidationError({"page": "Selecciona una página válida."})
