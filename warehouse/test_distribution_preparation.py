@@ -113,6 +113,18 @@ class DistributionPreparationTests(TestCase):
         self.assertEqual(DistributionStockReservation.objects.count(), 2)
         self.assertEqual(StockEntry.objects.count(), 2)
         self.assertEqual(StockTransfer.objects.count(), 0)
+        summary = client.get("/api/admin/erp/almacen/ubicaciones/resumen-ubicaciones/")
+        self.assertEqual(summary.status_code, 200, summary.data)
+        main_summary = next(
+            row for row in summary.data["locations"] if row["id"] == self.main.pk
+        )
+        self.assertEqual(main_summary["reserved"], 10)
+        self.assertEqual(
+            main_summary["free_to_transfer"],
+            main_summary["available"] - 10,
+        )
+        self.assertGreaterEqual(main_summary["available"], 10)
+        self.assertEqual(StockTransfer.objects.count(), 0)
         self.assertEqual(
             self.api_client().patch(self.endpoint(op_id, "").rstrip("/") + "/", {
                 "notes": "Cambiar ahora", "reason": "Ya se reservó",
