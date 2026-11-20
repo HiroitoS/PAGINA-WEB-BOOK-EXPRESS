@@ -94,6 +94,41 @@ class DistributionPreparationTests(TestCase):
     def endpoint(self, op_id, action):
         return f"/api/admin/erp/almacen/operaciones-distribucion/{op_id}/{action}/"
 
+    def test_alerta_reposicion_refleja_demanda_planificada_sin_crear_pedido(self):
+        from unittest.mock import patch
+
+        client = self.api_client()
+        url = (
+            "/api/admin/erp/almacen/ubicaciones/alertas-reposicion/"
+            f"?location_id={self.main.pk}"
+        )
+        empty = client.get(url)
+        self.assertEqual(empty.status_code, 200, empty.data)
+        self.assertEqual(empty.data["products_with_shortage"], 0)
+
+        operation_id = self.plan()
+        entries_before = StockEntry.objects.count()
+        transfers_before = StockTransfer.objects.count()
+        with patch("warehouse.transfers.posiciones_lotes", return_value={}):
+            response = client.get(url)
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["products_with_shortage"], 2)
+        self.assertEqual(response.data["missing_units"], 10)
+        self.assertEqual(
+            {row["operations"][0]["operation_id"] for row in response.data["results"]},
+            {operation_id},
+        )
+        self.assertTrue(all(row["free"] == 0 for row in response.data["results"]))
+        self.assertEqual(StockEntry.objects.count(), entries_before)
+        self.assertEqual(StockTransfer.objects.count(), transfers_before)
+
+        denied = self.api_client(self.employee).get(url)
+        self.assertEqual(denied.status_code, 403)
+        invalid = client.get(
+            "/api/admin/erp/almacen/ubicaciones/alertas-reposicion/?location_id=abc"
+        )
+        self.assertEqual(invalid.status_code, 400, invalid.data)
+
     def test_reserva_no_traslada_y_reintento_no_duplica(self):
         op_id = self.plan()
         client = self.api_client()
