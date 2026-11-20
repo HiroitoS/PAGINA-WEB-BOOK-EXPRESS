@@ -26,7 +26,8 @@ from warehouse.distribution_preparation import (
 )
 from warehouse.distribution_dispatch import (
     crear_documento_interno, confirmar_salida, confirmar_recepcion_destino,
-    documentar_diferencia_persistente, registrar_retorno_fisico_feria, output_dispatch,
+    documentar_diferencia_persistente, preparar_retorno_destino,
+    registrar_retorno_fisico_feria, output_dispatch,
     reportar_diferencia_llegada, resolver_diferencia_por_reconteo,
 )
 from warehouse.fair_destination_policy import (
@@ -190,6 +191,12 @@ class ArrivalIncidentInput(serializers.Serializer):
 class FairReturnLine(serializers.Serializer):
     line_id = serializers.IntegerField(min_value=1)
     quantity = serializers.IntegerField(min_value=1)
+
+
+class PrepareReturnInput(serializers.Serializer):
+    idempotency_key = serializers.UUIDField()
+    reason = serializers.CharField(min_length=15, max_length=500, trim_whitespace=True)
+    lines = FairReturnLine(many=True, allow_empty=False)
 
 
 class FairReturnInput(serializers.Serializer):
@@ -885,6 +892,27 @@ class DistributionOperationViewSet(viewsets.ViewSet):
         response = output_dispatch(operation)
         response["created_incident_id"] = incident.pk
         return Response(response, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"], url_path="preparar-retorno-destino")
+    def prepare_destination_return(self, request, pk=None):
+        """Documento logístico interno; no confirma transporte ni cambia saldos."""
+        self._authorize(request, write=True)
+        if not usuario_tiene_permiso(request.user, "warehouse.manage_stock_transfers"):
+            raise PermissionDenied("No tienes permiso para preparar retornos.")
+        form = PrepareReturnInput(data=request.data)
+        form.is_valid(raise_exception=True)
+        try:
+            operation, event, created = preparar_retorno_destino(
+                pk, request.user, **form.validated_data,
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
+        response = output_dispatch(operation)
+        response["internal_return_number"] = f"BE-RI-{event.pk:07d}"
+        return Response(
+            response,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
 
     @action(detail=True, methods=["post"], url_path="registrar-retorno-destino")
     def register_destination_return(self, request, pk=None):
