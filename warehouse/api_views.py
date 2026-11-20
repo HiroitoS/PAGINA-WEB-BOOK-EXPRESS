@@ -3,7 +3,8 @@ from django.http import Http404
 from django.db import IntegrityError
 from django.db.models import Q, Sum
 from django.db.models.functions import Coalesce
-from rest_framework import status, viewsets
+from rest_framework import status, viewsets, serializers
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
@@ -12,10 +13,15 @@ from accounts.permissions import usuario_tiene_permiso
 from catalog.models import Provider
 from purchasing.models import PurchaseOrder, PurchaseOrderItem
 from warehouse.api_serializers import CreateReceiptSerializer, GoodsReceiptSerializer
+from warehouse.receiving_claims import (
+    construir_reporte, enviar_reporte_editorial, evidence_dict, evidence_list,
+    guardar_evidencia, protected_download,
+)
 from warehouse.models import GoodsReceipt, ReceivingIncident
 from warehouse.receiving import (
-    actualizar_borrador_recepcion, crear_borrador_recepcion,
-    saldos_pedido, seguimiento_recepcion, validar_recepcion,
+    actualizar_borrador_recepcion, anular_borrador_recepcion, crear_borrador_recepcion,
+    saldos_pedido, seguimiento_recepcion, solicitar_aprobacion_recepcion,
+    devolver_recepcion, validar_recepcion,
 )
 
 
@@ -35,6 +41,31 @@ class GoodsReceiptViewSet(viewsets.ReadOnlyModelViewSet):
             queryset = queryset.filter(provider_id=int(raw))
         return queryset
 
+    @action(detail=False, methods=["get"], url_path="pendientes-aprobacion")
+    def pending_approvals(self, request):
+        if not usuario_tiene_permiso(request.user, "warehouse.validate_receiving"):
+            raise PermissionDenied("No tienes permiso para aprobar recepciones.")
+        records = GoodsReceipt.objects.filter(
+            status=GoodsReceipt.Status.SUBMITTED,
+        ).select_related("provider", "created_by")
+        # La separación de funciones también se aplica al acceso directo.
+        if not request.user.is_superuser:
+            records = records.exclude(created_by=request.user)
+        records = records.order_by("-updated_at", "-pk")
+        return Response({
+            "total": records.count(),
+            "recepciones": [
+                {
+                    "id": receipt.pk,
+                    "editorial": receipt.provider.name,
+                    "documento": receipt.document_number,
+                    "registrado_por": receipt.created_by.get_full_name().strip()
+                        or receipt.created_by.get_username(),
+                }
+                for receipt in records[:5]
+            ],
+        })
+
     @action(detail=False, methods=["get"], url_path="pedidos-pendientes")
     def pending_orders(self, request):
         if not usuario_tiene_permiso(request.user, "warehouse.view_receiving"):
@@ -53,7 +84,9 @@ class GoodsReceiptViewSet(viewsets.ReadOnlyModelViewSet):
         page = self.paginate_queryset(queryset)
         orders = list(page if page is not None else queryset[:20])
         ids = [order.pk for order in orders]
-        lines = PurchaseOrderItem.objects.filter(order_id__in=ids).annotate(
+        lines = PurchaseOrderItem.objects.filter(order_id__in=ids).select_related(
+            "product__level", "product__grade",
+        ).annotate(
             accepted=Coalesce(
                 Sum(
                     "receipt_lines__quantity_accepted",
@@ -76,6 +109,9 @@ class GoodsReceiptViewSet(viewsets.ReadOnlyModelViewSet):
                     "item_id": line.pk,
                     "producto": line.product_name_snapshot,
                     "codigo": line.product_code_snapshot,
+                    "nivel_id": line.product.level_id,
+                    "nivel": line.product.level.name if line.product.level_id else "",
+                    "grado": line.product.grade.name if line.product.grade_id else "",
                     "solicitadas": line.quantity_ordered,
                     "aceptadas": line.accepted,
                     "pendientes": pending,
@@ -134,6 +170,27 @@ class GoodsReceiptViewSet(viewsets.ReadOnlyModelViewSet):
             raise ValidationError({"detail": "El documento ya fue registrado para esta editorial o sus datos están duplicados."}) from exc
         return Response(GoodsReceiptSerializer(receipt).data)
 
+    @action(detail=True, methods=["post"], url_path="solicitar-aprobacion")
+    def submit_approval(self, request, pk=None):
+        self.get_object()
+        try:
+            receipt = solicitar_aprobacion_recepcion(actor=request.user, receipt_id=pk)
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
+        return Response(GoodsReceiptSerializer(receipt).data)
+
+    @action(detail=True, methods=["post"], url_path="devolver")
+    def return_for_correction(self, request, pk=None):
+        self.get_object()
+        try:
+            receipt = devolver_recepcion(
+                actor=request.user, receipt_id=pk,
+                reason=request.data.get("reason", ""),
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
+        return Response(GoodsReceiptSerializer(receipt).data)
+
     @action(detail=True, methods=["post"], url_path="validar")
     def validate_draft(self, request, pk=None):
         if not usuario_tiene_permiso(request.user, "warehouse.validate_receiving"):
@@ -146,6 +203,59 @@ class GoodsReceiptViewSet(viewsets.ReadOnlyModelViewSet):
         except IntegrityError as exc:
             raise ValidationError({"detail": "El documento ya fue registrado para esta editorial o sus datos están duplicados."}) from exc
         return Response(GoodsReceiptSerializer(receipt).data)
+
+    @action(detail=True, methods=["post"], url_path="anular-borrador")
+    def cancel_draft(self, request, pk=None):
+        if not usuario_tiene_permiso(request.user, "warehouse.manage_receiving"):
+            raise PermissionDenied("No tienes permiso para anular borradores.")
+        self.get_object()
+        reason = request.data.get("reason", "")
+        if not isinstance(reason, str) or not 8 <= len(reason.strip()) <= 500:
+            raise ValidationError({
+                "reason": "Explica el motivo de anulación (8 a 500 caracteres).",
+            })
+        try:
+            receipt = anular_borrador_recepcion(
+                actor=request.user, receipt_id=pk, reason=reason,
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
+        return Response(GoodsReceiptSerializer(receipt).data)
+
+    @action(
+        detail=True, methods=["get", "post"], url_path="evidencias",
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def evidences(self, request, pk=None):
+        receipt = self.get_object()
+        if request.method == "GET":
+            return Response(evidence_list(receipt))
+        if not usuario_tiene_permiso(request.user, "warehouse.manage_receiving"):
+            raise PermissionDenied("No tienes permiso para registrar evidencias.")
+        item = guardar_evidencia(receipt=receipt, actor=request.user, data=request.data)
+        return Response(evidence_dict(item), status=status.HTTP_201_CREATED)
+
+    @action(
+        detail=True, methods=["get"],
+        url_path=r"evidencias/(?P<evidence_id>\d+)/archivo",
+    )
+    def evidence_download(self, request, pk=None, evidence_id=None):
+        return protected_download(receipt=self.get_object(), evidence_id=evidence_id)
+
+    @action(detail=True, methods=["get", "post"], url_path="reporte-editorial")
+    def supplier_report(self, request, pk=None):
+        receipt = self.get_object()
+        if request.method == "GET":
+            return Response(construir_reporte(receipt))
+        if not usuario_tiene_permiso(request.user, "warehouse.validate_receiving"):
+            raise PermissionDenied("El envío formal requiere autorización de jefatura.")
+        # Validación explícita: no inferir ni inventar correo del proveedor.
+        email = serializers.EmailField().run_validation(request.data.get("recipient"))
+        key = serializers.UUIDField().run_validation(request.data.get("dispatch_key"))
+        return Response(enviar_reporte_editorial(
+            receipt_id=receipt.pk, actor=request.user,
+            recipient=email, dispatch_key=key,
+        ))
 
     @action(detail=True, methods=["get"], url_path="seguimiento")
     def tracking(self, request, pk=None):

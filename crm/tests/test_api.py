@@ -1613,6 +1613,77 @@ class CRMApiTests(TestCase):
         self.assertIn(self.advisor.id, advisor_ids)
         self.assertNotIn(self.supervisor.id, advisor_ids)
 
+    def test_assignment_to_school_fills_only_open_unassigned_opportunity(self):
+        next_advisor = User.objects.create_user(
+            username="crm-inherit-next", password="test-password",
+        )
+        CommercialTeamMembership.objects.create(
+            team=self.team, user=next_advisor,
+            role=CommercialTeamMembership.Role.ADVISOR,
+            created_by=self.admin,
+        )
+        self.opportunity.owner = None
+        self.opportunity.save(update_fields=["owner"])
+        self.authenticate(self.admin)
+        response = self.client.post(
+            reverse("crm:school-assign-portfolio"),
+            {
+                "school_ids": [self.school.pk],
+                "team": self.team.pk,
+                "owner": next_advisor.pk,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.opportunity.refresh_from_db()
+        self.assertEqual(self.opportunity.owner_id, next_advisor.pk)
+        self.assertEqual(self.opportunity.team_id, self.team.pk)
+        self.assertTrue(CRMHistoryEvent.objects.filter(
+            opportunity=self.opportunity, event_type="assignment_updated",
+        ).exists())
+
+    def test_inherit_school_assignment_manual_for_older_opportunity(self):
+        self.opportunity.owner = None
+        self.opportunity.save(update_fields=["owner"])
+        url = reverse(
+            "crm:opportunity-inherit-school-assignment",
+            args=[self.opportunity.pk],
+        )
+        self.authenticate(self.no_access)
+        denied = self.client.post(url, {}, format="json")
+        self.assertIn(denied.status_code, (403, 404))
+        self.authenticate(self.admin)
+        restored = self.client.post(url, {}, format="json")
+        self.assertEqual(restored.status_code, 200, restored.data)
+        self.opportunity.refresh_from_db()
+        self.assertEqual(self.opportunity.owner_id, self.school.owner_id)
+        again = self.client.post(url, {}, format="json")
+        self.assertEqual(again.status_code, 400, again.data)
+
+    def test_assign_school_never_replaces_existing_opportunity_advisor(self):
+        next_advisor = User.objects.create_user(
+            username="crm-inherit-protected", password="test-password",
+        )
+        CommercialTeamMembership.objects.create(
+            team=self.team, user=next_advisor,
+            role=CommercialTeamMembership.Role.ADVISOR,
+            created_by=self.admin,
+        )
+        original_owner = self.opportunity.owner_id
+        self.authenticate(self.admin)
+        response = self.client.post(
+            reverse("crm:school-assign-portfolio"),
+            {
+                "school_ids": [self.school.pk],
+                "team": self.team.pk,
+                "owner": next_advisor.pk,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.opportunity.refresh_from_db()
+        self.assertEqual(self.opportunity.owner_id, original_owner)
+
     def test_admin_can_assign_multiple_schools_in_one_request(self):
         extra_school = School.objects.create(
             name="Colegio API adicional",

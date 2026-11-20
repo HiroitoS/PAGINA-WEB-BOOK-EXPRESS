@@ -4,7 +4,7 @@ from django.db import transaction
 from django.db.models import Sum
 
 from accounts.permissions import usuario_tiene_permiso
-from warehouse.models import StockEntry, StockMovement
+from warehouse.models import DistributionStockReservation, StockEntry, StockMovement
 
 
 def saldo_entrada(entry):
@@ -68,8 +68,17 @@ def registrar_cortesia(
     from warehouse.models import StockEntryLocation
     from warehouse.transfers import saldo_en_ubicacion
     assignment = StockEntryLocation.objects.filter(stock_entry=entry).first()
-    if assignment and saldo_en_ubicacion(entry, assignment.location_id) < quantity:
-        raise ValidationError("No hay unidades suficientes en la ubicación original de este colegio.")
+    if assignment:
+        reservado = DistributionStockReservation.objects.filter(
+            stock_entry=entry, source_id=assignment.location_id,
+            status=DistributionStockReservation.Status.ACTIVE,
+        ).aggregate(total=Sum("quantity"))["total"] or 0
+        libre = saldo_en_ubicacion(entry, assignment.location_id) - reservado
+        if libre < quantity:
+            raise ValidationError(
+                "No hay unidades libres suficientes: algunas están reservadas "
+                "para entregas en preparación."
+            )
 
     if saldo_entrada(entry) < quantity:
         raise ValidationError("No existe stock conforme suficiente para esta cortesía.")

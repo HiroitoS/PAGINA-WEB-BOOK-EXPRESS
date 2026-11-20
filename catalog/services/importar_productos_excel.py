@@ -1,8 +1,10 @@
 from decimal import Decimal, InvalidOperation
+from zipfile import BadZipFile
 
 from django.db import transaction
 from django.utils.text import slugify
 from openpyxl import load_workbook
+from openpyxl.utils.exceptions import InvalidFileException
 
 from catalog.models import (
     Provider,
@@ -269,76 +271,98 @@ def buscar_producto_existente(data):
     return producto
 
 
-def leer_datos_excel(ruta_archivo, anio_catalogo=None):
-    workbook = load_workbook(ruta_archivo, data_only=True)
+def seleccionar_hoja_catalogo(workbook, anio_catalogo=None):
+    """Prioriza la hoja de la campaña, pero admite copias cuyo nombre haya cambiado."""
+    expected = f"Catalogo_Maestro_{anio_catalogo}" if anio_catalogo else "Catalogo_Maestro_2026"
+    sheets = sorted(
+        workbook.worksheets,
+        key=lambda sheet: (sheet.title != expected, sheet.title != workbook.active.title),
+    )
+    for sheet in sheets:
+        header = {
+            normalizar_columna(cell.value): index
+            for index, cell in enumerate(next(sheet.iter_rows(max_row=1), ()))
+            if cell.value is not None
+        }
+        if set(COLUMNAS_OBLIGATORIAS).issubset(header):
+            return sheet, header
 
-    hoja_esperada = (
-        f"Catalogo_Maestro_{anio_catalogo}"
-        if anio_catalogo
-        else None
+    if not sheets:
+        raise ValueError("El archivo Excel no tiene hojas con productos.")
+
+    first = sheets[0]
+    available = {
+        normalizar_columna(cell.value)
+        for cell in next(first.iter_rows(max_row=1), ())
+        if cell.value is not None
+    }
+    missing = [column for column in COLUMNAS_OBLIGATORIAS if column not in available]
+    raise ValueError(
+        "No encontramos una hoja de catálogo con las columnas necesarias. "
+        "Revisa la primera fila del Excel. Faltan: " + ", ".join(missing) + "."
     )
 
-    if hoja_esperada and hoja_esperada in workbook.sheetnames:
-        sheet = workbook[hoja_esperada]
-    elif "Catalogo_Maestro_2026" in workbook.sheetnames and not anio_catalogo:
-        sheet = workbook["Catalogo_Maestro_2026"]
-    else:
-        sheet = workbook.active
 
-    columnas = {}
+def leer_datos_excel(ruta_archivo, anio_catalogo=None):
+    try:
+        workbook = load_workbook(ruta_archivo, data_only=True, read_only=True)
+    except (BadZipFile, InvalidFileException, OSError, ValueError) as exc:
+        raise ValueError(
+            "No pudimos abrir el archivo. Guarda una copia como Excel (.xlsx) "
+            "y verifica que no esté dañado."
+        ) from exc
 
-    for indice, celda in enumerate(sheet[1]):
-        if celda.value:
-            columnas[normalizar_columna(celda.value)] = indice
-
-    filas = []
-
-    for numero_fila, fila in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
-        if all(valor is None for valor in fila):
-            continue
-
-        data = {
-            "proveedor_editorial": limpiar_texto(obtener_valor(fila, columnas, "proveedor_editorial")),
-            "codigo_producto": limpiar_texto(obtener_valor(fila, columnas, "codigo_producto")),
-            "sku": limpiar_texto(obtener_valor(fila, columnas, "sku")),
-            "nombre": limpiar_texto(obtener_valor(fila, columnas, "nombre")),
-            "nombre_original": limpiar_texto(obtener_valor(fila, columnas, "nombre_original")),
-            "unidad": limpiar_texto(obtener_valor(fila, columnas, "unidad")),
-            "categoria_original": limpiar_texto(obtener_valor(fila, columnas, "categoria_original")),
-            "subcategoria_original": limpiar_texto(obtener_valor(fila, columnas, "subcategoria_original")),
-            "nivel": limpiar_texto(obtener_valor(fila, columnas, "nivel")),
-            "grado": limpiar_texto(obtener_valor(fila, columnas, "grado")),
-            "area": limpiar_texto(obtener_valor(fila, columnas, "area")),
-            "serie": limpiar_texto(obtener_valor(fila, columnas, "serie")),
-            "tipo_producto": limpiar_texto(obtener_valor(fila, columnas, "tipo_producto")),
-            "linea_comercial": limpiar_texto(
-                obtener_valor(fila, columnas, "linea_comercial")
-            ),
-            "anio_catalogo": obtener_valor(fila, columnas, "anio_catalogo"),
-            "precio_costo": obtener_valor(fila, columnas, "precio_costo"),
-            "precio_referencial": obtener_valor(fila, columnas, "precio_referencial"),
-            "consultar_precio": limpiar_texto(obtener_valor(fila, columnas, "consultar_precio")),
-            "disponibilidad": limpiar_texto(obtener_valor(fila, columnas, "disponibilidad")),
-            "activo": limpiar_texto(obtener_valor(fila, columnas, "activo")),
-            "descripcion": limpiar_texto(obtener_valor(fila, columnas, "descripcion")),
-            "observaciones": limpiar_texto(obtener_valor(fila, columnas, "observaciones")),
-        }
-
-        filas.append((numero_fila, data))
-
-    return filas
+    try:
+        sheet, columnas = seleccionar_hoja_catalogo(workbook, anio_catalogo)
+        filas = []
+    
+        for numero_fila, fila in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+            if all(valor is None for valor in fila):
+                continue
+    
+            data = {
+                "proveedor_editorial": limpiar_texto(obtener_valor(fila, columnas, "proveedor_editorial")),
+                "codigo_producto": limpiar_texto(obtener_valor(fila, columnas, "codigo_producto")),
+                "sku": limpiar_texto(obtener_valor(fila, columnas, "sku")),
+                "nombre": limpiar_texto(obtener_valor(fila, columnas, "nombre")),
+                "nombre_original": limpiar_texto(obtener_valor(fila, columnas, "nombre_original")),
+                "unidad": limpiar_texto(obtener_valor(fila, columnas, "unidad")),
+                "categoria_original": limpiar_texto(obtener_valor(fila, columnas, "categoria_original")),
+                "subcategoria_original": limpiar_texto(obtener_valor(fila, columnas, "subcategoria_original")),
+                "nivel": limpiar_texto(obtener_valor(fila, columnas, "nivel")),
+                "grado": limpiar_texto(obtener_valor(fila, columnas, "grado")),
+                "area": limpiar_texto(obtener_valor(fila, columnas, "area")),
+                "serie": limpiar_texto(obtener_valor(fila, columnas, "serie")),
+                "tipo_producto": limpiar_texto(obtener_valor(fila, columnas, "tipo_producto")),
+                "linea_comercial": limpiar_texto(
+                    obtener_valor(fila, columnas, "linea_comercial")
+                ),
+                "anio_catalogo": obtener_valor(fila, columnas, "anio_catalogo"),
+                "precio_costo": obtener_valor(fila, columnas, "precio_costo"),
+                "precio_referencial": obtener_valor(fila, columnas, "precio_referencial"),
+                "consultar_precio": limpiar_texto(obtener_valor(fila, columnas, "consultar_precio")),
+                "disponibilidad": limpiar_texto(obtener_valor(fila, columnas, "disponibilidad")),
+                "activo": limpiar_texto(obtener_valor(fila, columnas, "activo")),
+                "descripcion": limpiar_texto(obtener_valor(fila, columnas, "descripcion")),
+                "observaciones": limpiar_texto(obtener_valor(fila, columnas, "observaciones")),
+            }
+    
+            filas.append((numero_fila, data))
+    
+        return filas
+    finally:
+        workbook.close()
 
 
 def crear_vista_previa_productos(archivo, anio_catalogo):
+    # Validar el libro antes de guardar la carga: un archivo inválido no deja
+    # registros "PENDIENTE" ni archivos huérfanos.
+    filas = leer_datos_excel(archivo, anio_catalogo=anio_catalogo)
+    archivo.seek(0)
     carga = CargaExcel.objects.create(
         archivo=archivo,
         anio_catalogo=anio_catalogo,
         estado="PENDIENTE",
-    )
-
-    filas = leer_datos_excel(
-        carga.archivo.path,
-        anio_catalogo=anio_catalogo,
     )
 
     claves_excel = set()

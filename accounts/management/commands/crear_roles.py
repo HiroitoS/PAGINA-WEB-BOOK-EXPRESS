@@ -11,6 +11,7 @@ class Command(BaseCommand):
             "CATALOGO",
             "ASESOR_COMERCIAL",
             "ALMACEN",
+            "JEFE_ALMACEN",
         ]
 
         for rol in roles:
