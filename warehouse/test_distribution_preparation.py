@@ -823,3 +823,58 @@ class DistributionPreparationTests(TestCase):
             DistributionOperation.objects.get(pk=operation_id).destination_id,
             generic.pk,
         )
+
+    def test_feria_especifica_no_mezcla_colegios_ajenos(self):
+        """Un depósito de feria por colegio; evita la mezcla vista en la demo."""
+        from crm.models import School
+
+        operation_id = self.plan()
+        alien_school = School.objects.create(
+            name="OTRO COLEGIO DE CONTROL",
+        )
+        DistributionOperation.objects.create(
+            idempotency_key=uuid4(), adoption=self.adopcion,
+            school=alien_school, source=self.main, destination=self.fair,
+            original_mode="", mode=DistributionOperation.Mode.FAIR,
+            operation_name="Feria ajena de ensayo",
+            responsible_name="Operador de ensayo", created_by=self.user,
+        )
+        client = self.api_client()
+        blocked_new = client.post(
+            "/api/admin/erp/almacen/operaciones-distribucion/",
+            {
+                "idempotency_key": str(uuid4()),
+                "adoption_id": self.adopcion.pk, "mode": "fair",
+                "source_id": self.main.pk, "destination_id": self.fair.pk,
+                "operation_name": "Otro envío a destino ajeno",
+                "responsible_name": "Responsable de ensayo",
+                "items": [{
+                    "product_id": item.product_id, "quantity": 1,
+                } for item in self.adopcion.items.order_by("pk")],
+            }, format="json",
+        )
+        self.assertEqual(blocked_new.status_code, 400, blocked_new.data)
+        self.assertIn("otro colegio", str(blocked_new.data).lower())
+
+        reserved = client.post(
+            self.endpoint(operation_id, "reservar"), {}, format="json",
+        )
+        self.assertEqual(reserved.status_code, 201, reserved.data)
+        prepared = client.post(
+            self.endpoint(operation_id, "confirmar-preparacion"),
+            {"counts": [{
+                "reservation_id": row["id"], "counted": row["quantity"],
+            } for row in reserved.data["reservations"]]}, format="json",
+        )
+        self.assertEqual(prepared.status_code, 200, prepared.data)
+        doc = client.post(
+            self.endpoint(operation_id, "documento-interno"),
+            {"idempotency_key": str(uuid4())}, format="json",
+        )
+        self.assertEqual(doc.status_code, 400, doc.data)
+        self.assertIn("otro colegio", str(doc.data).lower())
+        self.assertEqual(DistributionDispatch.objects.count(), 0)
+        self.assertEqual(
+            DistributionOperation.objects.get(pk=operation_id).status,
+            DistributionOperation.Status.PREPARED,
+        )
