@@ -423,6 +423,11 @@ def documentar_diferencia_persistente(operation_id, actor, *, incident_id, break
         current__incident_id=incident.pk,
     ).exists():
         raise BusinessError("La clasificación de esta incidencia ya fue documentada.")
+    if any(
+        type(row[key]) is not int or row[key] < 0
+        for row in breakdown for key in ("conforming", "damaged", "extra")
+    ):
+        raise BusinessError("Solo se admiten cantidades enteras no negativas.")
     expected, observed = _validar_conteo_lineas(
         dispatch, [
             {"line_id": row["line_id"], "counted": row["conforming"] + row["damaged"] + row["extra"]}
