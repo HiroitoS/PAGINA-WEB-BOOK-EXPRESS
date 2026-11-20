@@ -22,9 +22,9 @@ from warehouse.models import (
 from warehouse.transfers import posiciones_lotes
 
 
-GRE_REFERENCE_PATTERN = re.compile(r"EG[A-Z0-9]{2}-[0-9]{1,8}\\Z")
+GRE_REFERENCE_PATTERN = re.compile(r"EG[A-Z0-9]{2}-[0-9]{1,8}\Z")
 RECEIVER_PATTERN = re.compile(
-    r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+(?:[ '-][A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+)+\\Z"
+    r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+(?:[ '-][A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+)+\Z"
 )
 
 
