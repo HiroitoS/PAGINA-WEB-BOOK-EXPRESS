@@ -26,7 +26,7 @@ from warehouse.distribution_preparation import (
 )
 from warehouse.distribution_dispatch import (
     crear_documento_interno, confirmar_salida, confirmar_recepcion_destino,
-    documentar_diferencia_persistente, output_dispatch,
+    documentar_diferencia_persistente, registrar_retorno_fisico_feria, output_dispatch,
     reportar_diferencia_llegada, resolver_diferencia_por_reconteo,
 )
 from warehouse.fair_destination_policy import (
@@ -185,6 +185,20 @@ class ArrivalIncidentInput(serializers.Serializer):
     receiver_name = serializers.CharField(max_length=180, trim_whitespace=True)
     counts = InternalReceptionLine(many=True, allow_empty=False)
     observations = serializers.CharField(min_length=10, max_length=1000, trim_whitespace=True)
+
+
+class FairReturnLine(serializers.Serializer):
+    line_id = serializers.IntegerField(min_value=1)
+    quantity = serializers.IntegerField(min_value=1)
+
+
+class FairReturnInput(serializers.Serializer):
+    idempotency_key = serializers.UUIDField()
+    receiver_name = serializers.CharField(max_length=180, trim_whitespace=True)
+    transport_reference = serializers.CharField(min_length=8, max_length=120, trim_whitespace=True)
+    reason = serializers.CharField(min_length=15, max_length=500, trim_whitespace=True)
+    received_confirmed = serializers.BooleanField()
+    lines = FairReturnLine(many=True, allow_empty=False)
 
 
 class PersistentArrivalLine(serializers.Serializer):
@@ -871,6 +885,29 @@ class DistributionOperationViewSet(viewsets.ViewSet):
         response = output_dispatch(operation)
         response["created_incident_id"] = incident.pk
         return Response(response, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"], url_path="registrar-retorno-feria")
+    def register_fair_return(self, request, pk=None):
+        """B5.3: retorno físicamente recibido desde feria al origen por lotes."""
+        self._authorize(request, write=True)
+        if not usuario_tiene_permiso(request.user, "warehouse.manage_stock_transfers"):
+            raise PermissionDenied("No tienes permiso para registrar retornos de feria.")
+        if not usuario_tiene_permiso(request.user, "warehouse.validate_receiving"):
+            raise PermissionDenied("El retorno físico requiere autorización de Jefatura.")
+        form = FairReturnInput(data=request.data)
+        form.is_valid(raise_exception=True)
+        try:
+            operation, event, created = registrar_retorno_fisico_feria(
+                pk, request.user, **form.validated_data,
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
+        payload = output_dispatch(operation)
+        payload["return_event_id"] = event.pk
+        return Response(
+            payload,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
 
     @action(detail=True, methods=["post"], url_path="documentar-diferencia-persistente")
     def diagnose_arrival_incident(self, request, pk=None):
