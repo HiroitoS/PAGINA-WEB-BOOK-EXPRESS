@@ -292,14 +292,7 @@ def confirmar_recepcion_destino(operation_id, actor, *, receiver, counts):
         raise BusinessError("El estado de la entrega no coincide con el despacho.")
     if not operation.destination.is_active:
         raise BusinessError("El destino debe estar activo para confirmar la recepción.")
-    lines = list(dispatch.lines.order_by("pk"))
-    expected = {line.pk: line.quantity for line in lines}
-    given = {item["line_id"]: item["counted"] for item in counts}
-    if (
-        not expected or len(given) != len(counts)
-        or set(given) != set(expected)
-    ):
-        raise BusinessError("Registra el conteo de todos los lotes que llegan.")
+    expected, given = _validar_conteo_lineas(dispatch, counts)
     if any(given[key] != value for key, value in expected.items()):
         raise BusinessError(
             "Existe una diferencia en la recepción. No se registrará ingreso conforme "
@@ -341,6 +334,10 @@ def _validar_conteo_lineas(dispatch, counts):
     given = {item["line_id"]: item["counted"] for item in counts}
     if not expected or len(given) != len(counts) or set(given) != set(expected):
         raise BusinessError("Registra exactamente un conteo por lote de esta entrega.")
+    # Defensa en profundidad: no depender únicamente del serializer HTTP.
+    # El servicio también es invocable desde tareas y procesos internos.
+    if any(type(value) is not int or value < 0 for value in given.values()):
+        raise BusinessError("Las cantidades recibidas deben ser enteros no negativos.")
     return expected, given
 
 
