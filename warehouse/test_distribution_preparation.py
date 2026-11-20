@@ -786,7 +786,7 @@ class DistributionPreparationTests(TestCase):
         request = {
             "idempotency_key": key,
             "receiver_name": "Responsable Almacen",
-            "transport_reference": "GRE retorno verificada externamente",
+            "transport_reference": "EG01-00000125",
             "reason": "Retorno parcial de sobrantes de la feria escolar",
             "received_confirmed": True,
             "lines": [{"line_id": line["id"], "quantity": 2}],
