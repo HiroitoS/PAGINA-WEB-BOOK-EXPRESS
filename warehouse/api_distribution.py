@@ -28,7 +28,9 @@ from warehouse.distribution_dispatch import (
     crear_documento_interno, confirmar_salida, confirmar_recepcion_destino,
     output_dispatch, reportar_diferencia_llegada, resolver_diferencia_por_reconteo,
 )
-from warehouse.fair_destination_policy import validar_feria_por_colegio
+from warehouse.fair_destination_policy import (
+    feria_compartida_entre_colegios, validar_feria_por_colegio,
+)
 from warehouse.models import (
     DistributionDispatch, DistributionOperation, DistributionOperationEvent,
     DistributionOperationLine, DistributionTransportDraft, WarehouseLocation,
@@ -309,6 +311,9 @@ def _output(obj):
         "destination_id": obj.destination_id,
         "destination": obj.destination.name,
         "destination_kind": obj.destination.kind,
+        "destination_school_conflict": feria_compartida_entre_colegios(
+            obj.destination, obj.school_id, operation_id=obj.pk,
+        ),
         "destination_fair_event_id": (
             obj.destination.fair_event.pk
             if getattr(obj.destination, "fair_event", None) else None
