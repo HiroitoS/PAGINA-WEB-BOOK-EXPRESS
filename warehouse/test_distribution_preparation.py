@@ -647,6 +647,38 @@ class DistributionPreparationTests(TestCase):
         self.assertEqual(posiciones_lotes(self.entries), transit_before)
         self.assertEqual(StockEntry.objects.count(), count_before)
 
+        # B5.2: documentar faltantes persistentes sin registrar recepción parcial
+        # ni mover existencias. El desglose pertenece a la incidencia original.
+        diagnosis_url = self.endpoint(operation_id, "documentar-diferencia-persistente")
+        breakdown = [{
+            "line_id": line["id"],
+            "conforming": line["quantity"] - (1 if idx == 0 else 0),
+            "damaged": 0, "extra": 0,
+        } for idx, line in enumerate(lines)]
+        invalid_diagnosis = client.post(diagnosis_url, {
+            "incident_id": incident_id, "breakdown": [
+                {**breakdown[0], "conforming": breakdown[0]["conforming"] + 1},
+                *breakdown[1:],
+            ],
+            "note": "Se realizó la verificación física del lote faltante.",
+        }, format="json")
+        self.assertEqual(invalid_diagnosis.status_code, 400, invalid_diagnosis.data)
+        documented = client.post(diagnosis_url, {
+            "incident_id": incident_id, "breakdown": breakdown,
+            "note": "Se confirmó el faltante durante el conteo de llegada.",
+        }, format="json")
+        self.assertEqual(documented.status_code, 201, documented.data)
+        self.assertEqual(documented.data["arrival_diagnoses"][0]["details"][0]["missing"], 1)
+        self.assertTrue(documented.data["open_incident"])
+        self.assertEqual(documented.data["operation_status"], "in_transit")
+        self.assertEqual(posiciones_lotes(self.entries), transit_before)
+        self.assertEqual(StockEntry.objects.count(), count_before)
+        repeated = client.post(diagnosis_url, {
+            "incident_id": incident_id, "breakdown": breakdown,
+            "note": "No debe documentarse una segunda vez la misma incidencia.",
+        }, format="json")
+        self.assertEqual(repeated.status_code, 400, repeated.data)
+
         duplicate = client.post(url, {
             "receiver_name": "Encargado de la feria",
             "observations": "Diferencia duplicada por doble pulsación.",
