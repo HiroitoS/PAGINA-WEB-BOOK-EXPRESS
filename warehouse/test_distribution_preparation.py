@@ -462,10 +462,17 @@ class DistributionPreparationTests(TestCase):
         }, format="json")
         self.assertEqual(invalid.status_code, 400, invalid.data)
         self.assertEqual(posiciones_lotes(self.entries), before)
+        bogus_guide = client.post(self.endpoint(operation_id, "confirmar-salida"), {
+            "evidence_kind": "external_guide",
+            "external_guide_reference": "asdasdas",
+            "physical_dispatch_confirmed": True,
+        }, format="json")
+        self.assertEqual(bogus_guide.status_code, 400, bogus_guide.data)
+        self.assertEqual(posiciones_lotes(self.entries), before)
 
         out = client.post(self.endpoint(operation_id, "confirmar-salida"), {
             "evidence_kind": "external_guide",
-            "external_guide_reference": "GRE-PRUEBA-2027-01",
+            "external_guide_reference": "EG01-00000051",
             "physical_dispatch_confirmed": True,
         }, format="json")
         self.assertEqual(out.status_code, 201, out.data)
@@ -493,7 +500,7 @@ class DistributionPreparationTests(TestCase):
         self.assertEqual(
             client.post(self.endpoint(operation_id, "confirmar-salida"), {
                 "evidence_kind": "external_guide",
-                "external_guide_reference": "GRE-PRUEBA-2027-01",
+                "external_guide_reference": "EG01-00000051",
                 "physical_dispatch_confirmed": True,
             }, format="json").status_code, 200,
         )
@@ -508,6 +515,15 @@ class DistributionPreparationTests(TestCase):
         }, format="json")
         self.assertEqual(bad_arrival.status_code, 400, bad_arrival.data)
         self.assertEqual(posiciones_lotes(self.entries), transit)
+        invalid_name = client.post(self.endpoint(operation_id, "confirmar-llegada"), {
+            "receiver_name": "shamir", "arrival_confirmed": True,
+            "counts": [
+                {"line_id": line["id"], "counted": line["quantity"]}
+                for line in out.data["lines"]
+            ],
+        }, format="json")
+        self.assertEqual(invalid_name.status_code, 400, invalid_name.data)
+        self.assertEqual(posiciones_lotes(self.entries), transit)
         good_arrival = client.post(self.endpoint(operation_id, "confirmar-llegada"), {
             "receiver_name": "Responsable DEMO", "arrival_confirmed": True,
             "counts": [
@@ -517,6 +533,9 @@ class DistributionPreparationTests(TestCase):
         }, format="json")
         self.assertEqual(good_arrival.status_code, 200, good_arrival.data)
         self.assertEqual(good_arrival.data["status"], "received")
+        self.assertEqual(good_arrival.data["recipient_name"], "Responsable DEMO")
+        self.assertTrue(good_arrival.data["received_by"])
+        self.assertIsNotNone(good_arrival.data["received_at"])
         self.assertEqual(good_arrival.data["operation_status"], "delivered")
         final = posiciones_lotes(self.entries)
         for line in good_arrival.data["lines"]:
@@ -599,7 +618,7 @@ class DistributionPreparationTests(TestCase):
             self.endpoint(operation_id, "confirmar-salida"),
             {
                 "evidence_kind": "external_guide",
-                "external_guide_reference": "GRE-ENSAYO-B5",
+                "external_guide_reference": "EG01-00000052",
                 "physical_dispatch_confirmed": True,
             }, format="json",
         )
