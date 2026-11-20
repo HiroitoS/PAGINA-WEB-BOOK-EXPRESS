@@ -886,12 +886,16 @@ class DistributionOperationViewSet(viewsets.ViewSet):
         response["created_incident_id"] = incident.pk
         return Response(response, status=status.HTTP_201_CREATED)
 
+    @action(detail=True, methods=["post"], url_path="registrar-retorno-destino")
+    def register_destination_return(self, request, pk=None):
+        return self.register_fair_return(request, pk=pk)
+
     @action(detail=True, methods=["post"], url_path="registrar-retorno-feria")
     def register_fair_return(self, request, pk=None):
-        """B5.3: retorno físicamente recibido desde feria al origen por lotes."""
+        """B5.3: retorno físicamente recibido desde feria/consignación al origen."""
         self._authorize(request, write=True)
         if not usuario_tiene_permiso(request.user, "warehouse.manage_stock_transfers"):
-            raise PermissionDenied("No tienes permiso para registrar retornos de feria.")
+            raise PermissionDenied("No tienes permiso para registrar retornos de mercadería.")
         if not usuario_tiene_permiso(request.user, "warehouse.validate_receiving"):
             raise PermissionDenied("El retorno físico requiere autorización de Jefatura.")
         form = FairReturnInput(data=request.data)
