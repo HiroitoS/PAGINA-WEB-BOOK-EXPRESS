@@ -4,11 +4,14 @@ Esta capa NO emite comprobantes tributarios, GRE ni reconoce ventas. La
 documentación tributaria real debe verificarse fuera del sistema cuando aplique.
 """
 from collections import defaultdict
+import re
 
 from django.core.exceptions import ValidationError as BusinessError
 from django.db import transaction
 from django.db.models import Sum
 from django.shortcuts import get_object_or_404
+
+from accounts.permissions import usuario_tiene_permiso
 from django.utils import timezone
 
 from warehouse.models import (
@@ -17,6 +20,22 @@ from warehouse.models import (
     StockEntry,
 )
 from warehouse.transfers import posiciones_lotes
+
+
+GRE_REFERENCE_PATTERN = re.compile(r"EG[A-Z0-9]{2}-[0-9]{1,8}\\Z")
+RECEIVER_PATTERN = re.compile(
+    r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+(?:[ '-][A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+)+\\Z"
+)
+
+
+def validate_receiver_name(value):
+    name = " ".join(value.strip().split())
+    if len(name) < 6 or len(name) > 180 or not RECEIVER_PATTERN.fullmatch(name):
+        raise BusinessError(
+            "Indica nombres y apellidos reales de quien recibe (mínimo dos palabras, "
+            "sin números ni símbolos). El registro queda auditado."
+        )
+    return name
 
 
 def _operation_locked(operation_id):
@@ -59,6 +78,16 @@ def output_dispatch(operation):
         "dispatched_at": dispatch.dispatched_at, "received_at": dispatch.received_at,
         "recipient_name": dispatch.recipient_name,
         "responsible_name": operation.responsible_name,
+        "document_by": dispatch.document_by.get_full_name().strip()
+        or dispatch.document_by.get_username(),
+        "dispatched_by": (
+            dispatch.dispatched_by.get_full_name().strip()
+            or dispatch.dispatched_by.get_username()
+        ) if dispatch.dispatched_by_id else None,
+        "received_by": (
+            dispatch.received_by.get_full_name().strip()
+            or dispatch.received_by.get_username()
+        ) if dispatch.received_by_id else None,
         "evidence_kind": dispatch.evidence_kind,
         "external_guide_reference": dispatch.external_guide_reference,
         "exception_justification": dispatch.exception_justification,
@@ -164,14 +193,22 @@ def confirmar_salida(operation_id, actor, *, document_basis, guide_ref="", exemp
 
     # Declaración responsable: NO se consulta ni se confirma aceptación de SUNAT.
     if document_basis == DistributionDispatch.Evidence.EXTERNAL_GUIDE:
-        if len(guide_ref.strip()) < 5:
-            raise BusinessError("Identifica la GRE externa verificada antes de registrar la salida.")
+        guide_ref = guide_ref.strip().upper()
+        if not GRE_REFERENCE_PATTERN.fullmatch(guide_ref) or int(guide_ref.split("-")[1]) == 0:
+            raise BusinessError(
+                "Indica una referencia de GRE con formato EG01-00000001. "
+                "El formato no comprueba su existencia ni aceptación ante SUNAT."
+            )
         exemption = ""
     elif document_basis == DistributionDispatch.Evidence.EXCEPTION:
-        if len(exemption.strip()) < 20:
+        if not usuario_tiene_permiso(actor, "warehouse.validate_receiving"):
             raise BusinessError(
-                "Documenta la excepción legal aplicable con sustento verificable "
-                "(mínimo 20 caracteres)."
+                "Solo Jefatura autorizada puede registrar una excepción legal revisada."
+            )
+        if len(exemption.strip()) < 60 or len(exemption.strip().split()) < 9:
+            raise BusinessError(
+                "Describe el supuesto legal aplicable y las evidencias revisadas "
+                "(mínimo 60 caracteres y 9 palabras). No se admite texto de relleno."
             )
         guide_ref = ""
     else:
@@ -237,6 +274,7 @@ def confirmar_salida(operation_id, actor, *, document_basis, guide_ref="", exemp
 
 @transaction.atomic
 def confirmar_recepcion_destino(operation_id, actor, *, receiver, counts):
+    receiver = validate_receiver_name(receiver)
     operation = _operation_locked(operation_id)
     dispatch = get_object_or_404(
         DistributionDispatch.objects.select_for_update(), operation=operation,
@@ -274,7 +312,7 @@ def confirmar_recepcion_destino(operation_id, actor, *, receiver, counts):
     list(StockEntry.objects.select_for_update().filter(pk__in=stock_ids).order_by("pk"))
     dispatch.status = DistributionDispatch.Status.RECEIVED
     dispatch.received_by = actor
-    dispatch.recipient_name = receiver.strip()
+    dispatch.recipient_name = receiver
     dispatch.received_at = timezone.now()
     dispatch.save(update_fields=[
         "status", "received_by", "recipient_name", "received_at", "updated_at",
@@ -284,7 +322,7 @@ def confirmar_recepcion_destino(operation_id, actor, *, receiver, counts):
     DistributionOperationEvent.objects.create(
         operation=operation, actor=actor, action="received_destination",
         current={"document_number": dispatch.document_number, "status": operation.status,
-                 "quantity": sum(expected.values()), "recipient": receiver.strip()},
+                 "quantity": sum(expected.values()), "recipient": receiver},
     )
     return operation
 
@@ -302,6 +340,7 @@ def _validar_conteo_lineas(dispatch, counts):
 @transaction.atomic
 def reportar_diferencia_llegada(operation_id, actor, *, receiver, counts, observations):
     """Registra el desacuerdo físico sin mover stock ni alterar el estado en tránsito."""
+    receiver = validate_receiver_name(receiver)
     operation = _operation_locked(operation_id)
     dispatch = get_object_or_404(
         DistributionDispatch.objects.select_for_update(), operation=operation,
@@ -327,7 +366,7 @@ def reportar_diferencia_llegada(operation_id, actor, *, receiver, counts, observ
         for key in sorted(expected)
     ]
     incident = DistributionArrivalIncident.objects.create(
-        dispatch=dispatch, receiver_name=receiver.strip(),
+        dispatch=dispatch, receiver_name=receiver,
         observations=observations.strip(), counts_snapshot=snapshot,
         reported_by=actor,
     )
