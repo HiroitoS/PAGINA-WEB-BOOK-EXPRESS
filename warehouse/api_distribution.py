@@ -26,7 +26,8 @@ from warehouse.distribution_preparation import (
 )
 from warehouse.distribution_dispatch import (
     crear_documento_interno, confirmar_salida, confirmar_recepcion_destino,
-    output_dispatch, reportar_diferencia_llegada, resolver_diferencia_por_reconteo,
+    documentar_diferencia_persistente, output_dispatch,
+    reportar_diferencia_llegada, resolver_diferencia_por_reconteo,
 )
 from warehouse.fair_destination_policy import (
     feria_compartida_entre_colegios, validar_feria_por_colegio,
@@ -184,6 +185,19 @@ class ArrivalIncidentInput(serializers.Serializer):
     receiver_name = serializers.CharField(max_length=180, trim_whitespace=True)
     counts = InternalReceptionLine(many=True, allow_empty=False)
     observations = serializers.CharField(min_length=10, max_length=1000, trim_whitespace=True)
+
+
+class PersistentArrivalLine(serializers.Serializer):
+    line_id = serializers.IntegerField(min_value=1)
+    conforming = serializers.IntegerField(min_value=0)
+    damaged = serializers.IntegerField(min_value=0)
+    extra = serializers.IntegerField(min_value=0)
+
+
+class PersistentArrivalInput(serializers.Serializer):
+    incident_id = serializers.IntegerField(min_value=1)
+    breakdown = PersistentArrivalLine(many=True, allow_empty=False)
+    note = serializers.CharField(min_length=20, max_length=500, trim_whitespace=True)
 
 
 class ArrivalIncidentResolutionInput(serializers.Serializer):
@@ -857,6 +871,24 @@ class DistributionOperationViewSet(viewsets.ViewSet):
         response = output_dispatch(operation)
         response["created_incident_id"] = incident.pk
         return Response(response, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"], url_path="documentar-diferencia-persistente")
+    def diagnose_arrival_incident(self, request, pk=None):
+        """B5.2: desglose físico verificable; no es recepción ni ajuste de stock."""
+        self._authorize(request, write=True)
+        if not usuario_tiene_permiso(request.user, "warehouse.validate_receiving"):
+            raise PermissionDenied("Solo Jefatura puede documentar diferencias persistentes.")
+        form = PersistentArrivalInput(data=request.data)
+        form.is_valid(raise_exception=True)
+        try:
+            operation, event = documentar_diferencia_persistente(
+                pk, request.user, **form.validated_data,
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
+        result = output_dispatch(operation)
+        result["diagnosis_event_id"] = event.pk
+        return Response(result, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"], url_path="resolver-diferencia-llegada")
     def resolve_arrival_incident(self, request, pk=None):
