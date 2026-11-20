@@ -793,6 +793,14 @@ class DistributionPreparationTests(TestCase):
         }
         endpoint = self.endpoint(operation_id, "registrar-retorno-feria")
         count_before = StockTransfer.objects.count()
+        from unittest.mock import patch
+        with patch(
+            "warehouse.distribution_dispatch.feria_compartida_entre_colegios",
+            return_value=True,
+        ):
+            blocked = client.post(endpoint, request, format="json")
+        self.assertEqual(blocked.status_code, 400, blocked.data)
+        self.assertEqual(StockTransfer.objects.count(), count_before)
         posted = client.post(endpoint, request, format="json")
         self.assertEqual(posted.status_code, 201, posted.data)
         self.assertEqual(len(posted.data["fair_returns"]), 1)
