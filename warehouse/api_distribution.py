@@ -28,6 +28,7 @@ from warehouse.distribution_dispatch import (
     crear_documento_interno, confirmar_salida, confirmar_recepcion_destino,
     output_dispatch, reportar_diferencia_llegada, resolver_diferencia_por_reconteo,
 )
+from warehouse.fair_destination_policy import validar_feria_por_colegio
 from warehouse.models import (
     DistributionDispatch, DistributionOperation, DistributionOperationEvent,
     DistributionOperationLine, DistributionTransportDraft, WarehouseLocation,
@@ -74,6 +75,12 @@ class OperationInput(serializers.Serializer):
             raise serializers.ValidationError({
                 "detail": "Indica un nombre para la operación y quién es responsable.",
             })
+        try:
+            validar_feria_por_colegio(
+                data["destination"], data["adoption"].school_id,
+            )
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"destination_id": exc.messages}) from exc
         return data
 
 
@@ -591,6 +598,12 @@ class DistributionOperationViewSet(viewsets.ViewSet):
                 raise ValidationError({
                     "destination_id": "El origen y destino deben ser diferentes.",
                 })
+            try:
+                validar_feria_por_colegio(
+                    record.destination, record.school_id, operation_id=record.pk,
+                )
+            except DjangoValidationError as exc:
+                raise ValidationError({"destination_id": exc.messages}) from exc
             if (
                 record.scheduled_on and record.scheduled_until
                 and record.scheduled_until < record.scheduled_on
@@ -663,6 +676,12 @@ class DistributionOperationViewSet(viewsets.ViewSet):
                 raise ValidationError({
                     "destination_id": "Selecciona una feria registrada como evento, no un almacén genérico."
                 })
+            try:
+                validar_feria_por_colegio(
+                    target, record.school_id, operation_id=record.pk,
+                )
+            except DjangoValidationError as exc:
+                raise ValidationError({"destination_id": exc.messages}) from exc
             previous = _state(record)
             record.destination = target
             record.save(update_fields=["destination", "updated_at"])
