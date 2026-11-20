@@ -782,6 +782,34 @@ class DistributionPreparationTests(TestCase):
         before = posiciones_lotes(self.entries)
         main_before = before[(entry_id, self.main.pk)]
         fair_before = before[(entry_id, self.fair.pk)]
+        # Constancia BE-RI: preparación interna independiente del sustento legal.
+        # No puede mover stock ni autorizar transporte por sí misma.
+        prepare_url = self.endpoint(operation_id, "preparar-retorno-destino")
+        prepare_key = str(uuid4())
+        preparation_payload = {
+            "idempotency_key": prepare_key,
+            "reason": "Preparación documentada de sobrantes de feria",
+            "lines": [{"line_id": line["id"], "quantity": 2}],
+        }
+        transfer_before_preparing = StockTransfer.objects.count()
+        prep = client.post(prepare_url, preparation_payload, format="json")
+        self.assertEqual(prep.status_code, 201, prep.data)
+        self.assertRegex(prep.data["internal_return_number"], r"^BE-RI-[0-9]{7}$")
+        self.assertEqual(len(prep.data["internal_return_plans"]), 1)
+        self.assertEqual(StockTransfer.objects.count(), transfer_before_preparing)
+        self.assertEqual(posiciones_lotes(self.entries), before)
+        repeated_prep = client.post(prepare_url, preparation_payload, format="json")
+        self.assertEqual(repeated_prep.status_code, 200, repeated_prep.data)
+        self.assertEqual(repeated_prep.data["internal_return_number"],
+                         prep.data["internal_return_number"])
+        self.assertEqual(StockTransfer.objects.count(), transfer_before_preparing)
+        invalid_prep = client.post(prepare_url, {
+            **preparation_payload, "idempotency_key": str(uuid4()),
+            "lines": [{"line_id": line["id"], "quantity": line["quantity"] + 1}],
+        }, format="json")
+        self.assertEqual(invalid_prep.status_code, 400, invalid_prep.data)
+        self.assertEqual(posiciones_lotes(self.entries), before)
+
         key = str(uuid4())
         request = {
             "idempotency_key": key,
