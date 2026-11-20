@@ -704,6 +704,36 @@ class DistributionPreparationTests(TestCase):
         self.assertEqual(StockTransfer.objects.count(), 0)
         self.assertNotEqual(posiciones_lotes(self.entries), transit_before)
 
+    def test_b5_servicio_rechaza_conteos_negativos_sin_depender_del_serializer(self):
+        """Protege futuras llamadas internas y el flujo de incidencias B5."""
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        from django.core.exceptions import ValidationError
+        from warehouse.distribution_dispatch import _validar_conteo_lineas
+
+        dispatch = SimpleNamespace(lines=Mock())
+        dispatch.lines.order_by.return_value = [
+            SimpleNamespace(pk=11, quantity=3),
+            SimpleNamespace(pk=12, quantity=2),
+        ]
+        with self.assertRaisesMessage(ValidationError, "enteros no negativos"):
+            _validar_conteo_lineas(dispatch, [
+                {"line_id": 11, "counted": -1},
+                {"line_id": 12, "counted": 2},
+            ])
+        with self.assertRaisesMessage(ValidationError, "enteros no negativos"):
+            _validar_conteo_lineas(dispatch, [
+                {"line_id": 11, "counted": True},
+                {"line_id": 12, "counted": 2},
+            ])
+        expected, given = _validar_conteo_lineas(dispatch, [
+            {"line_id": 11, "counted": 2},
+            {"line_id": 12, "counted": 2},
+        ])
+        self.assertEqual(expected, {11: 3, 12: 2})
+        self.assertEqual(given, {11: 2, 12: 2})
+
     def test_b5_requiere_permiso_para_registrar_y_cerrar_incidencias(self):
         op_id = self.plan()
         employee = self.api_client(self.employee)
