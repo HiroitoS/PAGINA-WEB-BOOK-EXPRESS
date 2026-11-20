@@ -306,6 +306,7 @@ def confirmar_recepcion_destino(operation_id, actor, *, receiver, counts):
             "cerrarse mediante recuento conforme supervisado antes de confirmar la llegada."
         )
     # Bloqueo compartido con movimientos directos y cortesías.
+    lines = list(dispatch.lines.select_related("reservation__stock_entry").order_by("pk"))
     stock_ids = sorted(set(
         row.reservation.stock_entry_id for row in lines
     ))
