@@ -67,6 +67,17 @@ def output_dispatch(operation):
         "reservation__stock_entry__product",
         "reservation__stock_entry__receipt_line__receipt",
     ))
+    prepared_returns = DistributionOperationEvent.objects.filter(
+        operation=operation, action="return_prepared",
+    ).select_related("actor").order_by("created_at", "pk")
+    internal_return_plans = [{
+        "id": event.pk, "reference": f"BE-RI-{event.pk:07d}",
+        "source_document": event.current.get("document_number"),
+        "lines": event.current.get("request", {}).get("lines", []),
+        "reason": event.reason, "created_by": event.actor.get_username(),
+        "created_at": event.created_at,
+        "notice": "Preparación interna. No acredita salida, llegada ni GRE.",
+    } for event in prepared_returns]
     returns = DistributionOperationEvent.objects.filter(
         operation=operation, action__in=["fair_return_recorded", "consign_return_recorded"],
     ).select_related("actor").order_by("created_at", "pk")
@@ -126,6 +137,7 @@ def output_dispatch(operation):
         "total": sum(line.quantity for line in lines),
         "fair_returns": return_history,
         "destination_returns": return_history,
+        "internal_return_plans": internal_return_plans,
         "arrival_diagnoses": diagnoses,
         "arrival_incidents": [
             {
@@ -481,6 +493,107 @@ def documentar_diferencia_persistente(operation_id, actor, *, incident_id, break
                  "document_number": dispatch.document_number},
     )
     return operation, event
+
+
+@transaction.atomic
+def preparar_retorno_destino(
+    operation_id, actor, *, idempotency_key, lines, reason,
+):
+    """B5.3: documento INTERNO de retorno sin registrar transporte ni mover stock.
+
+    Permite contar/preparar sobrantes antes de verificar el sustento de
+    transporte aplicable. No certifica la GRE, salida ni llegada física.
+    """
+    reason = str(reason or "").strip()
+    if len(reason) < 15:
+        raise BusinessError("Explica el motivo del retorno (mínimo 15 caracteres).")
+    if not lines or any(
+        type(row.get("line_id")) is not int
+        or type(row.get("quantity")) is not int
+        or row["quantity"] < 1 for row in lines
+    ):
+        raise BusinessError("Indica lotes y cantidades enteras positivas.")
+    quantities = {row["line_id"]: row["quantity"] for row in lines}
+    if len(quantities) != len(lines):
+        raise BusinessError("No repitas un mismo lote.")
+
+    operation = _operation_locked(operation_id)
+    if (
+        operation.mode not in (
+            DistributionOperation.Mode.FAIR,
+            DistributionOperation.Mode.CONSIGNMENT,
+        )
+        or operation.status != DistributionOperation.Status.DELIVERED
+    ):
+        raise BusinessError("Solo se puede preparar el retorno de una entrega recibida.")
+    if (
+        operation.mode == DistributionOperation.Mode.FAIR
+        and feria_compartida_entre_colegios(
+            operation.destination, operation.school_id, operation_id=operation.pk,
+        )
+    ):
+        raise BusinessError("Esta feria requiere conciliación de custodia antes del retorno.")
+    dispatch = get_object_or_404(
+        DistributionDispatch.objects.select_for_update(), operation=operation,
+        status=DistributionDispatch.Status.RECEIVED,
+    )
+    if dispatch.arrival_incidents.filter(
+        status=DistributionArrivalIncident.Status.OPEN,
+    ).exists():
+        raise BusinessError("Primero resuelve las incidencias de recepción pendientes.")
+    request = {
+        "key": str(idempotency_key),
+        "lines": [{"line_id": key, "quantity": quantities[key]} for key in sorted(quantities)],
+        "reason": reason,
+    }
+    existing = DistributionOperationEvent.objects.filter(
+        operation=operation, action="return_prepared",
+        current__key=str(idempotency_key),
+    ).first()
+    if existing:
+        if existing.current.get("request") != request:
+            raise BusinessError("Esta clave ya corresponde a otra preparación.")
+        return operation, existing, False
+    dispatched = {
+        line.pk: line for line in dispatch.lines.select_related("reservation").order_by("pk")
+    }
+    if set(quantities) - set(dispatched):
+        raise BusinessError("El lote indicado no pertenece a esta entrega.")
+    returned = defaultdict(int)
+    for event in DistributionOperationEvent.objects.filter(
+        operation=operation,
+        action__in=["fair_return_recorded", "consign_return_recorded"],
+    ):
+        for row in event.current.get("lines", []):
+            returned[row["line_id"]] += row["quantity"]
+    entry_ids = sorted({
+        dispatched[line_id].reservation.stock_entry_id for line_id in quantities
+    })
+    entries = list(StockEntry.objects.select_for_update().filter(pk__in=entry_ids).order_by("pk"))
+    positions = posiciones_lotes(entries)
+    requested_per_entry = defaultdict(int)
+    for line_id, quantity in quantities.items():
+        if quantity + returned[line_id] > dispatched[line_id].quantity:
+            raise BusinessError("Las cantidades exceden el saldo de esta entrega.")
+        requested_per_entry[dispatched[line_id].reservation.stock_entry_id] += quantity
+    for entry_id, quantity in requested_per_entry.items():
+        reserved = DistributionStockReservation.objects.filter(
+            stock_entry_id=entry_id, source_id=operation.destination_id,
+            status=DistributionStockReservation.Status.ACTIVE,
+        ).aggregate(total=Sum("quantity"))["total"] or 0
+        if positions.get((entry_id, operation.destination_id), 0) - reserved < quantity:
+            raise BusinessError("No hay suficientes existencias libres en el destino.")
+    event = DistributionOperationEvent.objects.create(
+        operation=operation, actor=actor, action="return_prepared",
+        reason=reason[:500],
+        current={
+            "key": str(idempotency_key), "request": request,
+            "document_number": dispatch.document_number,
+            "mode": operation.mode,
+            "notice": "Control interno sin traslado físico ni GRE emitida.",
+        },
+    )
+    return operation, event, True
 
 
 @transaction.atomic
