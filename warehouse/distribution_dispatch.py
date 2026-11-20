@@ -64,6 +64,15 @@ def output_dispatch(operation):
         "reservation__stock_entry__product",
         "reservation__stock_entry__receipt_line__receipt",
     ))
+    diagnosis_events = DistributionOperationEvent.objects.filter(
+        operation=operation, action="arrival_diagnosed",
+    ).select_related("actor").order_by("created_at", "pk")
+    diagnoses = [{
+        "incident_id": event.current.get("incident_id"),
+        "details": event.current.get("details", []),
+        "note": event.reason, "recorded_at": event.created_at,
+        "recorded_by": event.actor.get_username(),
+    } for event in diagnosis_events]
     incident_rows = list(dispatch.arrival_incidents.select_related(
         "reported_by", "resolved_by",
     ).order_by("-created_at", "-pk"))
@@ -102,6 +111,7 @@ def output_dispatch(operation):
             "stock_entry_id": row.reservation.stock_entry_id,
         } for row in lines],
         "total": sum(line.quantity for line in lines),
+        "arrival_diagnoses": diagnoses,
         "arrival_incidents": [
             {
                 "id": item.pk, "status": item.status,
@@ -382,6 +392,75 @@ def reportar_diferencia_llegada(operation_id, actor, *, receiver, counts, observ
                      row["difference"] != 0 for row in snapshot)},
     )
     return operation, incident
+
+
+@transaction.atomic
+def documentar_diferencia_persistente(operation_id, actor, *, incident_id, breakdown, note):
+    """Clasificación auditada B5.2, sin liquidar faltantes ni ingresar stock.
+
+    Es una constatación de lo recibido físicamente. La regularización y
+    recepción parcial requieren un movimiento específico posterior.
+    """
+    operation = _operation_locked(operation_id)
+    dispatch = get_object_or_404(
+        DistributionDispatch.objects.select_for_update(), operation=operation,
+    )
+    if (
+        dispatch.status != DistributionDispatch.Status.IN_TRANSIT
+        or operation.status != DistributionOperation.Status.IN_TRANSIT
+    ):
+        raise BusinessError("Solo se documentan diferencias de entregas en tránsito.")
+    incident = get_object_or_404(
+        DistributionArrivalIncident.objects.select_for_update(),
+        pk=incident_id, dispatch=dispatch,
+        status=DistributionArrivalIncident.Status.OPEN,
+    )
+    note = str(note or "").strip()
+    if len(note) < 20:
+        raise BusinessError("Explica la verificación física realizada (mínimo 20 caracteres).")
+    if DistributionOperationEvent.objects.filter(
+        operation=operation, action="arrival_diagnosed",
+        current__incident_id=incident.pk,
+    ).exists():
+        raise BusinessError("La clasificación de esta incidencia ya fue documentada.")
+    expected, observed = _validar_conteo_lineas(
+        dispatch, [
+            {"line_id": row["line_id"], "counted": row["conforming"] + row["damaged"] + row["extra"]}
+            for row in breakdown
+        ],
+    )
+    # Comprobar contra el conteo inicial, para no sustituir silenciosamente
+    # las evidencias existentes por nuevas cantidades.
+    snapshot = {row["line_id"]: row["counted"] for row in incident.counts_snapshot}
+    if snapshot != observed:
+        raise BusinessError(
+            "El desglose no coincide con la incidencia registrada. "
+            "Si hubo un nuevo conteo, debe conservarse una nueva evidencia auditada."
+        )
+    detail = []
+    for row in sorted(breakdown, key=lambda item: item["line_id"]):
+        line_id = row["line_id"]
+        good, damaged, extra = row["conforming"], row["damaged"], row["extra"]
+        if any(type(qty) is not int or qty < 0 for qty in (good, damaged, extra)):
+            raise BusinessError("Solo se admiten cantidades enteras no negativas.")
+        if good + damaged > expected[line_id]:
+            raise BusinessError(
+                "Las unidades conformes y dañadas no pueden superar lo despachado; "
+                "registra los sobrantes por separado."
+            )
+        detail.append({
+            "line_id": line_id, "dispatched": expected[line_id],
+            "conforming": good, "damaged": damaged,
+            "missing": expected[line_id] - good - damaged,
+            "extra": extra,
+        })
+    event = DistributionOperationEvent.objects.create(
+        operation=operation, actor=actor, action="arrival_diagnosed",
+        reason=note[:500],
+        current={"incident_id": incident.pk, "details": detail,
+                 "document_number": dispatch.document_number},
+    )
+    return operation, event
 
 
 @transaction.atomic
