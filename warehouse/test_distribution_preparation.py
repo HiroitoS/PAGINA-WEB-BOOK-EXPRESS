@@ -878,3 +878,46 @@ class DistributionPreparationTests(TestCase):
             DistributionOperation.objects.get(pk=operation_id).status,
             DistributionOperation.Status.PREPARED,
         )
+
+    def test_excepcion_legal_solo_jefatura_y_sustento_completo(self):
+        from warehouse.distribution_dispatch import confirmar_salida
+
+        operation_id = self.plan()
+        client = self.api_client()
+        reserved = client.post(
+            self.endpoint(operation_id, "reservar"), {}, format="json",
+        )
+        self.assertEqual(reserved.status_code, 201, reserved.data)
+        prepared = client.post(
+            self.endpoint(operation_id, "confirmar-preparacion"), {
+                "counts": [{
+                    "reservation_id": row["id"], "counted": row["quantity"],
+                } for row in reserved.data["reservations"]],
+            }, format="json",
+        )
+        self.assertEqual(prepared.status_code, 200, prepared.data)
+        doc = client.post(
+            self.endpoint(operation_id, "documento-interno"),
+            {"idempotency_key": str(uuid4())}, format="json",
+        )
+        self.assertEqual(doc.status_code, 201, doc.data)
+        justification = (
+            "Caso legal excepcional previamente evaluado por el responsable "
+            "tributario y documentado con sustento de la operación de prueba."
+        )
+        with self.assertRaisesMessage(DjangoValidationError, "Solo Jefatura"):
+            confirmar_salida(
+                operation_id, self.employee,
+                document_basis=DistributionDispatch.Evidence.EXCEPTION,
+                exemption=justification,
+            )
+        with self.assertRaisesMessage(DjangoValidationError, "mínimo 60 caracteres"):
+            confirmar_salida(
+                operation_id, self.user,
+                document_basis=DistributionDispatch.Evidence.EXCEPTION,
+                exemption="asdasdas asdasdas asdasdas asdasdas",
+            )
+        self.assertEqual(
+            DistributionDispatch.objects.get(operation_id=operation_id).status,
+            DistributionDispatch.Status.DOCUMENTED,
+        )
