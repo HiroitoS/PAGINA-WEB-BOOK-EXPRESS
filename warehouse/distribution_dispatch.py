@@ -20,6 +20,7 @@ from warehouse.models import (
     StockEntry,
 )
 from warehouse.transfers import posiciones_lotes
+from warehouse.fair_destination_policy import validar_feria_por_colegio
 
 
 GRE_REFERENCE_PATTERN = re.compile(r"EG[A-Z0-9]{2}-[0-9]{1,8}\Z")
@@ -143,6 +144,9 @@ def crear_documento_interno(operation_id, actor, key):
             "Esta entrega utiliza un almacén genérico de feria. "
             "Selecciona una feria específica mediante una revisión supervisada antes del despacho."
         )
+    validar_feria_por_colegio(
+        operation.destination, operation.school_id, operation_id=operation.pk,
+    )
     reservations = list(operation.stock_reservations.filter(
         status=DistributionStockReservation.Status.ACTIVE,
     ).order_by("pk"))
@@ -190,6 +194,9 @@ def confirmar_salida(operation_id, actor, *, document_basis, guide_ref="", exemp
         raise BusinessError("La entrega debe continuar preparada antes de su despacho.")
     if not operation.source.is_active or not operation.destination.is_active:
         raise BusinessError("El origen y el destino deben estar activos.")
+    validar_feria_por_colegio(
+        operation.destination, operation.school_id, operation_id=operation.pk,
+    )
 
     # Declaración responsable: NO se consulta ni se confirma aceptación de SUNAT.
     if document_basis == DistributionDispatch.Evidence.EXTERNAL_GUIDE:
