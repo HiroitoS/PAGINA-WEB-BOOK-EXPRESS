@@ -4,6 +4,7 @@ Esta capa NO emite comprobantes tributarios, GRE ni reconoce ventas. La
 documentación tributaria real debe verificarse fuera del sistema cuando aplique.
 """
 from collections import defaultdict
+from uuid import UUID, uuid5
 import re
 
 from django.core.exceptions import ValidationError as BusinessError
@@ -19,7 +20,7 @@ from warehouse.models import (
     DistributionOperation, DistributionOperationEvent, DistributionStockReservation,
     StockEntry,
 )
-from warehouse.transfers import posiciones_lotes
+from warehouse.transfers import posiciones_lotes, registrar_traslado
 from warehouse.fair_destination_policy import validar_feria_por_colegio
 
 
@@ -64,6 +65,16 @@ def output_dispatch(operation):
         "reservation__stock_entry__product",
         "reservation__stock_entry__receipt_line__receipt",
     ))
+    returns = DistributionOperationEvent.objects.filter(
+        operation=operation, action="fair_return_recorded",
+    ).select_related("actor").order_by("created_at", "pk")
+    return_history = [{
+        "id": event.pk, "details": event.current.get("lines", []),
+        "reference": event.current.get("transport_reference"),
+        "received_by": event.current.get("receiver_name"),
+        "recorded_by": event.actor.get_username(),
+        "recorded_at": event.created_at,
+    } for event in returns]
     diagnosis_events = DistributionOperationEvent.objects.filter(
         operation=operation, action="arrival_diagnosed",
     ).select_related("actor").order_by("created_at", "pk")
@@ -111,6 +122,7 @@ def output_dispatch(operation):
             "stock_entry_id": row.reservation.stock_entry_id,
         } for row in lines],
         "total": sum(line.quantity for line in lines),
+        "fair_returns": return_history,
         "arrival_diagnoses": diagnoses,
         "arrival_incidents": [
             {
@@ -466,6 +478,129 @@ def documentar_diferencia_persistente(operation_id, actor, *, incident_id, break
                  "document_number": dispatch.document_number},
     )
     return operation, event
+
+
+@transaction.atomic
+def registrar_retorno_fisico_feria(
+    operation_id, actor, *, idempotency_key, receiver_name,
+    transport_reference, lines, reason, received_confirmed,
+):
+    """B5.3: regreso físico parcial/total desde feria, atómico por lotes.
+
+    Requiere evidencia documental externa comprobada por el operador; no
+    emite, valida ni sustituye la GRE exigible. No registra ventas.
+    """
+    if received_confirmed is not True:
+        raise BusinessError("Confirma la recepción física real de los libros devueltos.")
+    receiver_name = validate_receiver_name(receiver_name)
+    reason = str(reason or "").strip()
+    transport_reference = str(transport_reference or "").strip()
+    if len(reason) < 15:
+        raise BusinessError("Describe el motivo del retorno (mínimo 15 caracteres).")
+    if len(transport_reference) < 8:
+        raise BusinessError(
+            "Registra la referencia del sustento de transporte verificado externamente."
+        )
+    if any(
+        type(item.get("quantity")) is not int or item["quantity"] < 1
+        for item in lines
+    ):
+        raise BusinessError("Las cantidades a devolver deben ser enteros positivos.")
+    quantities = {item["line_id"]: item["quantity"] for item in lines}
+    if not quantities or len(quantities) != len(lines):
+        raise BusinessError("Selecciona lotes distintos y cantidades positivas.")
+
+    operation = _operation_locked(operation_id)
+    if (
+        operation.mode != DistributionOperation.Mode.FAIR
+        or operation.status != DistributionOperation.Status.DELIVERED
+    ):
+        raise BusinessError("El retorno físico solo está habilitado para ferias recibidas.")
+    dispatch = get_object_or_404(
+        DistributionDispatch.objects.select_for_update(), operation=operation,
+        status=DistributionDispatch.Status.RECEIVED,
+    )
+    if dispatch.arrival_incidents.filter(status=DistributionArrivalIncident.Status.OPEN).exists():
+        raise BusinessError("Resuelve primero las incidencias pendientes de la entrega.")
+    request = {
+        "key": str(idempotency_key), "lines": [
+            {"line_id": key, "quantity": quantities[key]} for key in sorted(quantities)
+        ],
+        "receiver_name": receiver_name, "transport_reference": transport_reference,
+        "reason": reason,
+    }
+    existing = DistributionOperationEvent.objects.filter(
+        operation=operation, action="fair_return_recorded",
+        current__key=str(idempotency_key),
+    ).first()
+    if existing is not None:
+        if existing.current.get("request") != request:
+            raise BusinessError("Esta clave ya corresponde a otro retorno de feria.")
+        return operation, existing, False
+
+    dispatched = {
+        line.pk: line
+        for line in dispatch.lines.select_related("reservation__stock_entry").order_by("pk")
+    }
+    if set(quantities) - set(dispatched):
+        raise BusinessError("Uno de los lotes no pertenece a esta entrega.")
+    previous = defaultdict(int)
+    for event in DistributionOperationEvent.objects.filter(
+        operation=operation, action="fair_return_recorded",
+    ):
+        for item in event.current.get("lines", []):
+            previous[item["line_id"]] += item["quantity"]
+    for line_id, quantity in quantities.items():
+        if quantity + previous[line_id] > dispatched[line_id].quantity:
+            raise BusinessError("El retorno supera las unidades entregadas de este lote.")
+
+    # Bloqueo ordenado compartido con movimientos directos y cortesías.
+    entry_ids = sorted({dispatched[line_id].reservation.stock_entry_id for line_id in quantities})
+    entries = list(StockEntry.objects.select_for_update().filter(pk__in=entry_ids).order_by("pk"))
+    positions = posiciones_lotes(entries)
+    requested_by_entry = defaultdict(int)
+    for line_id, quantity in quantities.items():
+        requested_by_entry[dispatched[line_id].reservation.stock_entry_id] += quantity
+    for entry_id, requested in requested_by_entry.items():
+        if positions.get((entry_id, operation.destination_id), 0) < requested:
+            raise BusinessError(
+                "No hay suficientes unidades físicas en la feria para devolver. "
+                "Revisa ventas, reservas y movimientos antes de confirmar."
+            )
+        active = DistributionStockReservation.objects.filter(
+            stock_entry_id=entry_id, source_id=operation.destination_id,
+            status=DistributionStockReservation.Status.ACTIVE,
+        ).aggregate(total=Sum("quantity"))["total"] or 0
+        if positions.get((entry_id, operation.destination_id), 0) - active < requested:
+            raise BusinessError("Parte de las unidades está reservada para otra operación.")
+
+    recorded = []
+    for line_id in sorted(quantities):
+        line = dispatched[line_id]
+        quantity = quantities[line_id]
+        movement, _ = registrar_traslado(
+            actor=actor, stock_entry_id=line.reservation.stock_entry_id,
+            source_id=operation.destination_id, destination_id=operation.source_id,
+            quantity=quantity,
+            idempotency_key=uuid5(UUID(str(idempotency_key)), str(line_id)),
+            entrega_confirmada=True,
+            notes=f"Retorno feria {dispatch.document_number}; {transport_reference}"[:500],
+        )
+        recorded.append({
+            "line_id": line_id, "quantity": quantity,
+            "stock_entry_id": line.reservation.stock_entry_id,
+            "transfer_id": movement.pk,
+        })
+    event = DistributionOperationEvent.objects.create(
+        operation=operation, actor=actor, action="fair_return_recorded",
+        reason=reason[:500],
+        current={
+            "key": str(idempotency_key), "request": request,
+            "lines": recorded, "receiver_name": receiver_name,
+            "transport_reference": transport_reference,
+        },
+    )
+    return operation, event, True
 
 
 @transaction.atomic
