@@ -485,7 +485,7 @@ def registrar_retorno_fisico_feria(
     operation_id, actor, *, idempotency_key, receiver_name,
     transport_reference, lines, reason, received_confirmed,
 ):
-    """B5.3: regreso físico parcial/total desde feria, atómico por lotes.
+    """B5.3: retorno físico de feria o consignación, atómico por lotes.
 
     Requiere evidencia documental externa comprobada por el operador; no
     emite, valida ni sustituye la GRE exigible. No registra ventas.
@@ -517,10 +517,15 @@ def registrar_retorno_fisico_feria(
 
     operation = _operation_locked(operation_id)
     if (
-        operation.mode != DistributionOperation.Mode.FAIR
+        operation.mode not in (
+            DistributionOperation.Mode.FAIR,
+            DistributionOperation.Mode.CONSIGNMENT,
+        )
         or operation.status != DistributionOperation.Status.DELIVERED
     ):
-        raise BusinessError("El retorno físico solo está habilitado para ferias recibidas.")
+        raise BusinessError(
+            "El retorno físico solo está habilitado para ferias y consignaciones recibidas."
+        )
     dispatch = get_object_or_404(
         DistributionDispatch.objects.select_for_update(), operation=operation,
         status=DistributionDispatch.Status.RECEIVED,
@@ -603,6 +608,7 @@ def registrar_retorno_fisico_feria(
             "key": str(idempotency_key), "request": request,
             "lines": recorded, "receiver_name": receiver_name,
             "transport_reference": transport_reference,
+            "mode": operation.mode,
         },
     )
     return operation, event, True
