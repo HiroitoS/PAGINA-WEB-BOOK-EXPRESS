@@ -545,12 +545,12 @@ def registrar_retorno_fisico_feria(
         "reason": reason,
     }
     existing = DistributionOperationEvent.objects.filter(
-        operation=operation, action="fair_return_recorded",
+        operation=operation, action__in=["fair_return_recorded", "consign_return_recorded"],
         current__key=str(idempotency_key),
     ).first()
     if existing is not None:
         if existing.current.get("request") != request:
-            raise BusinessError("Esta clave ya corresponde a otro retorno de feria.")
+            raise BusinessError("Esta clave ya corresponde a otro retorno de mercadería.")
         return operation, existing, False
 
     dispatched = {
@@ -561,7 +561,7 @@ def registrar_retorno_fisico_feria(
         raise BusinessError("Uno de los lotes no pertenece a esta entrega.")
     previous = defaultdict(int)
     for event in DistributionOperationEvent.objects.filter(
-        operation=operation, action="fair_return_recorded",
+        operation=operation, action__in=["fair_return_recorded", "consign_return_recorded"],
     ):
         for item in event.current.get("lines", []):
             previous[item["line_id"]] += item["quantity"]
@@ -579,7 +579,7 @@ def registrar_retorno_fisico_feria(
     for entry_id, requested in requested_by_entry.items():
         if positions.get((entry_id, operation.destination_id), 0) < requested:
             raise BusinessError(
-                "No hay suficientes unidades físicas en la feria para devolver. "
+                "No hay suficientes unidades físicas en el destino para devolver. "
                 "Revisa ventas, reservas y movimientos antes de confirmar."
             )
         active = DistributionStockReservation.objects.filter(
@@ -599,7 +599,7 @@ def registrar_retorno_fisico_feria(
             quantity=quantity,
             idempotency_key=uuid5(UUID(str(idempotency_key)), str(line_id)),
             entrega_confirmada=True,
-            notes=f"Retorno feria {dispatch.document_number}; {transport_reference}"[:500],
+            notes=f"Retorno {operation.get_mode_display()} {dispatch.document_number}; {transport_reference}"[:500],
         )
         recorded.append({
             "line_id": line_id, "quantity": quantity,
