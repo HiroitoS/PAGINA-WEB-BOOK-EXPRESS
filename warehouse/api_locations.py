@@ -17,6 +17,7 @@ from rest_framework.permissions import BasePermission
 
 from accounts.permissions import usuario_tiene_permiso
 from warehouse.models import (
+    DistributionOperation, DistributionOperationLine,
     DistributionStockReservation, StockEntry, StockMovement,
     WarehouseFairEvent, WarehouseLocation,
 )
@@ -284,6 +285,88 @@ class WarehouseLocationViewSet(
                 "lots": len(entries),
             },
             "note": "Los traslados redistribuyen saldos por ubicación sin alterar el total global.",
+        })
+
+    @action(detail=False, methods=["get"], url_path="alertas-reposicion")
+    def replenishment_alerts(self, request):
+        """Demanda logística planificada vs stock libre del almacén.
+
+        No confundir con toda la población de adopciones ni generar compras.
+        Contamos solo entregas pendientes de preparar, evitando duplicar
+        operaciones ya reservadas, preparadas, despachadas o recibidas.
+        """
+        if not usuario_tiene_permiso(request.user, "warehouse.view_receiving"):
+            raise PermissionDenied("No tienes permiso para consultar existencias.")
+        raw = request.query_params.get("location_id", "")
+        if not raw.isdecimal() or int(raw) < 1:
+            raise ValidationError({"location_id": "Selecciona un almacén válido."})
+        location = WarehouseLocation.objects.filter(pk=int(raw), is_active=True).first()
+        if location is None:
+            raise ValidationError({"location_id": "El almacén no está activo."})
+
+        lines = list(DistributionOperationLine.objects.filter(
+            operation__source_id=location.pk,
+            operation__status=DistributionOperation.Status.PLANNED,
+        ).select_related(
+            "product__provider", "operation__school", "operation__adoption",
+        ).order_by("product_id", "operation_id", "pk"))
+        demands = {}
+        for line in lines:
+            record = demands.setdefault(line.product_id, {
+                "product_id": line.product_id,
+                "product": line.product.name,
+                "editorial": line.product.provider.name,
+                "required": 0,
+                "operations": [],
+            })
+            record["required"] += line.quantity_planned
+            record["operations"].append({
+                "operation_id": line.operation_id,
+                "adoption_id": line.operation.adoption_id,
+                "school": line.operation.school.name,
+                "quantity": line.quantity_planned,
+            })
+
+        entries = list(StockEntry.objects.filter(
+            product_id__in=demands,
+        ).select_related("initial_location"))
+        from warehouse.transfers import posiciones_lotes
+        positions = posiciones_lotes(entries)
+        reservations = {
+            row["stock_entry_id"]: row["total"]
+            for row in DistributionStockReservation.objects.filter(
+                stock_entry_id__in=[entry.pk for entry in entries],
+                source_id=location.pk,
+                status=DistributionStockReservation.Status.ACTIVE,
+            ).values("stock_entry_id").annotate(total=Sum("quantity"))
+        }
+        free_by_product = {}
+        for entry in entries:
+            physical = positions.get((entry.pk, location.pk), 0)
+            free = max(0, physical - reservations.get(entry.pk, 0))
+            free_by_product[entry.product_id] = free_by_product.get(entry.product_id, 0) + free
+
+        alerts = []
+        for row in demands.values():
+            free = free_by_product.get(row["product_id"], 0)
+            missing = max(0, row["required"] - free)
+            if missing:
+                alerts.append({
+                    **row, "free": free, "shortage": missing,
+                })
+        alerts.sort(key=lambda x: (-x["shortage"], x["editorial"].casefold(), x["product"].casefold()))
+        return Response({
+            "location_id": location.pk,
+            "location": location.name,
+            "products_with_shortage": len(alerts),
+            "missing_units": sum(row["shortage"] for row in alerts),
+            "results": alerts[:30],
+            "more_products": max(0, len(alerts) - 30),
+            "scope": "Solo entregas por preparar desde este almacén.",
+            "notice": (
+                "Alerta de planificación, no orden automática de compra. "
+                "Contrasta con adopciones y pedidos editoriales antes de solicitar."
+            ),
         })
 
     @action(detail=True, methods=["post"], url_path="conciliar")
