@@ -9,11 +9,12 @@ from django.core.exceptions import ValidationError
 from warehouse.models import DistributionOperation, WarehouseFairEvent, WarehouseLocation
 
 
-def validar_feria_por_colegio(destination, school_id, *, operation_id=None):
+def feria_compartida_entre_colegios(destination, school_id, *, operation_id=None):
+    """Detecta una posible mezcla, incluso en operaciones antiguas ya recibidas."""
     if destination.kind != WarehouseLocation.Kind.FAIR:
-        return
+        return False
     if not WarehouseFairEvent.objects.filter(location_id=destination.pk).exists():
-        return  # El destino genérico está bloqueado al documentar en B4.
+        return False
     operations = DistributionOperation.objects.filter(
         destination_id=destination.pk,
     ).exclude(status=DistributionOperation.Status.CANCELLED).exclude(
@@ -21,7 +22,13 @@ def validar_feria_por_colegio(destination, school_id, *, operation_id=None):
     )
     if operation_id is not None:
         operations = operations.exclude(pk=operation_id)
-    if operations.exists():
+    return operations.exists()
+
+
+def validar_feria_por_colegio(destination, school_id, *, operation_id=None):
+    if feria_compartida_entre_colegios(
+        destination, school_id, operation_id=operation_id,
+    ):
         raise ValidationError(
             "Esta feria ya está vinculada a una entrega de otro colegio. "
             "Cada colegio debe utilizar su feria o depósito temporal específico. "
