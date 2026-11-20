@@ -16,7 +16,10 @@ from rest_framework import mixins, serializers, viewsets
 from rest_framework.permissions import BasePermission
 
 from accounts.permissions import usuario_tiene_permiso
-from warehouse.models import StockEntry, StockMovement, WarehouseFairEvent, WarehouseLocation
+from warehouse.models import (
+    DistributionStockReservation, StockEntry, StockMovement,
+    WarehouseFairEvent, WarehouseLocation,
+)
 from warehouse.location_assignment import conciliar_lotes
 
 
@@ -208,6 +211,13 @@ class WarehouseLocationViewSet(
         ).all())
         balances = _saldos_entradas(entries)
         positions = posiciones_lotes(entries)
+        reservations = {
+            (row["stock_entry_id"], row["source_id"]): row["total"]
+            for row in DistributionStockReservation.objects.filter(
+                stock_entry_id__in=[entry.pk for entry in entries],
+                status=DistributionStockReservation.Status.ACTIVE,
+            ).values("stock_entry_id", "source_id").annotate(total=Sum("quantity"))
+        }
         totals = {}
         unassigned = {"available": 0, "observed": 0, "lots": 0}
         for entry in entries:
@@ -243,11 +253,25 @@ class WarehouseLocationViewSet(
                 amount["missing_cost"] += quantity
             else:
                 amount["value"] += cost * quantity
+        reserved_by_location = {}
+        free_by_location = {}
+        for (entry_id, location_id), amount in positions.items():
+            if amount <= 0:
+                continue
+            reserved = reservations.get((entry_id, location_id), 0)
+            reserved_by_location[location_id] = (
+                reserved_by_location.get(location_id, 0) + reserved
+            )
+            free_by_location[location_id] = (
+                free_by_location.get(location_id, 0) + max(0, amount - reserved)
+            )
         locations = list(WarehouseLocation.objects.order_by("name", "pk"))
         return Response({
             "locations": [{
                 "id": loc.pk, "name": loc.name, "kind": loc.kind,
                 **totals.get(loc.pk, {"available": 0, "observed": 0, "lots": 0}),
+                "reserved": reserved_by_location.get(loc.pk, 0),
+                "free_to_transfer": free_by_location.get(loc.pk, 0),
                 "available_value_reference": str(
                     values.get(loc.pk, {}).get("value", Decimal("0.00"))
                 ),
