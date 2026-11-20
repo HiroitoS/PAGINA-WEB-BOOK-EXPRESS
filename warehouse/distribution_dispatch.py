@@ -21,7 +21,9 @@ from warehouse.models import (
     StockEntry,
 )
 from warehouse.transfers import posiciones_lotes, registrar_traslado
-from warehouse.fair_destination_policy import validar_feria_por_colegio
+from warehouse.fair_destination_policy import (
+    feria_compartida_entre_colegios, validar_feria_por_colegio,
+)
 
 
 GRE_REFERENCE_PATTERN = re.compile(r"EG[A-Z0-9]{2}-[0-9]{1,8}\Z")
@@ -526,6 +528,17 @@ def registrar_retorno_fisico_feria(
     ):
         raise BusinessError(
             "El retorno físico solo está habilitado para ferias y consignaciones recibidas."
+        )
+    if (
+        operation.mode == DistributionOperation.Mode.FAIR
+        and feria_compartida_entre_colegios(
+            operation.destination, operation.school_id, operation_id=operation.pk,
+        )
+    ):
+        raise BusinessError(
+            "Esta feria tiene distribuciones de colegios diferentes. "
+            "Conciliación supervisada obligatoria antes de retornar existencias; "
+            "no uses una devolución para corregir la ubicación histórica."
         )
     dispatch = get_object_or_404(
         DistributionDispatch.objects.select_for_update(), operation=operation,
