@@ -428,9 +428,21 @@ class DistributionOperationViewSet(viewsets.ViewSet):
             selected = pages.page(int(raw_page))
         except EmptyPage:
             raise ValidationError({"page": "No existen adopciones en esa página."})
-        locations = WarehouseLocation.objects.filter(is_active=True).select_related(
+        locations = list(WarehouseLocation.objects.filter(is_active=True).select_related(
             "fair_event",
-        ).order_by("name")
+        ).order_by("name"))
+        active_fair_ids = [
+            loc.pk for loc in locations
+            if loc.kind == WarehouseLocation.Kind.FAIR
+            and getattr(loc, "fair_event", None) is not None
+        ]
+        assigned_school_ids = {loc_id: set() for loc_id in active_fair_ids}
+        for location_id, school_id in DistributionOperation.objects.filter(
+            destination_id__in=active_fair_ids,
+        ).exclude(status=DistributionOperation.Status.CANCELLED).values_list(
+            "destination_id", "school_id",
+        ).distinct():
+            assigned_school_ids[location_id].add(school_id)
         return Response({
             "adoptions": [
                 {
@@ -458,6 +470,7 @@ class DistributionOperationViewSet(viewsets.ViewSet):
                     "fair_event_id": (
                         loc.fair_event.pk if getattr(loc, "fair_event", None) else None
                     ),
+                    "assigned_school_ids": sorted(assigned_school_ids.get(loc.pk, [])),
                     "fair_event_name": (
                         loc.fair_event.name if getattr(loc, "fair_event", None) else None
                     ),
