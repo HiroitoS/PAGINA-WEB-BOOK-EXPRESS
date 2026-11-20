@@ -736,6 +736,93 @@ class DistributionPreparationTests(TestCase):
         self.assertEqual(StockTransfer.objects.count(), 0)
         self.assertNotEqual(posiciones_lotes(self.entries), transit_before)
 
+    def test_b5_3_retorno_parcial_de_feria_no_duplica_saldos(self):
+        from warehouse.transfers import posiciones_lotes
+
+        operation_id = self.plan()
+        client = self.api_client()
+        reserve = client.post(
+            self.endpoint(operation_id, "reservar"), {}, format="json",
+        )
+        self.assertEqual(reserve.status_code, 201, reserve.data)
+        prepared = client.post(
+            self.endpoint(operation_id, "confirmar-preparacion"),
+            {"counts": [
+                {"reservation_id": row["id"], "counted": row["quantity"]}
+                for row in reserve.data["reservations"]
+            ]}, format="json",
+        )
+        self.assertEqual(prepared.status_code, 200, prepared.data)
+        created = client.post(
+            self.endpoint(operation_id, "documento-interno"),
+            {"idempotency_key": str(uuid4())}, format="json",
+        )
+        self.assertEqual(created.status_code, 201, created.data)
+        out = client.post(
+            self.endpoint(operation_id, "confirmar-salida"),
+            {"evidence_kind": "external_guide",
+             "external_guide_reference": "EG01-00000124",
+             "physical_dispatch_confirmed": True}, format="json",
+        )
+        self.assertEqual(out.status_code, 201, out.data)
+        arrival = client.post(
+            self.endpoint(operation_id, "confirmar-llegada"),
+            {
+                "receiver_name": "Responsable Feria",
+                "arrival_confirmed": True,
+                "counts": [
+                    {"line_id": row["id"], "counted": row["quantity"]}
+                    for row in out.data["lines"]
+                ],
+            }, format="json",
+        )
+        self.assertEqual(arrival.status_code, 200, arrival.data)
+        line = arrival.data["lines"][0]
+        entry_id = line["stock_entry_id"]
+        before = posiciones_lotes(self.entries)
+        main_before = before[(entry_id, self.main.pk)]
+        fair_before = before[(entry_id, self.fair.pk)]
+        key = str(uuid4())
+        request = {
+            "idempotency_key": key,
+            "receiver_name": "Responsable Almacen",
+            "transport_reference": "GRE retorno verificada externamente",
+            "reason": "Retorno parcial de sobrantes de la feria escolar",
+            "received_confirmed": True,
+            "lines": [{"line_id": line["id"], "quantity": 2}],
+        }
+        endpoint = self.endpoint(operation_id, "registrar-retorno-feria")
+        count_before = StockTransfer.objects.count()
+        posted = client.post(endpoint, request, format="json")
+        self.assertEqual(posted.status_code, 201, posted.data)
+        self.assertEqual(len(posted.data["fair_returns"]), 1)
+        self.assertEqual(StockTransfer.objects.count(), count_before + 1)
+        after = posiciones_lotes(self.entries)
+        self.assertEqual(after[(entry_id, self.main.pk)], main_before + 2)
+        self.assertEqual(after[(entry_id, self.fair.pk)], fair_before - 2)
+
+        retry = client.post(endpoint, request, format="json")
+        self.assertEqual(retry.status_code, 200, retry.data)
+        self.assertEqual(StockTransfer.objects.count(), count_before + 1)
+        changed = client.post(endpoint, {**request, "lines": [
+            {"line_id": line["id"], "quantity": 1},
+        ]}, format="json")
+        self.assertEqual(changed.status_code, 400, changed.data)
+        self.assertEqual(StockTransfer.objects.count(), count_before + 1)
+
+        excess = client.post(endpoint, {**request,
+            "idempotency_key": str(uuid4()),
+            "lines": [{"line_id": line["id"], "quantity": line["quantity"]}],
+        }, format="json")
+        self.assertEqual(excess.status_code, 400, excess.data)
+        self.assertEqual(StockTransfer.objects.count(), count_before + 1)
+        self.assertEqual(posiciones_lotes(self.entries), after)
+
+        restricted = self.api_client(self.employee).post(endpoint, {
+            **request, "idempotency_key": str(uuid4()),
+        }, format="json")
+        self.assertEqual(restricted.status_code, 403)
+
     def test_b5_servicio_rechaza_conteos_negativos_sin_depender_del_serializer(self):
         """Protege futuras llamadas internas y el flujo de incidencias B5."""
         from types import SimpleNamespace
