@@ -497,9 +497,14 @@ def registrar_retorno_fisico_feria(
     transport_reference = str(transport_reference or "").strip()
     if len(reason) < 15:
         raise BusinessError("Describe el motivo del retorno (mínimo 15 caracteres).")
-    if len(transport_reference) < 8:
+    transport_reference = transport_reference.upper()
+    if (
+        not GRE_REFERENCE_PATTERN.fullmatch(transport_reference)
+        or int(transport_reference.split("-")[1]) == 0
+    ):
         raise BusinessError(
-            "Registra la referencia del sustento de transporte verificado externamente."
+            "Para este retorno registra una GRE verificada externamente "
+            "con formato EG01-00000001; el sistema no consulta SUNAT."
         )
     if any(
         type(item.get("quantity")) is not int or item["quantity"] < 1
