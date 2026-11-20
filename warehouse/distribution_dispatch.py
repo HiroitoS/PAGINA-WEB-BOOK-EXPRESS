@@ -66,7 +66,7 @@ def output_dispatch(operation):
         "reservation__stock_entry__receipt_line__receipt",
     ))
     returns = DistributionOperationEvent.objects.filter(
-        operation=operation, action="fair_return_recorded",
+        operation=operation, action__in=["fair_return_recorded", "consign_return_recorded"],
     ).select_related("actor").order_by("created_at", "pk")
     return_history = [{
         "id": event.pk, "details": event.current.get("lines", []),
@@ -123,6 +123,7 @@ def output_dispatch(operation):
         } for row in lines],
         "total": sum(line.quantity for line in lines),
         "fair_returns": return_history,
+        "destination_returns": return_history,
         "arrival_diagnoses": diagnoses,
         "arrival_incidents": [
             {
@@ -530,6 +531,10 @@ def registrar_retorno_fisico_feria(
         DistributionDispatch.objects.select_for_update(), operation=operation,
         status=DistributionDispatch.Status.RECEIVED,
     )
+    return_action = (
+        "fair_return_recorded" if operation.mode == DistributionOperation.Mode.FAIR
+        else "consign_return_recorded"
+    )
     if dispatch.arrival_incidents.filter(status=DistributionArrivalIncident.Status.OPEN).exists():
         raise BusinessError("Resuelve primero las incidencias pendientes de la entrega.")
     request = {
@@ -602,7 +607,7 @@ def registrar_retorno_fisico_feria(
             "transfer_id": movement.pk,
         })
     event = DistributionOperationEvent.objects.create(
-        operation=operation, actor=actor, action="fair_return_recorded",
+        operation=operation, actor=actor, action=return_action,
         reason=reason[:500],
         current={
             "key": str(idempotency_key), "request": request,
