@@ -985,6 +985,37 @@ class DistributionPreparationTests(TestCase):
         }, format="json")
         self.assertEqual(restricted.status_code, 403)
 
+        # La recepción física observada no inventa GRE: deja seguimiento abierto.
+        # Solo Jefatura registra lo ocurrido, sin fingir cumplimiento tributario.
+        observed = {
+            **request,
+            "idempotency_key": str(uuid4()),
+            "transport_reference": "",
+            "documentation_status": "pending_review",
+            "documentation_note": (
+                "Mercadería recibida físicamente al cierre de feria; la guía "
+                "de transporte no fue presentada y se remitió el caso a Jefatura."
+            ),
+            "lines": [{"line_id": line["id"], "quantity": 1}],
+        }
+        invalid_note = client.post(endpoint, {
+            **observed, "documentation_note": "sin guia",
+        }, format="json")
+        self.assertEqual(invalid_note.status_code, 400, invalid_note.data)
+        self.assertEqual(StockTransfer.objects.count(), count_before + 1)
+        recorded = client.post(endpoint, observed, format="json")
+        self.assertEqual(recorded.status_code, 201, recorded.data)
+        self.assertEqual(StockTransfer.objects.count(), count_before + 2)
+        self.assertTrue(recorded.data["fair_returns"][-1]["documentation_followup_required"])
+        self.assertEqual(recorded.data["fair_returns"][-1]["documentation_status"], "pending_review")
+        self.assertEqual(recorded.data["fair_returns"][-1]["reference"], "")
+        final = posiciones_lotes(self.entries)
+        self.assertEqual(final[(entry_id, self.main.pk)], main_before + 3)
+        self.assertEqual(final[(entry_id, self.fair.pk)], fair_before - 3)
+        repeat_observed = client.post(endpoint, observed, format="json")
+        self.assertEqual(repeat_observed.status_code, 200, repeat_observed.data)
+        self.assertEqual(StockTransfer.objects.count(), count_before + 2)
+
     def test_b5_3_retorno_de_consignacion_idempotente(self):
         from warehouse.transfers import posiciones_lotes
 
