@@ -18,7 +18,7 @@ from rest_framework.permissions import BasePermission
 from accounts.permissions import usuario_tiene_permiso
 from warehouse.models import (
     DistributionOperation, DistributionOperationLine, DistributionDispatch,
-    DistributionOperationEvent,
+    DistributionOperationEvent, DistributionDispatchLine,
     DistributionStockReservation, StockEntry, StockMovement,
     WarehouseFairEvent, WarehouseLocation,
 )
@@ -323,6 +323,12 @@ class WarehouseLocationViewSet(
             operation_id__in=[op.pk for op in operations],
         ).values("operation_id").annotate(quantity=Sum("quantity_planned"))
         planned = {row["operation_id"]: row["quantity"] for row in lines}
+        dispatched_lines = DistributionDispatchLine.objects.filter(
+            dispatch__operation_id__in=[op.pk for op in operations],
+        ).values("dispatch__operation_id").annotate(quantity=Sum("quantity"))
+        physical_delivery = {
+            row["dispatch__operation_id"]: row["quantity"] for row in dispatched_lines
+        }
         results = []
         for op in operations:
             dispatch = dispatched.get(op.pk)
@@ -335,7 +341,7 @@ class WarehouseLocationViewSet(
                 "destination": op.destination.name,
                 "status": op.status,
                 "planned_units": planned.get(op.pk, 0),
-                "delivered_units": planned.get(op.pk, 0) if received else None,
+                "delivered_units": physical_delivery.get(op.pk, 0) if received else None,
                 "returned_units": returned.get(op.pk, 0),
                 "financial_status": "not_integrated",
             })
