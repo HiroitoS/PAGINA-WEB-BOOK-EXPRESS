@@ -202,7 +202,15 @@ class PrepareReturnInput(serializers.Serializer):
 class FairReturnInput(serializers.Serializer):
     idempotency_key = serializers.UUIDField()
     receiver_name = serializers.CharField(max_length=180, trim_whitespace=True)
-    transport_reference = serializers.CharField(min_length=8, max_length=120, trim_whitespace=True)
+    documentation_status = serializers.ChoiceField(
+        choices=("gre", "pending_review"), default="gre",
+    )
+    documentation_note = serializers.CharField(
+        max_length=500, allow_blank=True, required=False, default="",
+    )
+    transport_reference = serializers.CharField(
+        max_length=120, trim_whitespace=True, allow_blank=True, required=False, default="",
+    )
     reason = serializers.CharField(min_length=15, max_length=500, trim_whitespace=True)
     received_confirmed = serializers.BooleanField()
     lines = FairReturnLine(many=True, allow_empty=False)
