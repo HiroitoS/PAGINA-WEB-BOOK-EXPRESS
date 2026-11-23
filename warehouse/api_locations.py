@@ -288,6 +288,50 @@ class WarehouseLocationViewSet(
             "note": "Los traslados redistribuyen saldos por ubicación sin alterar el total global.",
         })
 
+    @action(detail=False, methods=["get"], url_path="retornos-documentacion-pendiente")
+    def pending_return_documents(self, request):
+        """Auditoría documental: recepciones físicas que requieren revisión.
+
+        Consulta solamente; no modifica movimientos ni presume que un
+        documento tributario pendiente haya sido regularizado.
+        """
+        if not usuario_tiene_permiso(request.user, "warehouse.validate_receiving"):
+            raise PermissionDenied("Solo Jefatura puede revisar observaciones documentales.")
+        events = list(DistributionOperationEvent.objects.filter(
+            action__in=("fair_return_recorded", "consign_return_recorded"),
+            current__documentation_followup_required=True,
+        ).select_related(
+            "operation__school", "operation__destination", "operation__source",
+            "actor",
+        ).order_by("-created_at", "-pk")[:101])
+        records = []
+        for event in events[:100]:
+            operation = event.operation
+            records.append({
+                "event_id": event.pk,
+                "operation_id": operation.pk,
+                "mode": operation.mode,
+                "school": operation.school.name,
+                "from_location": operation.destination.name,
+                "to_location": operation.source.name,
+                "received_by": event.current.get("receiver_name", ""),
+                "registered_by": event.actor.get_username(),
+                "registered_at": event.created_at,
+                "quantity": sum(
+                    line.get("quantity", 0) for line in event.current.get("lines", [])
+                ),
+                "documentation_note": event.current.get("documentation_note", ""),
+                "documentation_status": "pending_review",
+            })
+        return Response({
+            "results": records,
+            "more_records": len(events) > 100,
+            "notice": (
+                "Documentación pendiente de revisión. No equivale a GRE emitida, "
+                "aceptada ni a un trámite tributario concluido."
+            ),
+        })
+
     @action(detail=False, methods=["get"], url_path="seguimiento-consignaciones")
     def consignment_tracking(self, request):
         """Seguimiento logístico de consignaciones sin inventar cobros o ventas.
