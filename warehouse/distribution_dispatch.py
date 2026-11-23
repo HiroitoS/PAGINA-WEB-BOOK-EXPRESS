@@ -554,6 +554,23 @@ def preparar_retorno_destino(
         if existing.current.get("request") != request:
             raise BusinessError("Esta clave ya corresponde a otra preparación.")
         return operation, existing, False
+    # Si se pulsa nuevamente «Generar», devolver la constancia vigente:
+    # una nueva clave no debe producir otro documento idéntico pendiente.
+    # Luego de un retorno físico real sí podría prepararse una remesa nueva.
+    last_prepared = DistributionOperationEvent.objects.filter(
+        operation=operation, action="return_prepared",
+    ).order_by("-pk").first()
+    if last_prepared and all(
+        last_prepared.current.get("request", {}).get(field) == request[field]
+        for field in ("lines", "reason")
+    ):
+        returned_after = DistributionOperationEvent.objects.filter(
+            operation=operation,
+            action__in=["fair_return_recorded", "consign_return_recorded"],
+            pk__gt=last_prepared.pk,
+        ).exists()
+        if not returned_after:
+            return operation, last_prepared, False
     dispatched = {
         line.pk: line for line in dispatch.lines.select_related("reservation").order_by("pk")
     }
