@@ -613,6 +613,109 @@ def preparar_retorno_destino(
     return operation, event, True
 
 
+
+def simular_retorno_destino(operation_id, *, lines):
+    """Previsualiza un retorno con datos reales, sin guardar ni mover stock.
+
+    La simulación verifica custodia, cantidades y reservas en el momento de
+    consulta. No autoriza transporte y debe repetirse validación al confirmar.
+    """
+    if not lines or any(
+        type(row.get("line_id")) is not int
+        or type(row.get("quantity")) is not int
+        or row["quantity"] < 1 for row in lines
+    ):
+        raise BusinessError("Indica lotes y cantidades enteras positivas.")
+    quantities = {row["line_id"]: row["quantity"] for row in lines}
+    if len(quantities) != len(lines):
+        raise BusinessError("No repitas lotes en una simulación.")
+    operation = get_object_or_404(
+        DistributionOperation.objects.select_related("source", "destination"),
+        pk=operation_id,
+    )
+    if operation.mode not in (
+        DistributionOperation.Mode.FAIR, DistributionOperation.Mode.CONSIGNMENT,
+    ) or operation.status != DistributionOperation.Status.DELIVERED:
+        raise BusinessError("Solo puedes simular retornos de entregas recibidas.")
+    if (
+        operation.mode == DistributionOperation.Mode.FAIR
+        and feria_compartida_entre_colegios(
+            operation.destination, operation.school_id, operation_id=operation.pk,
+        )
+    ):
+        raise BusinessError("La feria contiene colegios diferentes: requiere conciliación.")
+    dispatch = get_object_or_404(
+        DistributionDispatch, operation=operation, status=DistributionDispatch.Status.RECEIVED,
+    )
+    if dispatch.arrival_incidents.filter(
+        status=DistributionArrivalIncident.Status.OPEN,
+    ).exists():
+        raise BusinessError("Primero resuelve las incidencias de recepción.")
+
+    dispatched = {
+        line.pk: line
+        for line in dispatch.lines.select_related("reservation__stock_entry")
+    }
+    if set(quantities) - set(dispatched):
+        raise BusinessError("Uno de los lotes no corresponde a esta entrega.")
+
+    returned = defaultdict(int)
+    for event in DistributionOperationEvent.objects.filter(
+        operation=operation,
+        action__in=["fair_return_recorded", "consign_return_recorded"],
+    ):
+        for item in event.current.get("lines", []):
+            returned[item["line_id"]] += item["quantity"]
+
+    stock_ids = sorted({
+        dispatched[line_id].reservation.stock_entry_id for line_id in quantities
+    })
+    positions = posiciones_lotes(StockEntry.objects.filter(pk__in=stock_ids))
+    reserved = {
+        row["stock_entry_id"]: row["total"]
+        for row in DistributionStockReservation.objects.filter(
+            source_id=operation.destination_id,
+            stock_entry_id__in=stock_ids,
+            status=DistributionStockReservation.Status.ACTIVE,
+        ).values("stock_entry_id").annotate(total=Sum("quantity"))
+    }
+    by_entry = defaultdict(int)
+    detail = []
+    for line_id, amount in sorted(quantities.items()):
+        original = dispatched[line_id]
+        pending = original.quantity - returned[line_id]
+        if amount > pending:
+            raise BusinessError("La cantidad supera el saldo sin retornar del lote.")
+        entry_id = original.reservation.stock_entry_id
+        by_entry[entry_id] += amount
+        detail.append({
+            "line_id": line_id, "stock_entry_id": entry_id,
+            "quantity": amount, "unreturned_before": pending,
+            "unreturned_after": pending - amount,
+        })
+    for entry_id, requested in by_entry.items():
+        physical = positions.get((entry_id, operation.destination_id), 0)
+        if physical - reserved.get(entry_id, 0) < requested:
+            raise BusinessError(
+                "No hay unidades físicas libres suficientes en el destino para este retorno."
+            )
+    return {
+        "simulated": True,
+        "stock_changed": False,
+        "document_emitted": False,
+        "transport_confirmed": False,
+        "operation_id": operation.pk,
+        "source": operation.destination.name,
+        "destination": operation.source.name,
+        "quantity": sum(quantities.values()),
+        "lines": detail,
+        "notice": (
+            "Simulación sin movimientos, GRE, venta ni registro de recepción. "
+            "Confirmar un retorno real requiere documentación aplicable y validación nueva."
+        ),
+    }
+
+
 @transaction.atomic
 def registrar_retorno_fisico_feria(
     operation_id, actor, *, idempotency_key, receiver_name,
