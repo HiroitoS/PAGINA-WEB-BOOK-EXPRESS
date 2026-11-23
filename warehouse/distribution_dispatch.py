@@ -84,6 +84,11 @@ def output_dispatch(operation):
     return_history = [{
         "id": event.pk, "details": event.current.get("lines", []),
         "reference": event.current.get("transport_reference"),
+        "documentation_status": event.current.get("documentation_status", "gre"),
+        "documentation_note": event.current.get("documentation_note", ""),
+        "documentation_followup_required": event.current.get(
+            "documentation_followup_required", False,
+        ),
         "received_by": event.current.get("receiver_name"),
         "recorded_by": event.actor.get_username(),
         "recorded_at": event.created_at,
