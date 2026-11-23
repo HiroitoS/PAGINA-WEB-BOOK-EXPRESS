@@ -129,6 +129,54 @@ class DistributionPreparationTests(TestCase):
         )
         self.assertEqual(invalid.status_code, 400, invalid.data)
 
+    def test_seguimiento_consignaciones_no_infiere_ventas_ni_abonos(self):
+        client = self.api_client()
+        location = WarehouseLocation.objects.create(
+            code=f"CONS-READ-{uuid4().hex[:8]}", name="Consignación de prueba",
+            kind=WarehouseLocation.Kind.CONSIGNMENT,
+        )
+        item = self.adopcion.items.order_by("pk").first()
+        response = client.post(
+            "/api/admin/erp/almacen/operaciones-distribucion/",
+            {
+                "idempotency_key": str(uuid4()),
+                "adoption_id": self.adopcion.pk,
+                "mode": "consignment",
+                "source_id": self.main.pk,
+                "destination_id": location.pk,
+                "operation_name": "Consignación sin cobros de prueba",
+                "responsible_name": "Responsable de prueba",
+                "items": [{"product_id": item.product_id, "quantity": 5}],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        url = "/api/admin/erp/almacen/ubicaciones/seguimiento-consignaciones/"
+        result = client.get(url)
+        self.assertEqual(result.status_code, 200, result.data)
+        self.assertEqual(result.data["count"], 1)
+        record = result.data["results"][0]
+        self.assertEqual(record["operation_id"], response.data["id"])
+        self.assertEqual(record["planned_units"], 5)
+        self.assertIsNone(record["delivered_units"])
+        self.assertEqual(record["returned_units"], 0)
+        self.assertEqual(record["financial_status"], "not_integrated")
+        self.assertEqual(StockTransfer.objects.count(), 0)
+        denied = self.api_client(self.employee).get(url)
+        self.assertEqual(denied.status_code, 403)
+
+    def test_feria_se_agrupa_por_colegio_sin_duplicar_custodia(self):
+        operation_id = self.plan()
+        client = self.api_client()
+        response = client.get("/api/admin/erp/almacen/ferias/")
+        self.assertEqual(response.status_code, 200, response.data)
+        fair = next(row for row in response.data if row["location_id"] == self.fair.pk)
+        self.assertEqual(fair["schools"], [self.adopcion.school.name])
+        self.assertFalse(fair["school_conflict"])
+        self.assertEqual(DistributionOperation.objects.count(), 1)
+        self.assertEqual(DistributionOperation.objects.get(pk=operation_id).destination_id, self.fair.pk)
+        self.assertEqual(StockTransfer.objects.count(), 0)
+
     def test_reserva_no_traslada_y_reintento_no_duplica(self):
         op_id = self.plan()
         client = self.api_client()
