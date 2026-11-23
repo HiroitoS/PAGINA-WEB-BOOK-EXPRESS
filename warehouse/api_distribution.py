@@ -27,7 +27,7 @@ from warehouse.distribution_preparation import (
 from warehouse.distribution_dispatch import (
     crear_documento_interno, confirmar_salida, confirmar_recepcion_destino,
     documentar_diferencia_persistente, preparar_retorno_destino,
-    registrar_retorno_fisico_feria, output_dispatch,
+    registrar_retorno_fisico_feria, simular_retorno_destino, output_dispatch,
     reportar_diferencia_llegada, resolver_diferencia_por_reconteo,
 )
 from warehouse.fair_destination_policy import (
@@ -892,6 +892,23 @@ class DistributionOperationViewSet(viewsets.ViewSet):
         response = output_dispatch(operation)
         response["created_incident_id"] = incident.pk
         return Response(response, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"], url_path="simular-retorno-destino")
+    def simulate_destination_return(self, request, pk=None):
+        """Ensayo seguro: sin GRE ficticia, documento ni movimientos de stock."""
+        self._authorize(request, write=False)
+        if not usuario_tiene_permiso(request.user, "warehouse.view_receiving"):
+            raise PermissionDenied("No tienes permiso para consultar retornos.")
+        class SimulationInput(serializers.Serializer):
+            lines = FairReturnLine(many=True, allow_empty=False)
+
+        form = SimulationInput(data=request.data)
+        form.is_valid(raise_exception=True)
+        try:
+            preview = simular_retorno_destino(pk, **form.validated_data)
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
+        return Response(preview, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"], url_path="preparar-retorno-destino")
     def prepare_destination_return(self, request, pk=None):
