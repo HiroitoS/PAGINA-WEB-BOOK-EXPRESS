@@ -898,6 +898,18 @@ class DistributionPreparationTests(TestCase):
         self.assertEqual(repeated_prep.data["internal_return_number"],
                          prep.data["internal_return_number"])
         self.assertEqual(StockTransfer.objects.count(), transfer_before_preparing)
+        # Doble clic o reintento con clave nueva no crea otra numeración BE-RI
+        # si el documento previo sigue pendiente y los datos son idénticos.
+        repeated_new_key = client.post(prepare_url, {
+            **preparation_payload, "idempotency_key": str(uuid4()),
+        }, format="json")
+        self.assertEqual(repeated_new_key.status_code, 200, repeated_new_key.data)
+        self.assertEqual(
+            repeated_new_key.data["internal_return_number"],
+            prep.data["internal_return_number"],
+        )
+        self.assertEqual(len(repeated_new_key.data["internal_return_plans"]), 1)
+        self.assertEqual(posiciones_lotes(self.entries), before)
         invalid_prep = client.post(prepare_url, {
             **preparation_payload, "idempotency_key": str(uuid4()),
             "lines": [{"line_id": line["id"], "quantity": line["quantity"] + 1}],
