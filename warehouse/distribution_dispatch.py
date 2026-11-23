@@ -720,6 +720,7 @@ def simular_retorno_destino(operation_id, *, lines):
 def registrar_retorno_fisico_feria(
     operation_id, actor, *, idempotency_key, receiver_name,
     transport_reference, lines, reason, received_confirmed,
+    documentation_status="gre", documentation_note="",
 ):
     """B5.3: retorno físico de feria o consignación, atómico por lotes.
 
@@ -734,14 +735,27 @@ def registrar_retorno_fisico_feria(
     if len(reason) < 15:
         raise BusinessError("Describe el motivo del retorno (mínimo 15 caracteres).")
     transport_reference = transport_reference.upper()
-    if (
-        not GRE_REFERENCE_PATTERN.fullmatch(transport_reference)
-        or int(transport_reference.split("-")[1]) == 0
-    ):
-        raise BusinessError(
-            "Para este retorno registra una GRE verificada externamente "
-            "con formato EG01-00000001; el sistema no consulta SUNAT."
-        )
+    documentation_note = str(documentation_note or "").strip()
+    if documentation_status not in ("gre", "pending_review"):
+        raise BusinessError("Estado de documentación del retorno no válido.")
+    if documentation_status == "gre":
+        if (
+            not GRE_REFERENCE_PATTERN.fullmatch(transport_reference)
+            or int(transport_reference.split("-")[1]) == 0
+        ):
+            raise BusinessError(
+                "Registra la GRE real del traslado. El ERP todavía no verifica SUNAT."
+            )
+        if documentation_note:
+            raise BusinessError("No agregues observación pendiente a una GRE registrada.")
+    else:
+        if transport_reference:
+            raise BusinessError("No ingreses una referencia GRE para documentación pendiente.")
+        if len(documentation_note) < 40:
+            raise BusinessError(
+                "Para documentar libros ya recibidos sin GRE, Jefatura debe registrar "
+                "una observación de al menos 40 caracteres para seguimiento tributario."
+            )
     if any(
         type(item.get("quantity")) is not int or item["quantity"] < 1
         for item in lines
@@ -789,6 +803,8 @@ def registrar_retorno_fisico_feria(
         ],
         "receiver_name": receiver_name, "transport_reference": transport_reference,
         "reason": reason,
+        "documentation_status": documentation_status,
+        "documentation_note": documentation_note,
     }
     existing = DistributionOperationEvent.objects.filter(
         operation=operation, action__in=["fair_return_recorded", "consign_return_recorded"],
@@ -845,7 +861,11 @@ def registrar_retorno_fisico_feria(
             quantity=quantity,
             idempotency_key=uuid5(UUID(str(idempotency_key)), str(line_id)),
             entrega_confirmada=True,
-            notes=f"Retorno {operation.get_mode_display()} {dispatch.document_number}; {transport_reference}"[:500],
+            notes=(
+                f"Recepción física de retorno {dispatch.document_number}; "
+                f"documentación {documentation_status}; "
+                f"{transport_reference or 'PENDIENTE DE REGULARIZACIÓN DOCUMENTAL'}"
+            )[:500],
         )
         recorded.append({
             "line_id": line_id, "quantity": quantity,
@@ -859,6 +879,9 @@ def registrar_retorno_fisico_feria(
             "key": str(idempotency_key), "request": request,
             "lines": recorded, "receiver_name": receiver_name,
             "transport_reference": transport_reference,
+            "documentation_status": documentation_status,
+            "documentation_note": documentation_note,
+            "documentation_followup_required": documentation_status == "pending_review",
             "mode": operation.mode,
         },
     )
