@@ -917,6 +917,25 @@ class DistributionPreparationTests(TestCase):
         self.assertEqual(invalid_prep.status_code, 400, invalid_prep.data)
         self.assertEqual(posiciones_lotes(self.entries), before)
 
+        # Simulación segura: utiliza el stock de prueba y no modifica inventario.
+        simulation_url = self.endpoint(operation_id, "simular-retorno-destino")
+        preview = client.post(simulation_url, {
+            "lines": [{"line_id": line["id"], "quantity": 2}],
+        }, format="json")
+        self.assertEqual(preview.status_code, 200, preview.data)
+        self.assertTrue(preview.data["simulated"])
+        self.assertFalse(preview.data["stock_changed"])
+        self.assertFalse(preview.data["document_emitted"])
+        self.assertEqual(preview.data["quantity"], 2)
+        self.assertEqual(preview.data["lines"][0]["unreturned_after"], line["quantity"] - 2)
+        self.assertEqual(posiciones_lotes(self.entries), before)
+        self.assertEqual(StockTransfer.objects.count(), transfer_before_preparing)
+        too_much = client.post(simulation_url, {
+            "lines": [{"line_id": line["id"], "quantity": line["quantity"] + 1}],
+        }, format="json")
+        self.assertEqual(too_much.status_code, 400, too_much.data)
+        self.assertEqual(posiciones_lotes(self.entries), before)
+
         key = str(uuid4())
         request = {
             "idempotency_key": key,
