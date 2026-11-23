@@ -59,6 +59,8 @@ class WarehouseFairEventTests(TestCase):
         self.assertEqual(get_response.status_code, 200)
         self.assertEqual(len(get_response.data), 1)
         self.assertEqual(get_response.data[0]["location_id"], loc.pk)
+        self.assertEqual(get_response.data[0]["schools"], [])
+        self.assertFalse(get_response.data[0]["school_conflict"])
 
     def test_reintento_no_crea_segunda_ubicacion(self):
         client = self.client_as(self.admin)
