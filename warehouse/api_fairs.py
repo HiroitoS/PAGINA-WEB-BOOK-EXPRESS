@@ -10,7 +10,7 @@ from rest_framework.response import Response
 from warehouse.api_locations import (
     WarehouseLocationAccess, WarehouseLocationSerializer,
 )
-from warehouse.models import WarehouseFairEvent, WarehouseLocation
+from warehouse.models import DistributionOperation, WarehouseFairEvent, WarehouseLocation
 
 
 class FairEventInput(serializers.Serializer):
@@ -31,7 +31,7 @@ class FairEventInput(serializers.Serializer):
         return attrs
 
 
-def fair_output(event):
+def fair_output(event, school_names=None):
     return {
         "id": event.pk,
         "reference": str(event.reference),
@@ -43,6 +43,8 @@ def fair_output(event):
         "responsible_name": event.responsible_name,
         "notes": event.notes,
         "location_id": event.location_id,
+        "schools": school_names if school_names is not None else [],
+        "school_conflict": len(school_names or []) > 1,
         "location_name": event.location.name,
         "location_code": event.location.code,
         "is_active": event.location.is_active,
@@ -69,7 +71,18 @@ class WarehouseFairEventViewSet(viewsets.ViewSet):
         events = WarehouseFairEvent.objects.select_related(
             "location",
         ).order_by("-starts_on", "-pk")[:200]
-        return Response([fair_output(event) for event in events])
+        school_by_location = {}
+        assigned = DistributionOperation.objects.filter(
+            destination_id__in=[event.location_id for event in events],
+        ).exclude(
+            status=DistributionOperation.Status.CANCELLED,
+        ).values_list("destination_id", "school__name").distinct()
+        for location_id, school_name in assigned:
+            school_by_location.setdefault(location_id, set()).add(school_name)
+        return Response([
+            fair_output(event, sorted(school_by_location.get(event.location_id, set())))
+            for event in events
+        ])
 
     def retrieve(self, request, pk=None):
         from django.shortcuts import get_object_or_404
@@ -77,7 +90,12 @@ class WarehouseFairEventViewSet(viewsets.ViewSet):
         event = get_object_or_404(
             WarehouseFairEvent.objects.select_related("location"), pk=pk,
         )
-        return Response(fair_output(event))
+        schools = sorted(set(DistributionOperation.objects.filter(
+            destination_id=event.location_id,
+        ).exclude(status=DistributionOperation.Status.CANCELLED).values_list(
+            "school__name", flat=True,
+        )))
+        return Response(fair_output(event, schools))
 
     def create(self, request):
         form = FairEventInput(data=request.data)
