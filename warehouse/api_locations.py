@@ -17,7 +17,8 @@ from rest_framework.permissions import BasePermission
 
 from accounts.permissions import usuario_tiene_permiso
 from warehouse.models import (
-    DistributionOperation, DistributionOperationLine,
+    DistributionOperation, DistributionOperationLine, DistributionDispatch,
+    DistributionOperationEvent,
     DistributionStockReservation, StockEntry, StockMovement,
     WarehouseFairEvent, WarehouseLocation,
 )
@@ -285,6 +286,68 @@ class WarehouseLocationViewSet(
                 "lots": len(entries),
             },
             "note": "Los traslados redistribuyen saldos por ubicación sin alterar el total global.",
+        })
+
+    @action(detail=False, methods=["get"], url_path="seguimiento-consignaciones")
+    def consignment_tracking(self, request):
+        """Seguimiento logístico de consignaciones sin inventar cobros o ventas.
+
+        Un despacho recibido no equivale a una venta. El sistema financiero
+        todavía no relaciona abonos, comprobantes ni liquidación final.
+        """
+        if not usuario_tiene_permiso(request.user, "warehouse.view_receiving"):
+            raise PermissionDenied("No tienes permiso para consultar consignaciones.")
+
+        operations = list(DistributionOperation.objects.filter(
+            mode=DistributionOperation.Mode.CONSIGNMENT,
+        ).exclude(
+            status=DistributionOperation.Status.CANCELLED,
+        ).select_related(
+            "school", "source", "destination",
+        ).order_by("-created_at", "-pk")[:60])
+        dispatched = {
+            row.operation_id: row
+            for row in DistributionDispatch.objects.filter(
+                operation_id__in=[op.pk for op in operations],
+            )
+        }
+        returned = {}
+        for event in DistributionOperationEvent.objects.filter(
+            operation_id__in=[op.pk for op in operations],
+            action__in=("consign_return_recorded", "fair_return_recorded"),
+        ):
+            returned[event.operation_id] = returned.get(event.operation_id, 0) + sum(
+                item["quantity"] for item in event.current.get("lines", [])
+            )
+        lines = DistributionOperationLine.objects.filter(
+            operation_id__in=[op.pk for op in operations],
+        ).values("operation_id").annotate(quantity=Sum("quantity_planned"))
+        planned = {row["operation_id"]: row["quantity"] for row in lines}
+        results = []
+        for op in operations:
+            dispatch = dispatched.get(op.pk)
+            received = bool(dispatch and dispatch.status == DistributionDispatch.Status.RECEIVED)
+            results.append({
+                "operation_id": op.pk,
+                "name": op.operation_name,
+                "school": op.school.name,
+                "source": op.source.name,
+                "destination": op.destination.name,
+                "status": op.status,
+                "planned_units": planned.get(op.pk, 0),
+                "delivered_units": planned.get(op.pk, 0) if received else None,
+                "returned_units": returned.get(op.pk, 0),
+                "financial_status": "not_integrated",
+            })
+        return Response({
+            "count": len(results),
+            "results": results,
+            "limited": len(results) == 60,
+            "notice": (
+                "Seguimiento logístico, no liquidación comercial. "
+                "Los pagos parciales, ventas, comprobantes y deuda por cobrar "
+                "se integrarán en Ventas y Tesorería. No infieras ventas desde devoluciones."
+            ),
         })
 
     @action(detail=False, methods=["get"], url_path="alertas-reposicion")
