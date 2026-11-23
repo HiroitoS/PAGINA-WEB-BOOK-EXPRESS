@@ -1015,6 +1015,18 @@ class DistributionPreparationTests(TestCase):
         repeat_observed = client.post(endpoint, observed, format="json")
         self.assertEqual(repeat_observed.status_code, 200, repeat_observed.data)
         self.assertEqual(StockTransfer.objects.count(), count_before + 2)
+        followup_url = "/api/admin/erp/almacen/ubicaciones/retornos-documentacion-pendiente/"
+        followup = client.get(followup_url)
+        self.assertEqual(followup.status_code, 200, followup.data)
+        item = next(
+            record for record in followup.data["results"]
+            if record["operation_id"] == operation_id
+        )
+        self.assertEqual(item["quantity"], 1)
+        self.assertEqual(item["documentation_status"], "pending_review")
+        self.assertFalse("external_guide_reference" in item)
+        denied_followup = self.api_client(self.employee).get(followup_url)
+        self.assertEqual(denied_followup.status_code, 403)
 
     def test_b5_3_retorno_de_consignacion_idempotente(self):
         from warehouse.transfers import posiciones_lotes
