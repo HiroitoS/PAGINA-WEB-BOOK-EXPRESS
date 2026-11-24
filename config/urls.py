@@ -4,6 +4,7 @@ from django.contrib import admin
 from django.urls import include, path
 
 from rest_framework.routers import DefaultRouter
+from core.sunat_api import SunatGreConnectionView
 
 from accounts.views import AdminUserViewSet, AdminGroupViewSet
 
@@ -82,6 +83,7 @@ urlpatterns = [
     path("admin/", admin.site.urls),
 
     path("api/auth/", include("accounts.urls")),
+    path("api/admin/erp/sunat/gre/conexion/", SunatGreConnectionView.as_view(), name="sunat-gre-connection"),
 
     path("api/public/", include(public_router.urls)),
     path("api/admin/", include(admin_router.urls)),
