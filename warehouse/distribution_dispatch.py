@@ -117,6 +117,29 @@ def output_dispatch(operation):
         "status": "sales_not_integrated" if dispatch.status == DistributionDispatch.Status.RECEIVED else "awaiting_receipt",
         "can_close": False,
     }
+    closure_reports = list(DistributionOperationEvent.objects.filter(
+        operation=operation, action="close_diff_reported",
+    ).select_related("actor").order_by("created_at", "pk"))
+    closure_finds = list(DistributionOperationEvent.objects.filter(
+        operation=operation, action="close_diff_found",
+    ).select_related("actor").order_by("created_at", "pk"))
+    close_incidents = [{
+        "id": event.pk, "line_id": event.current["line_id"],
+        "quantity": event.current["quantity"], "category": event.current["category"],
+        "note": event.current["note"], "reported_at": event.created_at,
+        "reported_by": event.actor.get_username(),
+        "found_quantity": sum(
+            found.current["quantity"] for found in closure_finds
+            if found.current.get("report_id") == event.pk
+        ),
+        "findings": [{
+            "id": found.pk, "quantity": found.current["quantity"],
+            "location_note": found.current["location_note"],
+            "recorded_at": found.created_at,
+            "recorded_by": found.actor.get_username(),
+        } for found in closure_finds if found.current.get("report_id") == event.pk],
+        "status": "under_review",
+    } for event in closure_reports]
     diagnosis_events = DistributionOperationEvent.objects.filter(
         operation=operation, action="arrival_diagnosed",
     ).select_related("actor").order_by("created_at", "pk")
@@ -165,6 +188,7 @@ def output_dispatch(operation):
         } for row in lines],
         "total": dispatched_total,
         "reconciliation": reconciliation,
+        "close_incidents": close_incidents,
         "fair_returns": return_history,
         "destination_returns": return_history,
         "internal_return_plans": internal_return_plans,
