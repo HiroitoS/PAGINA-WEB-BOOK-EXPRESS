@@ -523,6 +523,12 @@ def preparar_retorno_destino(
         raise BusinessError("No repitas un mismo lote.")
 
     operation = _operation_locked(operation_id)
+    if (documentation_status == "internal_control"
+            and operation.mode != DistributionOperation.Mode.FAIR):
+        raise BusinessError(
+            "El control interno simplificado corresponde solo a ferias; "
+            "en consignaciones revisa la documentación del traslado."
+        )
     if (
         operation.mode not in (
             DistributionOperation.Mode.FAIR,
@@ -729,8 +735,8 @@ def registrar_retorno_fisico_feria(
 ):
     """B5.3: retorno físico de feria o consignación, atómico por lotes.
 
-    Requiere evidencia documental externa comprobada por el operador; no
-    emite, valida ni sustituye la GRE exigible. No registra ventas.
+    Distingue registro logístico interno de sustento tributario externo.
+    El registro interno nunca acredita GRE ni exoneración. No registra ventas.
     """
     if received_confirmed is not True:
         raise BusinessError("Confirma la recepción física real de los libros devueltos.")
@@ -741,9 +747,17 @@ def registrar_retorno_fisico_feria(
         raise BusinessError("Describe el motivo del retorno (mínimo 15 caracteres).")
     transport_reference = transport_reference.upper()
     documentation_note = str(documentation_note or "").strip()
-    if documentation_status not in ("gre", "pending_review"):
+    if documentation_status not in ("gre", "pending_review", "internal_control"):
         raise BusinessError("Estado de documentación del retorno no válido.")
-    if documentation_status == "gre":
+    if documentation_status == "internal_control":
+        if transport_reference:
+            raise BusinessError("No mezcles referencia GRE con control interno.")
+        documentation_note = (
+            "Retorno físico de feria registrado mediante control interno Book Express; "
+            "no se ha acreditado la documentación tributaria del transporte. "
+            "Jefatura debe revisar el sustento aplicable."
+        )
+    elif documentation_status == "gre":
         if (
             not GRE_REFERENCE_PATTERN.fullmatch(transport_reference)
             or int(transport_reference.split("-")[1]) == 0
@@ -886,7 +900,7 @@ def registrar_retorno_fisico_feria(
             "transport_reference": transport_reference,
             "documentation_status": documentation_status,
             "documentation_note": documentation_note,
-            "documentation_followup_required": documentation_status == "pending_review",
+            "documentation_followup_required": documentation_status != "gre",
             "mode": operation.mode,
         },
     )
