@@ -951,7 +951,7 @@ class DistributionPreparationTests(TestCase):
         self.assertEqual(sum(line["quantity"] for line in receipt["details"]), 2)
         self.assertEqual(receipt["source_document"], posted.data["document_number"])
         self.assertTrue(receipt["reason"])
-        self.assertEqual(receipt["received_by"], "Nombre Apellido")
+        self.assertEqual(receipt["received_by"], "Responsable Almacen")
         self.assertEqual(summary["not_returned"], line["quantity"] - 2)
         self.assertIsNone(summary["sold"])
         self.assertIsNone(summary["difference"])
