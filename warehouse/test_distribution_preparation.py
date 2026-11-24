@@ -872,7 +872,42 @@ class DistributionPreparationTests(TestCase):
             }, format="json",
         )
         self.assertEqual(arrival.status_code, 200, arrival.data)
+        # El recuento y hallazgo posterior son eventos auditables sin stock ficticio.
         line = arrival.data["lines"][0]
+        difference_url = self.endpoint(operation_id, "registrar-diferencia-cierre")
+        report_payload = {
+            "idempotency_key": str(uuid4()),
+            "line_id": line["id"],
+            "quantity": 2,
+            "category": "not_found",
+            "note": "En el conteo de cierre no se localizaron dos ejemplares.",
+        }
+        stock_before_note = posiciones_lotes(self.entries)
+        report = client.post(difference_url, report_payload, format="json")
+        self.assertEqual(report.status_code, 201, report.data)
+        report_id = report.data["close_incident_id"]
+        self.assertEqual(posiciones_lotes(self.entries), stock_before_note)
+        repeated_report = client.post(difference_url, report_payload, format="json")
+        self.assertEqual(repeated_report.status_code, 200, repeated_report.data)
+        self.assertEqual(repeated_report.data["close_incident_id"], report_id)
+        finding_url = self.endpoint(operation_id, "registrar-hallazgo-cierre")
+        finding_payload = {
+            "idempotency_key": str(uuid4()),
+            "report_id": report_id, "quantity": 1,
+            "location_note": "Un ejemplar apareció debajo de una mesa durante segundo conteo.",
+        }
+        found = client.post(finding_url, finding_payload, format="json")
+        self.assertEqual(found.status_code, 201, found.data)
+        self.assertEqual(found.data["close_incidents"][0]["found_quantity"], 1)
+        self.assertEqual(posiciones_lotes(self.entries), stock_before_note)
+        repeat_found = client.post(finding_url, finding_payload, format="json")
+        self.assertEqual(repeat_found.status_code, 200, repeat_found.data)
+        over_found = client.post(finding_url, {
+            **finding_payload, "idempotency_key": str(uuid4()), "quantity": 2,
+        }, format="json")
+        self.assertEqual(over_found.status_code, 400, over_found.data)
+        self.assertFalse(found.data["reconciliation"]["can_close"])
+
         entry_id = line["stock_entry_id"]
         before = posiciones_lotes(self.entries)
         main_before = before[(entry_id, self.main.pk)]
