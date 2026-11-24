@@ -1217,6 +1217,15 @@ class DistributionPreparationTests(TestCase):
         self.assertEqual(posted.status_code, 201, posted.data)
         self.assertEqual(len(posted.data["destination_returns"]), 1)
         self.assertEqual(posted.data["destination_returns"][0]["details"][0]["quantity"], 2)
+        receipt = posted.data["destination_returns"][0]
+        self.assertTrue(receipt["receipt_number"].startswith("BE-RC-"))
+        self.assertEqual(receipt["received_by"], "Responsable Almacen")
+        self.assertEqual(posted.data["reconciliation"]["delivered"], sum(row["quantity"] for row in arrival.data["lines"]))
+        self.assertEqual(posted.data["reconciliation"]["returned"], 2)
+        self.assertEqual(posted.data["reconciliation"]["not_returned"], sum(row["quantity"] for row in arrival.data["lines"]) - 2)
+        self.assertIsNone(posted.data["reconciliation"]["sold"])
+        self.assertFalse(posted.data["reconciliation"]["can_close"])
+
         self.assertEqual(StockTransfer.objects.count(), count_before + 1)
         after = posiciones_lotes(self.entries)
         self.assertEqual(after[(entry_id, self.main.pk)], main_before + 2)
