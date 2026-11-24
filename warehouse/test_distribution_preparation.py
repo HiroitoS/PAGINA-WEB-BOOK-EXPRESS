@@ -1040,7 +1040,7 @@ class DistributionPreparationTests(TestCase):
         denied_followup = self.api_client(self.employee).get(followup_url)
         self.assertEqual(denied_followup.status_code, 403)
 
-    def test_b5_retorno_punto_venta_con_be_ri_y_saldos_sin_ventas_inferidas(self):
+    def test_b5_retorno_directo_punto_venta_con_be_rc_y_saldos_sin_ventas_inferidas(self):
         from warehouse.transfers import posiciones_lotes
 
         store = WarehouseLocation.objects.create(
@@ -1095,14 +1095,6 @@ class DistributionPreparationTests(TestCase):
         main_before = before[(line["stock_entry_id"], self.main.pk)]
         store_before = before[(line["stock_entry_id"], store.pk)]
         request_lines = [{"line_id": line["id"], "quantity": 2}]
-        plan = client.post(self.endpoint(op_id, "preparar-retorno-destino"), {
-            "idempotency_key": str(uuid4()),
-            "lines": request_lines,
-            "reason": "Cierre y sobrantes del punto de venta",
-        }, format="json")
-        self.assertEqual(plan.status_code, 201, plan.data)
-        self.assertTrue(plan.data["internal_return_number"].startswith("BE-RI-"))
-        self.assertEqual(posiciones_lotes(self.entries), before)
         request = {
             "idempotency_key": str(uuid4()),
             "receiver_name": "Encargado Almacen",
@@ -1118,6 +1110,11 @@ class DistributionPreparationTests(TestCase):
         self.assertEqual(done.status_code, 201, done.data)
         self.assertEqual(done.data["reconciliation"]["delivered"], 10)
         self.assertEqual(done.data["reconciliation"]["returned"], 2)
+        receipt = done.data["destination_returns"][-1]
+        self.assertTrue(receipt["receipt_number"].startswith("BE-RC-"))
+        self.assertEqual(sum(item["quantity"] for item in receipt["details"]), 2)
+        self.assertFalse(done.data["internal_return_plans"])
+
         self.assertEqual(done.data["reconciliation"]["not_returned"], 8)
         self.assertIsNone(done.data["reconciliation"]["sold"])
         self.assertFalse(done.data["reconciliation"]["can_close"])
