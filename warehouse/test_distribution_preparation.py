@@ -1102,6 +1102,14 @@ class DistributionPreparationTests(TestCase):
             "lines": [{"line_id": line["id"], "quantity": 2}],
         }
         endpoint = self.endpoint(operation_id, "registrar-retorno-destino")
+        # No permitir que consignación utilice modalidad interna de feria.
+        invalid_internal = client.post(endpoint, {
+            **request,
+            "idempotency_key": str(uuid4()),
+            "transport_reference": "",
+            "documentation_status": "internal_control",
+        }, format="json")
+        self.assertEqual(invalid_internal.status_code, 400, invalid_internal.data)
         count_before = StockTransfer.objects.count()
         posted = client.post(endpoint, request, format="json")
         self.assertEqual(posted.status_code, 201, posted.data)
