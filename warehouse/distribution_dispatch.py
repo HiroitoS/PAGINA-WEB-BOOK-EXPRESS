@@ -523,12 +523,6 @@ def preparar_retorno_destino(
         raise BusinessError("No repitas un mismo lote.")
 
     operation = _operation_locked(operation_id)
-    if (documentation_status == "internal_control"
-            and operation.mode != DistributionOperation.Mode.FAIR):
-        raise BusinessError(
-            "El control interno simplificado corresponde solo a ferias; "
-            "en consignaciones revisa la documentación del traslado."
-        )
     if (
         operation.mode not in (
             DistributionOperation.Mode.FAIR,
@@ -683,6 +677,12 @@ def registrar_retorno_fisico_feria(
         raise BusinessError("Selecciona lotes distintos y cantidades positivas.")
 
     operation = _operation_locked(operation_id)
+    if (documentation_status == "internal_control"
+            and operation.mode != DistributionOperation.Mode.FAIR):
+        raise BusinessError(
+            "El control interno simplificado corresponde solo a ferias; "
+            "en consignaciones revisa la documentación del traslado."
+        )
     if (
         operation.mode not in (
             DistributionOperation.Mode.FAIR,
