@@ -944,7 +944,7 @@ class DistributionPreparationTests(TestCase):
         self.assertEqual(after[(entry_id, self.main.pk)], main_before + 2)
         self.assertEqual(after[(entry_id, self.fair.pk)], fair_before - 2)
         summary = posted.data["reconciliation"]
-        self.assertEqual(summary["delivered"], line["quantity"])
+        self.assertEqual(summary["delivered"], sum(row["quantity"] for row in arrival.data["lines"]))
         self.assertEqual(summary["returned"], 2)
         receipt = posted.data["fair_returns"][-1]
         self.assertTrue(receipt["receipt_number"].startswith("BE-RC-"))
@@ -952,7 +952,7 @@ class DistributionPreparationTests(TestCase):
         self.assertEqual(receipt["source_document"], posted.data["document_number"])
         self.assertTrue(receipt["reason"])
         self.assertEqual(receipt["received_by"], "Responsable Almacen")
-        self.assertEqual(summary["not_returned"], line["quantity"] - 2)
+        self.assertEqual(summary["not_returned"], sum(row["quantity"] for row in arrival.data["lines"]) - 2)
         self.assertIsNone(summary["sold"])
         self.assertIsNone(summary["difference"])
         self.assertEqual(summary["status"], "sales_not_integrated")
