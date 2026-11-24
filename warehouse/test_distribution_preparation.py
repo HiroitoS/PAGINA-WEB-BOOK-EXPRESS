@@ -943,6 +943,14 @@ class DistributionPreparationTests(TestCase):
         after = posiciones_lotes(self.entries)
         self.assertEqual(after[(entry_id, self.main.pk)], main_before + 2)
         self.assertEqual(after[(entry_id, self.fair.pk)], fair_before - 2)
+        summary = posted.data["reconciliation"]
+        self.assertEqual(summary["delivered"], line["quantity"])
+        self.assertEqual(summary["returned"], 2)
+        self.assertEqual(summary["not_returned"], line["quantity"] - 2)
+        self.assertIsNone(summary["sold"])
+        self.assertIsNone(summary["difference"])
+        self.assertEqual(summary["status"], "sales_not_integrated")
+        self.assertFalse(summary["can_close"])
 
         retry = client.post(endpoint, request, format="json")
         self.assertEqual(retry.status_code, 200, retry.data)
