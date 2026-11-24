@@ -30,6 +30,9 @@ from warehouse.distribution_dispatch import (
     registrar_retorno_fisico_feria, output_dispatch,
     reportar_diferencia_llegada, resolver_diferencia_por_reconteo,
 )
+from warehouse.distribution_close_incidents import (
+    report_close_difference, record_later_finding,
+)
 from warehouse.fair_destination_policy import (
     feria_compartida_entre_colegios, validar_feria_por_colegio,
 )
@@ -214,6 +217,23 @@ class FairReturnInput(serializers.Serializer):
     reason = serializers.CharField(min_length=15, max_length=500, trim_whitespace=True)
     received_confirmed = serializers.BooleanField()
     lines = FairReturnLine(many=True, allow_empty=False)
+
+
+class CloseDifferenceInput(serializers.Serializer):
+    idempotency_key = serializers.UUIDField()
+    line_id = serializers.IntegerField(min_value=1)
+    quantity = serializers.IntegerField(min_value=1)
+    category = serializers.ChoiceField(
+        choices=("not_found", "count_error", "teacher_delivery", "damaged", "other"),
+    )
+    note = serializers.CharField(min_length=20, max_length=500, trim_whitespace=True)
+
+
+class LaterFindingInput(serializers.Serializer):
+    idempotency_key = serializers.UUIDField()
+    report_id = serializers.IntegerField(min_value=1)
+    quantity = serializers.IntegerField(min_value=1)
+    location_note = serializers.CharField(min_length=20, max_length=500, trim_whitespace=True)
 
 
 class PersistentArrivalLine(serializers.Serializer):
@@ -948,6 +968,42 @@ class DistributionOperationViewSet(viewsets.ViewSet):
             payload,
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
+
+    @action(detail=True, methods=["post"], url_path="registrar-diferencia-cierre")
+    def report_close_difference(self, request, pk=None):
+        """Registra observación de conteo sin descontar ni crear stock."""
+        self._authorize(request, write=True)
+        if not usuario_tiene_permiso(request.user, "warehouse.manage_stock_transfers"):
+            raise PermissionDenied("No puedes registrar observaciones de conteo.")
+        form = CloseDifferenceInput(data=request.data)
+        form.is_valid(raise_exception=True)
+        try:
+            operation, event, created = report_close_difference(
+                pk, request.user, **form.validated_data,
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
+        result = output_dispatch(operation)
+        result["close_incident_id"] = event.pk
+        return Response(result, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="registrar-hallazgo-cierre")
+    def report_later_finding(self, request, pk=None):
+        """Anota libros hallados; no realiza movimiento ni cierra conciliación."""
+        self._authorize(request, write=True)
+        if not usuario_tiene_permiso(request.user, "warehouse.manage_stock_transfers"):
+            raise PermissionDenied("No puedes registrar hallazgos de inventario.")
+        form = LaterFindingInput(data=request.data)
+        form.is_valid(raise_exception=True)
+        try:
+            operation, event, created = record_later_finding(
+                pk, request.user, **form.validated_data,
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc
+        result = output_dispatch(operation)
+        result["found_event_id"] = event.pk
+        return Response(result, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"], url_path="documentar-diferencia-persistente")
     def diagnose_arrival_incident(self, request, pk=None):
