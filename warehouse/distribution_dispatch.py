@@ -93,6 +93,25 @@ def output_dispatch(operation):
         "recorded_by": event.actor.get_username(),
         "recorded_at": event.created_at,
     } for event in returns]
+    dispatched_total = sum(line.quantity for line in lines)
+    returned_total = sum(
+        item.get("quantity", 0)
+        for event in return_history for item in event["details"]
+    )
+    # Sin ventas confirmadas vinculadas a esta operación no existe
+    # conciliación comercial. No confundir "sin retorno" con "vendido".
+    reconciliation = {
+        "delivered": dispatched_total if dispatch.status == DistributionDispatch.Status.RECEIVED else None,
+        "returned": returned_total,
+        "not_returned": (
+            dispatched_total - returned_total
+            if dispatch.status == DistributionDispatch.Status.RECEIVED else None
+        ),
+        "sold": None,
+        "difference": None,
+        "status": "sales_not_integrated" if dispatch.status == DistributionDispatch.Status.RECEIVED else "awaiting_receipt",
+        "can_close": False,
+    }
     diagnosis_events = DistributionOperationEvent.objects.filter(
         operation=operation, action="arrival_diagnosed",
     ).select_related("actor").order_by("created_at", "pk")
@@ -139,7 +158,8 @@ def output_dispatch(operation):
             "quantity": row.quantity,
             "stock_entry_id": row.reservation.stock_entry_id,
         } for row in lines],
-        "total": sum(line.quantity for line in lines),
+        "total": dispatched_total,
+        "reconciliation": reconciliation,
         "fair_returns": return_history,
         "destination_returns": return_history,
         "internal_return_plans": internal_return_plans,
