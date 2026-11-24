@@ -1034,6 +1034,97 @@ class DistributionPreparationTests(TestCase):
         denied_followup = self.api_client(self.employee).get(followup_url)
         self.assertEqual(denied_followup.status_code, 403)
 
+    def test_b5_retorno_punto_venta_con_be_ri_y_saldos_sin_ventas_inferidas(self):
+        from warehouse.transfers import posiciones_lotes
+
+        store = WarehouseLocation.objects.create(
+            code=f"B5-PV-{uuid4().hex[:8]}",
+            name="Punto de venta de ensayo",
+            kind=WarehouseLocation.Kind.STORE,
+        )
+        client = self.api_client()
+        products = list(self.adopcion.items.order_by("pk"))
+        operation = client.post(
+            "/api/admin/erp/almacen/operaciones-distribucion/",
+            {
+                "idempotency_key": str(uuid4()),
+                "adoption_id": self.adopcion.pk,
+                "mode": "point_of_sale",
+                "source_id": self.main.pk,
+                "destination_id": store.pk,
+                "operation_name": "Punto de venta de ensayo",
+                "responsible_name": "Responsable de ensayo",
+                "items": [{"product_id": item.product_id, "quantity": 5}
+                          for item in products],
+            }, format="json",
+        )
+        self.assertEqual(operation.status_code, 201, operation.data)
+        op_id = operation.data["id"]
+        reserve = client.post(self.endpoint(op_id, "reservar"), {}, format="json")
+        self.assertEqual(reserve.status_code, 201, reserve.data)
+        prepared = client.post(self.endpoint(op_id, "confirmar-preparacion"), {
+            "counts": [{"reservation_id": row["id"], "counted": row["quantity"]}
+                       for row in reserve.data["reservations"]],
+        }, format="json")
+        self.assertEqual(prepared.status_code, 200, prepared.data)
+        doc = client.post(self.endpoint(op_id, "documento-interno"), {
+            "idempotency_key": str(uuid4()),
+        }, format="json")
+        self.assertEqual(doc.status_code, 201, doc.data)
+        dispatched = client.post(self.endpoint(op_id, "confirmar-salida"), {
+            "evidence_kind": "external_guide",
+            "external_guide_reference": "EG01-00000215",
+            "physical_dispatch_confirmed": True,
+        }, format="json")
+        self.assertEqual(dispatched.status_code, 201, dispatched.data)
+        arrival = client.post(self.endpoint(op_id, "confirmar-llegada"), {
+            "receiver_name": "Responsable Tienda",
+            "arrival_confirmed": True,
+            "counts": [{"line_id": row["id"], "counted": row["quantity"]}
+                       for row in dispatched.data["lines"]],
+        }, format="json")
+        self.assertEqual(arrival.status_code, 200, arrival.data)
+        line = arrival.data["lines"][0]
+        before = posiciones_lotes(self.entries)
+        main_before = before[(line["stock_entry_id"], self.main.pk)]
+        store_before = before[(line["stock_entry_id"], store.pk)]
+        request_lines = [{"line_id": line["id"], "quantity": 2}]
+        plan = client.post(self.endpoint(op_id, "preparar-retorno-destino"), {
+            "idempotency_key": str(uuid4()),
+            "lines": request_lines,
+            "reason": "Cierre y sobrantes del punto de venta",
+        }, format="json")
+        self.assertEqual(plan.status_code, 201, plan.data)
+        self.assertTrue(plan.data["internal_return_number"].startswith("BE-RI-"))
+        self.assertEqual(posiciones_lotes(self.entries), before)
+        request = {
+            "idempotency_key": str(uuid4()),
+            "receiver_name": "Encargado Almacen",
+            "transport_reference": "",
+            "documentation_status": "internal_control",
+            "reason": "Devolución de sobrantes del punto de venta",
+            "received_confirmed": True,
+            "lines": request_lines,
+        }
+        previous_transfers = StockTransfer.objects.count()
+        done = client.post(self.endpoint(op_id, "registrar-retorno-destino"),
+                           request, format="json")
+        self.assertEqual(done.status_code, 201, done.data)
+        self.assertEqual(done.data["reconciliation"]["delivered"], 10)
+        self.assertEqual(done.data["reconciliation"]["returned"], 2)
+        self.assertEqual(done.data["reconciliation"]["not_returned"], 8)
+        self.assertIsNone(done.data["reconciliation"]["sold"])
+        self.assertFalse(done.data["reconciliation"]["can_close"])
+        self.assertEqual(StockTransfer.objects.count(), previous_transfers + 1)
+        after = posiciones_lotes(self.entries)
+        self.assertEqual(after[(line["stock_entry_id"], self.main.pk)], main_before + 2)
+        self.assertEqual(after[(line["stock_entry_id"], store.pk)], store_before - 2)
+        repeated = client.post(self.endpoint(op_id, "registrar-retorno-destino"),
+                               request, format="json")
+        self.assertEqual(repeated.status_code, 200, repeated.data)
+        self.assertEqual(StockTransfer.objects.count(), previous_transfers + 1)
+        self.assertEqual(posiciones_lotes(self.entries), after)
+
     def test_b5_3_retorno_de_consignacion_idempotente(self):
         from warehouse.transfers import posiciones_lotes
 
