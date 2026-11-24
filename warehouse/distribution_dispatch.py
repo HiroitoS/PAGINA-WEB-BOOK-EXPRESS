@@ -79,7 +79,7 @@ def output_dispatch(operation):
         "notice": "Preparación interna. No acredita salida, llegada ni GRE.",
     } for event in prepared_returns]
     returns = DistributionOperationEvent.objects.filter(
-        operation=operation, action__in=["fair_return_recorded", "consign_return_recorded"],
+        operation=operation, action__in=["fair_return_recorded", "consign_return_recorded", "pos_return_recorded"],
     ).select_related("actor").order_by("created_at", "pk")
     return_history = [{
         "id": event.pk, "details": event.current.get("lines", []),
@@ -547,6 +547,7 @@ def preparar_retorno_destino(
         operation.mode not in (
             DistributionOperation.Mode.FAIR,
             DistributionOperation.Mode.CONSIGNMENT,
+            DistributionOperation.Mode.POINT_OF_SALE,
         )
         or operation.status != DistributionOperation.Status.DELIVERED
     ):
@@ -591,7 +592,7 @@ def preparar_retorno_destino(
     ):
         returned_after = DistributionOperationEvent.objects.filter(
             operation=operation,
-            action__in=["fair_return_recorded", "consign_return_recorded"],
+            action__in=["fair_return_recorded", "consign_return_recorded", "pos_return_recorded"],
             pk__gt=last_prepared.pk,
         ).exists()
         if not returned_after:
@@ -604,7 +605,7 @@ def preparar_retorno_destino(
     returned = defaultdict(int)
     for event in DistributionOperationEvent.objects.filter(
         operation=operation,
-        action__in=["fair_return_recorded", "consign_return_recorded"],
+        action__in=["fair_return_recorded", "consign_return_recorded", "pos_return_recorded"],
     ):
         for row in event.current.get("lines", []):
             returned[row["line_id"]] += row["quantity"]
@@ -665,7 +666,7 @@ def registrar_retorno_fisico_feria(
         if transport_reference:
             raise BusinessError("No mezcles referencia GRE con control interno.")
         documentation_note = (
-            "Retorno físico de feria registrado mediante control interno Book Express; "
+            "Retorno físico registrado mediante control interno Book Express; "
             "no se ha acreditado la documentación tributaria del transporte. "
             "Jefatura debe revisar el sustento aplicable."
         )
@@ -698,20 +699,24 @@ def registrar_retorno_fisico_feria(
 
     operation = _operation_locked(operation_id)
     if (documentation_status == "internal_control"
-            and operation.mode != DistributionOperation.Mode.FAIR):
+            and operation.mode not in (
+            DistributionOperation.Mode.FAIR,
+            DistributionOperation.Mode.POINT_OF_SALE,
+        )):
         raise BusinessError(
-            "El control interno simplificado corresponde solo a ferias; "
+            "El control interno simplificado corresponde a ferias y puntos de venta; "
             "en consignaciones revisa la documentación del traslado."
         )
     if (
         operation.mode not in (
             DistributionOperation.Mode.FAIR,
             DistributionOperation.Mode.CONSIGNMENT,
+            DistributionOperation.Mode.POINT_OF_SALE,
         )
         or operation.status != DistributionOperation.Status.DELIVERED
     ):
         raise BusinessError(
-            "El retorno físico solo está habilitado para ferias y consignaciones recibidas."
+            "El retorno físico requiere una distribución de feria, consignación o punto de venta recibida."
         )
     if (
         operation.mode == DistributionOperation.Mode.FAIR
@@ -728,10 +733,11 @@ def registrar_retorno_fisico_feria(
         DistributionDispatch.objects.select_for_update(), operation=operation,
         status=DistributionDispatch.Status.RECEIVED,
     )
-    return_action = (
-        "fair_return_recorded" if operation.mode == DistributionOperation.Mode.FAIR
-        else "consign_return_recorded"
-    )
+    return_action = {
+        DistributionOperation.Mode.FAIR: "fair_return_recorded",
+        DistributionOperation.Mode.CONSIGNMENT: "consign_return_recorded",
+        DistributionOperation.Mode.POINT_OF_SALE: "pos_return_recorded",
+    }[operation.mode]
     if dispatch.arrival_incidents.filter(status=DistributionArrivalIncident.Status.OPEN).exists():
         raise BusinessError("Resuelve primero las incidencias pendientes de la entrega.")
     request = {
@@ -744,7 +750,7 @@ def registrar_retorno_fisico_feria(
         "documentation_note": documentation_note,
     }
     existing = DistributionOperationEvent.objects.filter(
-        operation=operation, action__in=["fair_return_recorded", "consign_return_recorded"],
+        operation=operation, action__in=["fair_return_recorded", "consign_return_recorded", "pos_return_recorded"],
         current__key=str(idempotency_key),
     ).first()
     if existing is not None:
@@ -760,7 +766,7 @@ def registrar_retorno_fisico_feria(
         raise BusinessError("Uno de los lotes no pertenece a esta entrega.")
     previous = defaultdict(int)
     for event in DistributionOperationEvent.objects.filter(
-        operation=operation, action__in=["fair_return_recorded", "consign_return_recorded"],
+        operation=operation, action__in=["fair_return_recorded", "consign_return_recorded", "pos_return_recorded"],
     ):
         for item in event.current.get("lines", []):
             previous[item["line_id"]] += item["quantity"]
