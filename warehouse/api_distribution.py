@@ -203,7 +203,7 @@ class FairReturnInput(serializers.Serializer):
     idempotency_key = serializers.UUIDField()
     receiver_name = serializers.CharField(max_length=180, trim_whitespace=True)
     documentation_status = serializers.ChoiceField(
-        choices=("gre", "pending_review"), default="gre",
+        choices=("gre", "pending_review", "internal_control"), default="gre",
     )
     documentation_note = serializers.CharField(
         max_length=500, allow_blank=True, required=False, default="",
