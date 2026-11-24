@@ -1015,6 +1015,23 @@ class DistributionPreparationTests(TestCase):
         repeat_observed = client.post(endpoint, observed, format="json")
         self.assertEqual(repeat_observed.status_code, 200, repeat_observed.data)
         self.assertEqual(StockTransfer.objects.count(), count_before + 2)
+        # Cierre interno: feria sin GRE ficticia, pero no falsifica cumplimiento.
+        internal = client.post(endpoint, {
+            **request,
+            "idempotency_key": str(uuid4()),
+            "transport_reference": "",
+            "documentation_status": "internal_control",
+            "documentation_note": "",
+            "lines": [{"line_id": line["id"], "quantity": 1}],
+        }, format="json")
+        self.assertEqual(internal.status_code, 201, internal.data)
+        self.assertEqual(StockTransfer.objects.count(), count_before + 3)
+        internal_record = internal.data["fair_returns"][-1]
+        self.assertEqual(internal_record["documentation_status"], "internal_control")
+        self.assertTrue(internal_record["documentation_followup_required"])
+        self.assertEqual(internal_record["reference"], "")
+        self.assertGreaterEqual(len(internal_record["documentation_note"]), 40)
+        self.assertEqual(posiciones_lotes(self.entries)[(entry_id, self.main.pk)], main_before + 4)
         followup_url = "/api/admin/erp/almacen/ubicaciones/retornos-documentacion-pendiente/"
         followup = client.get(followup_url)
         self.assertEqual(followup.status_code, 200, followup.data)
