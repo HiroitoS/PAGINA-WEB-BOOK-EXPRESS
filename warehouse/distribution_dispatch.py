@@ -83,6 +83,11 @@ def output_dispatch(operation):
     ).select_related("actor").order_by("created_at", "pk")
     return_history = [{
         "id": event.pk, "details": event.current.get("lines", []),
+        # BE-RI is a *preparation* document. The physically received
+        # quantities are certified by a distinct immutable internal receipt.
+        "receipt_number": f"BE-RC-{event.pk:07d}",
+        "source_document": dispatch.document_number,
+        "reason": event.reason,
         "reference": event.current.get("transport_reference"),
         "documentation_status": event.current.get("documentation_status", "gre"),
         "documentation_note": event.current.get("documentation_note", ""),
