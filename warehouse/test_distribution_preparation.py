@@ -890,6 +890,14 @@ class DistributionPreparationTests(TestCase):
         repeated_report = client.post(difference_url, report_payload, format="json")
         self.assertEqual(repeated_report.status_code, 200, repeated_report.data)
         self.assertEqual(repeated_report.data["close_incident_id"], report_id)
+        # Un nuevo reporte no puede duplicar la misma cantidad física del lote.
+        over_report = client.post(difference_url, {
+            **report_payload,
+            "idempotency_key": str(uuid4()),
+            "quantity": line["quantity"],
+        }, format="json")
+        self.assertEqual(over_report.status_code, 400, over_report.data)
+        self.assertEqual(posiciones_lotes(self.entries), stock_before_note)
         finding_url = self.endpoint(operation_id, "registrar-hallazgo-cierre")
         finding_payload = {
             "idempotency_key": str(uuid4()),
