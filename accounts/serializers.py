@@ -152,6 +152,30 @@ class GroupSerializer(serializers.ModelSerializer):
         return get_group_functional_permission_codes(obj)
 
 
+class RolePermissionsUpdateSerializer(serializers.Serializer):
+    """Actualiza solo los permisos funcionales registrados para un rol."""
+
+    functional_permission_ids = serializers.PrimaryKeyRelatedField(
+        queryset=get_functional_permissions_queryset(), many=True,
+        allow_empty=True,
+    )
+
+    def validate_functional_permission_ids(self, permissions):
+        codes = {permission_code(item) for item in permissions}
+        errors = []
+        for code in sorted(codes):
+            meta = get_permission_metadata(code)
+            if meta:
+                for required_code in meta["requires"]:
+                    if required_code not in codes:
+                        errors.append(
+                            f"{code} necesita también {required_code}."
+                        )
+        if errors:
+            raise serializers.ValidationError(errors)
+        return permissions
+
+
 class AdminUserSerializer(serializers.ModelSerializer):
     phone = serializers.CharField(
         source="book_express_profile.phone",

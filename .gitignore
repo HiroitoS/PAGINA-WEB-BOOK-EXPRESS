@@ -36,3 +36,6 @@ htmlcov/
 Thumbs.db
 *.swp
 *.swo
+
+# Evidencia documental privada (fuera de MEDIA_URL)
+private_receiving/

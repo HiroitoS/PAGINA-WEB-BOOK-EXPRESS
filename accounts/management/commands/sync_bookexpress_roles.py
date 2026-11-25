@@ -9,6 +9,7 @@ from accounts.permissions import (
     ROL_ATENCION,
     ROL_CATALOGO,
     ROL_JEFE_COMERCIAL,
+    ROL_JEFE_ALMACEN,
 )
 
 
@@ -72,7 +73,32 @@ ROLE_PERMISSIONS = {
         "crm.supervise_crm",
         "crm.export_crm_reports",
     ],
-    ROL_ALMACEN: [],
+    ROL_ALMACEN: [
+        "warehouse.view_receiving",
+        "warehouse.manage_receiving",
+        "warehouse.view_warehouse_locations",
+        "warehouse.view_stock_transfers",
+        "warehouse.manage_stock_transfers",
+        "warehouse.view_stock_movements",
+        "warehouse.view_internal_stock_requests",
+        "warehouse.manage_internal_stock_requests",
+        "warehouse.view_distribution_operations",
+        "warehouse.manage_distribution_operations",
+    ],
+    ROL_JEFE_ALMACEN: [
+        "warehouse.view_receiving",
+        "warehouse.validate_receiving",
+        "warehouse.view_warehouse_locations",
+        "warehouse.manage_warehouse_locations",
+        "warehouse.view_stock_transfers",
+        "warehouse.manage_stock_transfers",
+        "warehouse.view_stock_movements",
+        "warehouse.manage_stock_courtesies",
+        "warehouse.view_internal_stock_requests",
+        "warehouse.approve_internal_stock_requests",
+        "warehouse.view_distribution_operations",
+        "warehouse.manage_distribution_operations",
+    ],
 }
 
 
@@ -81,6 +107,12 @@ class Command(BaseCommand):
         "Crea los roles base de Book Express y agrega sus permisos funcionales "
         "sin eliminar permisos existentes."
     )
+
+    def add_arguments(self, parser):
+        parser.add_argument(
+            "--reset-permisos", action="store_true",
+            help="Reemplaza intencionadamente permisos funcionales de los roles por los valores base.",
+        )
 
     def handle(self, *args, **options):
         for role_name, permission_names in ROLE_PERMISSIONS.items():
@@ -121,15 +153,17 @@ class Command(BaseCommand):
                 .exclude(id__in=managed_permission_ids)
             )
 
-            group.permissions.set([
-                *preserved_permissions,
-                *permissions,
-            ])
+            if created or options["reset_permisos"]:
+                group.permissions.set([
+                    *preserved_permissions,
+                    *permissions,
+                ])
+                result = f"{len(permissions)} permiso(s) funcional(es) inicializado(s)."
+            else:
+                result = "permisos personalizados preservados (usar --reset-permisos para restaurar base)."
 
             self.stdout.write(
-                self.style.SUCCESS(
-                    f"{role_name}: {len(permissions)} permiso(s) funcional(es) sincronizado(s)."
-                )
+                self.style.SUCCESS(f"{role_name}: {result}")
             )
 
         self.stdout.write(

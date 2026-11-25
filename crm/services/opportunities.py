@@ -1,5 +1,6 @@
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from crm.models import (
@@ -59,6 +60,61 @@ def _validate_owner_for_team(*, owner, team):
             "El asesor responsable no pertenece al equipo comercial "
             "seleccionado."
         )
+
+
+
+def inherit_school_owner_for_unassigned_opportunities(*, school, actor, opportunity_id=None):
+    """Completa asignaciones pendientes sin sustituir responsables existentes.
+
+    Para cartera recién asignada y para oportunidades abiertas previas a la
+    asignación. No modifica oportunidades cerradas ni otros equipos explícitos.
+    La llamada debe realizarse dentro de una transacción y después de bloquear
+    el colegio. El bloqueo del colegio precede al de las oportunidades.
+    """
+    if not school.owner_id or not school.team_id or not school.owner.is_active:
+        return []
+
+    _validate_owner_for_team(owner=school.owner, team=school.team)
+
+    candidates = (
+        Opportunity.objects.select_for_update()
+        .filter(
+            school_id=school.id,
+            owner__isnull=True,
+            stage__category=PipelineStage.Category.OPEN,
+        )
+        .filter(Q(team__isnull=True) | Q(team_id=school.team_id))
+        .order_by("id")
+    )
+    if opportunity_id is not None:
+        candidates = candidates.filter(id=opportunity_id)
+
+    updated = []
+    for opportunity in candidates:
+        opportunity.team = school.team
+        opportunity.owner = school.owner
+        opportunity.save(update_fields=["team", "owner", "updated_at"])
+        record_history_event(
+            school=school,
+            opportunity=opportunity,
+            actor=actor,
+            category="assignment",
+            event_type="assignment_updated",
+            title="Asesor heredado del colegio",
+            description=(
+                "La oportunidad estaba sin asesor. Se asignó "
+                f"{school.owner.get_full_name().strip() or school.owner.get_username()} "
+                "desde la cartera del colegio."
+            ),
+            metadata={
+                "opportunity_id": opportunity.pk,
+                "owner_id": school.owner_id,
+                "team_id": school.team_id,
+                "source": "school_portfolio",
+            },
+        )
+        updated.append(opportunity)
+    return updated
 
 
 def _resolve_campaign_for_creation(campaign=None):
