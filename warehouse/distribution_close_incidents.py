@@ -41,8 +41,15 @@ def report_close_difference(operation_id, actor, *, idempotency_key, line_id,
         if existing.current != payload:
             raise ValidationError("La clave ya corresponde a una observación diferente.")
         return operation, existing, False
-    if quantity > line.quantity:
-        raise ValidationError("La diferencia no puede superar los libros entregados del lote.")
+    previous_reports = DistributionOperationEvent.objects.filter(
+        operation=operation, action="close_diff_reported",
+        current__line_id=line.pk,
+    )
+    reported_total = sum(event.current.get("quantity", 0) for event in previous_reports)
+    if reported_total + quantity > line.quantity:
+        raise ValidationError(
+            "Las diferencias acumuladas no pueden superar los libros entregados del lote."
+        )
     event = DistributionOperationEvent.objects.create(
         operation=operation, actor=actor, action="close_diff_reported",
         reason=note.strip()[:500], current=payload,
