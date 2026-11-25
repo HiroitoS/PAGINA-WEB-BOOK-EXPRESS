@@ -898,6 +898,16 @@ class DistributionPreparationTests(TestCase):
         }, format="json")
         self.assertEqual(over_report.status_code, 400, over_report.data)
         self.assertEqual(posiciones_lotes(self.entries), stock_before_note)
+        # Distintas observaciones legítimas pueden coexistir sin superar el lote.
+        if line["quantity"] >= 3:
+            valid_second = client.post(difference_url, {
+                **report_payload,
+                "idempotency_key": str(uuid4()),
+                "quantity": 1,
+                "note": "En una segunda revisión se identificó otro ejemplar no localizado.",
+            }, format="json")
+            self.assertEqual(valid_second.status_code, 201, valid_second.data)
+            self.assertEqual(posiciones_lotes(self.entries), stock_before_note)
         finding_url = self.endpoint(operation_id, "registrar-hallazgo-cierre")
         finding_payload = {
             "idempotency_key": str(uuid4()),
