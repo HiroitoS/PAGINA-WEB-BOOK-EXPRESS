@@ -899,15 +899,32 @@ class DistributionPreparationTests(TestCase):
         self.assertEqual(over_report.status_code, 400, over_report.data)
         self.assertEqual(posiciones_lotes(self.entries), stock_before_note)
         # Distintas observaciones legítimas pueden coexistir sin superar el lote.
-        if line["quantity"] >= 3:
-            valid_second = client.post(difference_url, {
-                **report_payload,
-                "idempotency_key": str(uuid4()),
-                "quantity": 1,
-                "note": "En una segunda revisión se identificó otro ejemplar no localizado.",
-            }, format="json")
-            self.assertEqual(valid_second.status_code, 201, valid_second.data)
-            self.assertEqual(posiciones_lotes(self.entries), stock_before_note)
+        self.assertEqual(line["quantity"], 5)
+        valid_second = client.post(difference_url, {
+            **report_payload,
+            "idempotency_key": str(uuid4()),
+            "quantity": 1,
+            "note": "En una segunda revisión se identificó otro ejemplar no localizado.",
+        }, format="json")
+        self.assertEqual(valid_second.status_code, 201, valid_second.data)
+        reaches_limit = client.post(difference_url, {
+            **report_payload, "idempotency_key": str(uuid4()), "quantity": 2,
+        }, format="json")
+        self.assertEqual(reaches_limit.status_code, 201, reaches_limit.data)
+        beyond_limit = client.post(difference_url, {
+            **report_payload, "idempotency_key": str(uuid4()), "quantity": 1,
+        }, format="json")
+        self.assertEqual(beyond_limit.status_code, 400, beyond_limit.data)
+        # Un reintento válido debe recuperar el registro aun con el lote al límite.
+        replay_at_limit = client.post(difference_url, report_payload, format="json")
+        self.assertEqual(replay_at_limit.status_code, 200, replay_at_limit.data)
+        self.assertEqual(replay_at_limit.data["close_incident_id"], report_id)
+        self.assertEqual(len(replay_at_limit.data["close_incidents"]), 3)
+        forbidden = self.api_client(self.employee).post(
+            difference_url, {**report_payload, "idempotency_key": str(uuid4())}, format="json",
+        )
+        self.assertEqual(forbidden.status_code, 403, forbidden.data)
+        self.assertEqual(posiciones_lotes(self.entries), stock_before_note)
         finding_url = self.endpoint(operation_id, "registrar-hallazgo-cierre")
         finding_payload = {
             "idempotency_key": str(uuid4()),
